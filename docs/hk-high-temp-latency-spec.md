@@ -78,6 +78,22 @@ Store every fetched HKO response as raw JSON/CSV plus normalized rows. The raw s
 
 Trading credentials are not required for paper trading. Live trading will require wallet private-key signing plus derived L2 API credentials. Secrets must be environment variables or local secret storage, never committed.
 
+Discovery findings from May 3, 2026:
+
+- Gamma event lookup by exact slug works for daily HK temperature ladders:
+  - `https://gamma-api.polymarket.com/events?slug=highest-temperature-in-hong-kong-on-may-4-2026`
+  - `https://gamma-api.polymarket.com/events?slug=highest-temperature-in-hong-kong-on-may-5-2026`
+- Gamma market lookup by the event slug returns no rows; use the event endpoint and read the nested `markets` array.
+- Each ladder outcome is represented as a separate binary CLOB market under one `negRisk` event.
+- `groupItemTitle` contains the displayed outcome label, e.g. `25°C`, `26°C or higher`.
+- `clobTokenIds` is a JSON-encoded two-element array ordered as YES token then NO token.
+- `outcomes` is a JSON-encoded `["Yes", "No"]`.
+- Useful market fields include `bestBid`, `bestAsk`, `orderPriceMinTickSize`, `orderMinSize`, `acceptingOrders`, `negRisk`, `negRiskMarketID`, and `gameStartTime`.
+- CLOB orderbook lookup works via `https://clob.polymarket.com/book?token_id={token_id}`.
+- CLOB orderbook responses include `bids`, `asks`, `tick_size`, `min_order_size`, `last_trade_price`, and `neg_risk`. Price/size fields are strings and must be parsed as decimals/floats.
+- In the CLOB orderbook response, bids and asks may not be sorted in executable order. Sort bids descending and asks ascending before simulating fills.
+- Python HTTP clients should send a normal User-Agent header. Gamma returned HTTP 403 to Python's default urllib user agent during discovery, while the same endpoint worked with curl and with `User-Agent: whenitrains/0.1`.
+
 ## 4. System Modes
 
 ### Paper Mode
