@@ -749,6 +749,7 @@ Minimal dashboard:
 - Scenario-specific signal labels.
 - Full audit trail.
 - Current-day-only paper runner.
+- Polling-window scheduler for HKO actuals and bulletin updates.
 - Forecast-change paper entries.
 - Market-settling actual-cross entries for `or higher` outcomes.
 - Invalidation, take-profit, and 10-minute timeout exits.

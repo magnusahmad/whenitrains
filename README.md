@@ -44,6 +44,12 @@ Run the autonomous local paper loop once:
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 paper-loop --ticks 1
 ```
 
+Run the polling-window scheduler:
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=src python3 -u -m whenitrains.cli --db data/whenitrains.sqlite3 paper-scheduler
+```
+
 Inspect the paper dashboard:
 
 ```bash

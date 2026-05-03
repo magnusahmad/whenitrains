@@ -19,6 +19,7 @@ from .hko import (
 from .polymarket import event_slug_for_date, fetch_hk_temperature_event, parse_event_markets
 from .polymarket import fetch_orderbook
 from .runner import render_dashboard, run_paper_loop, run_paper_tick
+from .scheduler import run_scheduled_paper_loop
 from .paper_db import calculate_entry, calculate_exit, execute_paper_buy, execute_paper_sell
 from .storage import (
     connect,
@@ -66,6 +67,9 @@ def main(argv: list[str] | None = None) -> int:
     paper_loop.add_argument("--interval", type=float, default=15.0)
     paper_loop.add_argument("--ticks", type=int)
     paper_loop.add_argument("--no-fetch", action="store_true")
+    scheduled_loop = sub.add_parser("paper-scheduler")
+    scheduled_loop.add_argument("--sleep", type=float, default=1.0)
+    scheduled_loop.add_argument("--ticks", type=int)
     sub.add_parser("dashboard")
     args = parser.parse_args(argv)
 
@@ -201,22 +205,45 @@ def main(argv: list[str] | None = None) -> int:
         migrate(db)
         print(render_dashboard(db))
         return 0
+    if args.command == "paper-scheduler":
+        migrate(db)
+        run_scheduled_paper_loop(
+            db,
+            fetch_since_midnight=lambda: _fetch_since_midnight(db),
+            fetch_bulletin=lambda: _fetch_bulletin(db),
+            discover_market=lambda target: _discover_market(db, target),
+            fetch_orderbooks=lambda target: _fetch_orderbooks(db, target),
+            base_sleep_seconds=args.sleep,
+            max_ticks=args.ticks,
+        )
+        return 0
     return 1
 
 
 def _fetch_hko(db) -> None:
+    _fetch_since_midnight(db)
+    _fetch_bulletin(db)
+
+
+def _fetch_since_midnight(db) -> str:
     csv_text = fetch_text(SINCE_MIDNIGHT_URL)
     obs_snapshot = store_raw_snapshot(db, "hko", SINCE_MIDNIGHT_URL, csv_text)
     store_hko_observation(db, obs_snapshot.id, parse_since_midnight_csv(csv_text))
+    return csv_text
 
+
+def _fetch_bulletin(db) -> str:
     flw_page = fetch_text(FLW_PAGE_URL)
     flw_snapshot = store_raw_snapshot(db, "hko", FLW_PAGE_URL, flw_page)
     flw_forecast = parse_flw_page(flw_page)
+    payload = flw_page
     if flw_forecast.parse_warning:
         flw_data = fetch_text(FLW_PAGE_DATA_URL)
         flw_snapshot = store_raw_snapshot(db, "hko", FLW_PAGE_DATA_URL, flw_data)
         flw_forecast = parse_flw_page_data_json(flw_data)
+        payload = flw_data
     store_hko_forecasts(db, flw_snapshot.id, [flw_forecast])
+    return payload
 
 
 def _discover_market(db, target_date) -> bool:
