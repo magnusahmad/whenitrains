@@ -1,5 +1,9 @@
 import unittest
+import tempfile
 from datetime import datetime, timedelta
+from io import StringIO
+from pathlib import Path
+from contextlib import redirect_stdout
 
 from whenitrains.hko import HKT
 from whenitrains.runner import RunnerResult
@@ -8,8 +12,10 @@ from whenitrains.scheduler import (
     due_hko_sources,
     mark_source_fetch,
     scheduler_actions,
+    run_scheduled_paper_loop,
     should_print_scheduled_tick,
 )
+from whenitrains.storage import connect, migrate
 
 
 class SchedulerTests(unittest.TestCase):
@@ -83,6 +89,22 @@ class SchedulerTests(unittest.TestCase):
         self.assertTrue(
             should_print_scheduled_tick(["fetched orderbooks"], trade, quiet=True)
         )
+
+    def test_scheduler_prints_startup_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            output = StringIO()
+            with redirect_stdout(output):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: "",
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=lambda target: None,
+                    max_ticks=0,
+                )
+            self.assertIn("paper-scheduler started", output.getvalue())
 
 
 def _due_sources(now):

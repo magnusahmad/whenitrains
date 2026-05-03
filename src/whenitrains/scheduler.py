@@ -118,6 +118,7 @@ def run_scheduled_paper_loop(
     state = SchedulerState()
     tick = 0
     clock = now_fn or (lambda: datetime.now(HKT))
+    print("paper-scheduler started")
     while max_ticks is None or tick < max_ticks:
         now = clock()
         actions = scheduler_actions(now, state)
