@@ -304,12 +304,10 @@ Paper-mode milestones 1-5 are complete as local building blocks and one-shot CLI
 
 Scheduler defaults for the POC:
 
-- HKO since-midnight max/min CSV: source updates every 10 minutes; poll from 10:00 to 20:00 HKT only, every 15 seconds to detect updates quickly.
-- HKO `fnd`: poll every second during 11:58-12:10 HKT and 23:58-00:10 HKT; otherwise every hour for now to test whether it changes between scheduled updates.
-- HKO `fnd`: after content hash change, continue 1-second polling for 60 seconds, then drop back to normal cadence.
-- HKO `flw`: poll every second during HH:59-HH:05 HKT around each top-of-hour update.
-- HKO `flw`: after content hash change, continue 1-second polling for 60 seconds, then drop back to normal cadence.
-- HKO `flw`: if rate limiting appears, shrink the high-frequency window to HH:59:30-HH:03.
+- HKO since-midnight max/min CSV: source updates extremely regularly every 10 minutes, typically near `:00`, `:09`, `:19`, `:29`, `:38`, `:48`, and `:58`; poll from 10:00 to 20:00 HKT only.
+- HKO since-midnight max/min CSV: scheduled checks should poll once just after each expected publication time; if the hash has not changed, retry every 15 seconds for up to 2 minutes, then wait for the next expected publication time.
+- HKO `fnd`: expected updates are noon and midnight HKT; poll at expected update time and shortly after; if the hash has not changed, retry every 15 seconds for up to 10 minutes, then stop. Keep hourly checks outside expected updates for POC testing.
+- HKO `flw`: expected updates are hourly near the top of the hour; poll at expected update time and shortly after; if the hash has not changed, retry every 15 seconds for up to 5 minutes, then stop until the next hour.
 - Polymarket/orderbooks: monitor target-day markets until the Hong Kong day ends.
 - Resolution: after the target day ends, check Polymarket once per day for final resolution.
 - Scheduler must use a single-process DB lock and dedupe unchanged HKO payload hashes.
