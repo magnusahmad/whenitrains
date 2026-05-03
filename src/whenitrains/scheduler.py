@@ -113,6 +113,7 @@ def run_scheduled_paper_loop(
     base_sleep_seconds: float = 1.0,
     max_ticks: int | None = None,
     now_fn=None,
+    quiet: bool = True,
 ) -> None:
     state = SchedulerState()
     tick = 0
@@ -139,13 +140,14 @@ def run_scheduled_paper_loop(
             mark_orderbooks_fetched(state, now)
             notes.append("fetched orderbooks")
         result = run_paper_tick(db, today_hkt=now.date())
-        print(
-            "scheduled-paper "
-            f"actions={','.join(notes) if notes else 'decisions-only'} "
-            f"buys={result.buys_filled}/{result.buys_missed} "
-            f"sells={result.sells_filled}/{result.sells_missed} "
-            f"signals={result.signals} notes={'; '.join(result.notes)}"
-        )
+        if should_print_scheduled_tick(notes, result, quiet):
+            print(
+                "scheduled-paper "
+                f"actions={','.join(notes) if notes else 'decisions-only'} "
+                f"buys={result.buys_filled}/{result.buys_missed} "
+                f"sells={result.sells_filled}/{result.sells_missed} "
+                f"signals={result.signals} notes={'; '.join(result.notes)}"
+            )
         tick += 1
         if max_ticks is None or tick < max_ticks:
             time.sleep(base_sleep_seconds)
@@ -204,3 +206,14 @@ def _window_key(plan: SourcePollPlan) -> str:
 
 def _is_market_day_active(now_hkt: datetime) -> bool:
     return day_time(0, 0) <= now_hkt.time() <= day_time(23, 59, 59)
+
+
+def should_print_scheduled_tick(notes: list[str], result, quiet: bool) -> bool:
+    if not quiet:
+        return True
+    if result.buys_filled or result.buys_missed or result.sells_filled or result.sells_missed:
+        return True
+    if result.signals:
+        return True
+    interesting_actions = {"fetched since_midnight", "fetched bulletin"}
+    return any(note in interesting_actions for note in notes)

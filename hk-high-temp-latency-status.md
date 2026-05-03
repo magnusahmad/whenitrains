@@ -326,6 +326,8 @@ Scheduler defaults for the POC:
 - HKO local weather forecast bulletin webpage: expected updates are 00:00 HKT, 45 minutes past each hour, 16:15 HKT, and 23:15 HKT. For each expected publication time, poll from T-30s through T+2m every 10 seconds. If the content hash changes, perform one confirmation fetch, then stop polling that window.
 - Polymarket/orderbooks: monitor target-day markets until the Hong Kong day ends.
 - Current scheduler implementation: `paper-scheduler` evaluates HKO source windows every loop, fetches HKO only when inside the agreed windows, refreshes current-day Polymarket orderbooks on a separate 15-second cadence, discovers the current-day market on a 5-minute cadence, and runs the paper decision pass every loop.
+- Scheduler output is quiet by default: orderbook-only/no-op ticks are suppressed. It prints when HKO is fetched, a signal/trade/missed-trade occurs, or a non-noop decision is made.
+- Use `reset-paper --yes` to clear paper orders, positions, decisions, and signals without deleting HKO snapshots, markets, or orderbooks.
 - Resolution: after the target day ends, check Polymarket once per day for final resolution.
 - Scheduler must use a single-process DB lock and dedupe unchanged HKO payload hashes.
 - Backoff: on HTTP 429, timeout, DNS/network failure, or repeated non-2xx responses, slow that source to 10 seconds; if failures continue, slow to 60 seconds; clear after a successful fetch plus one confirmation fetch.

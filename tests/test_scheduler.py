@@ -2,11 +2,13 @@ import unittest
 from datetime import datetime, timedelta
 
 from whenitrains.hko import HKT
+from whenitrains.runner import RunnerResult
 from whenitrains.scheduler import (
     SchedulerState,
     due_hko_sources,
     mark_source_fetch,
     scheduler_actions,
+    should_print_scheduled_tick,
 )
 
 
@@ -65,6 +67,22 @@ class SchedulerTests(unittest.TestCase):
         actions = scheduler_actions(now + timedelta(seconds=10), state)
         self.assertFalse(actions.discover_market)
         self.assertFalse(actions.fetch_orderbooks)
+
+    def test_quiet_scheduler_suppresses_orderbook_only_noop_tick(self):
+        result = RunnerResult(notes=("forecast high unchanged", "observed max unchanged"))
+        self.assertFalse(
+            should_print_scheduled_tick(["discovered market", "fetched orderbooks"], result, quiet=True)
+        )
+
+    def test_quiet_scheduler_prints_hko_fetches_and_trades(self):
+        noop = RunnerResult()
+        trade = RunnerResult(buys_filled=1)
+        self.assertTrue(
+            should_print_scheduled_tick(["fetched bulletin"], noop, quiet=True)
+        )
+        self.assertTrue(
+            should_print_scheduled_tick(["fetched orderbooks"], trade, quiet=True)
+        )
 
 
 def _due_sources(now):

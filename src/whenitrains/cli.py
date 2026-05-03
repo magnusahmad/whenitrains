@@ -28,6 +28,7 @@ from .storage import (
     list_outcomes,
     list_outcomes_for_date,
     migrate,
+    reset_paper_state,
     store_hko_forecasts,
     store_hko_observation,
     store_orderbook,
@@ -70,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     scheduled_loop = sub.add_parser("paper-scheduler")
     scheduled_loop.add_argument("--sleep", type=float, default=1.0)
     scheduled_loop.add_argument("--ticks", type=int)
+    reset_paper = sub.add_parser("reset-paper")
+    reset_paper.add_argument("--yes", action="store_true")
     sub.add_parser("dashboard")
     args = parser.parse_args(argv)
 
@@ -212,10 +215,18 @@ def main(argv: list[str] | None = None) -> int:
             fetch_since_midnight=lambda: _fetch_since_midnight(db),
             fetch_bulletin=lambda: _fetch_bulletin(db),
             discover_market=lambda target: _discover_market(db, target),
-            fetch_orderbooks=lambda target: _fetch_orderbooks(db, target),
+            fetch_orderbooks=lambda target: _fetch_orderbooks(db, target, quiet=True),
             base_sleep_seconds=args.sleep,
             max_ticks=args.ticks,
         )
+        return 0
+    if args.command == "reset-paper":
+        migrate(db)
+        if not args.yes:
+            print("refusing to reset paper state without --yes")
+            return 2
+        reset_paper_state(db)
+        print("reset paper orders, positions, decisions, and signals")
         return 0
     return 1
 
@@ -256,7 +267,7 @@ def _discover_market(db, target_date) -> bool:
     return True
 
 
-def _fetch_orderbooks(db, target_date=None) -> None:
+def _fetch_orderbooks(db, target_date=None, quiet: bool = False) -> None:
     outcomes = (
         list_outcomes_for_date(db, target_date.isoformat())
         if target_date is not None
@@ -267,11 +278,12 @@ def _fetch_orderbooks(db, target_date=None) -> None:
         no_book = fetch_orderbook(outcome["no_token_id"])
         store_orderbook(db, outcome["yes_token_id"], yes_book)
         store_orderbook(db, outcome["no_token_id"], no_book)
-        print(
-            f"{outcome['label']} | "
-            f"YES bid {_fmt(yes_book.best_bid)} ask {_fmt(yes_book.best_ask)} | "
-            f"NO bid {_fmt(no_book.best_bid)} ask {_fmt(no_book.best_ask)}"
-        )
+        if not quiet:
+            print(
+                f"{outcome['label']} | "
+                f"YES bid {_fmt(yes_book.best_bid)} ask {_fmt(yes_book.best_ask)} | "
+                f"NO bid {_fmt(no_book.best_bid)} ask {_fmt(no_book.best_ask)}"
+            )
 
 
 def _fmt(value: float | None) -> str:

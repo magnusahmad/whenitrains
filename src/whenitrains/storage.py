@@ -665,3 +665,11 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
         "total_profit": realized + executable_unrealized,
         "worst_case_open_loss": worst_case_open_loss,
     }
+
+
+def reset_paper_state(db: sqlite3.Connection) -> None:
+    db.execute("delete from paper_orders")
+    db.execute("delete from paper_positions")
+    db.execute("delete from paper_decisions")
+    db.execute("delete from signals")
+    db.commit()

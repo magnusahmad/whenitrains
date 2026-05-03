@@ -50,6 +50,12 @@ Run the polling-window scheduler:
 PYTHONUNBUFFERED=1 PYTHONPATH=src python3 -u -m whenitrains.cli --db data/whenitrains.sqlite3 paper-scheduler
 ```
 
+Clear test paper trades without deleting market/HKO/orderbook history:
+
+```bash
+PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 reset-paper --yes
+```
+
 Inspect the paper dashboard:
 
 ```bash
