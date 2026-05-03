@@ -22,6 +22,12 @@ Since-midnight max/min CSV:
 
 `https://data.weather.gov.hk/weatherAPI/hko_data/csdi/dataset/latest_since_midnight_maxmin_csdi_4.csv`
 
+Source dataset page:
+
+`https://data.gov.hk/en-data/dataset/hk-hko-rss-max-and-min-air-temp-since-midnight`
+
+Update frequency: every 10 minutes.
+
 Observed schema:
 
 - `Date time (Year)`
@@ -298,7 +304,7 @@ Paper-mode milestones 1-5 are complete as local building blocks and one-shot CLI
 
 Scheduler defaults for the POC:
 
-- HKO since-midnight max/min CSV: poll from 10:00 to 20:00 HKT only, every 15 seconds.
+- HKO since-midnight max/min CSV: source updates every 10 minutes; poll from 10:00 to 20:00 HKT only, every 15 seconds to detect updates quickly.
 - HKO `fnd`: poll every second during 11:58-12:10 HKT and 23:58-00:10 HKT; otherwise every hour for now to test whether it changes between scheduled updates.
 - HKO `fnd`: after content hash change, continue 1-second polling for 60 seconds, then drop back to normal cadence.
 - HKO `flw`: poll every second during HH:59-HH:05 HKT around each top-of-hour update.

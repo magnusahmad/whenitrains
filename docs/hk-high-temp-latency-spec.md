@@ -53,7 +53,7 @@ Parser examples:
 
 Use HKO APIs first.
 
-- Since-midnight max/min actuals for the Hong Kong Observatory automatic weather station: `https://data.weather.gov.hk/weatherAPI/hko_data/csdi/dataset/latest_since_midnight_maxmin_csdi_4.csv`
+- Since-midnight max/min actuals for the Hong Kong Observatory automatic weather station, updated every 10 minutes: `https://data.weather.gov.hk/weatherAPI/hko_data/csdi/dataset/latest_since_midnight_maxmin_csdi_4.csv`
 - 9-day forecast, updated at noon and midnight HKT: `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=fnd&lang=en`
 - General local forecast summary, updated hourly: `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=flw&lang=en`
 - Current weather report: `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=en`
@@ -126,7 +126,7 @@ HKO webhooks are preferred if a reliable official event feed exists, but assume 
 
 Polling strategy:
 
-- HKO since-midnight max/min CSV: poll only during the Hong Kong weather day from 10:00 to 20:00 HKT, every 15 seconds. Outside 10:00-20:00 HKT, do not poll.
+- HKO since-midnight max/min CSV: source updates every 10 minutes; poll only during the Hong Kong weather day from 10:00 to 20:00 HKT, every 15 seconds, to detect each 10-minute update quickly. Outside 10:00-20:00 HKT, do not poll.
 - HKO 9-day forecast `fnd`:
   - high-frequency windows: 11:58-12:10 HKT and 23:58-00:10 HKT
   - cadence during high-frequency windows: every 1 second
