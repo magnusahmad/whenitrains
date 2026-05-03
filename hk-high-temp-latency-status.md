@@ -299,11 +299,16 @@ Paper-mode milestones 1-5 are complete as local building blocks and one-shot CLI
 Scheduler defaults for the POC:
 
 - HKO since-midnight max/min CSV: poll from 10:00 to 20:00 HKT only, every 15 seconds.
-- HKO `fnd`: poll every second around noon and midnight HKT update windows; otherwise every hour for now to test whether it changes between scheduled updates.
-- HKO `flw`: poll every second around top-of-hour update windows.
+- HKO `fnd`: poll every second during 11:58-12:10 HKT and 23:58-00:10 HKT; otherwise every hour for now to test whether it changes between scheduled updates.
+- HKO `fnd`: after content hash change, continue 1-second polling for 60 seconds, then drop back to normal cadence.
+- HKO `flw`: poll every second during HH:59-HH:05 HKT around each top-of-hour update.
+- HKO `flw`: after content hash change, continue 1-second polling for 60 seconds, then drop back to normal cadence.
+- HKO `flw`: if rate limiting appears, shrink the high-frequency window to HH:59:30-HH:03.
 - Polymarket/orderbooks: monitor target-day markets until the Hong Kong day ends.
 - Resolution: after the target day ends, check Polymarket once per day for final resolution.
 - Scheduler must use a single-process DB lock and dedupe unchanged HKO payload hashes.
+- Backoff: on HTTP 429, timeout, DNS/network failure, or repeated non-2xx responses, slow that source to 10 seconds; if failures continue, slow to 60 seconds; clear after a successful fetch plus one confirmation fetch.
+- Backoff alerts are terminal/log warnings. New entries freeze if source freshness exceeds safety limits.
 
 Stale-price window:
 

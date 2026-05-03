@@ -127,13 +127,30 @@ HKO webhooks are preferred if a reliable official event feed exists, but assume 
 Polling strategy:
 
 - HKO since-midnight max/min CSV: poll only during the Hong Kong weather day from 10:00 to 20:00 HKT, every 15 seconds. Outside 10:00-20:00 HKT, do not poll.
-- HKO 9-day forecast `fnd`: poll every 1 second around the expected noon and midnight HKT update windows. Otherwise poll every 1 hour for POC testing, to verify whether it changes between noon and midnight. If it does not change between scheduled updates, remove the hourly check later.
-- HKO hourly local forecast `flw`: poll every 1 second around top-of-hour update windows.
+- HKO 9-day forecast `fnd`:
+  - high-frequency windows: 11:58-12:10 HKT and 23:58-00:10 HKT
+  - cadence during high-frequency windows: every 1 second
+  - after content hash change is detected: continue every 1 second for 60 more seconds, then drop back to normal cadence
+  - normal cadence outside high-frequency windows: every 1 hour for POC testing, to verify whether it changes between noon and midnight
+  - if it does not change between scheduled updates, remove the hourly check later
+- HKO hourly local forecast `flw`:
+  - high-frequency window: HH:59-HH:05 HKT around each top-of-hour update
+  - cadence during high-frequency windows: every 1 second
+  - after content hash change is detected: continue every 1 second for 60 more seconds, then drop back to normal cadence
+  - if rate limiting appears, shrink the window to HH:59:30-HH:03
 - Polymarket markets/orderbooks: monitor active target-day markets until the Hong Kong day ends.
 - Resolution watcher: after the target day ends, check Polymarket once per day for final resolution.
 - Final Daily Extract: since resolution uses finalized data only, final settlement audit is separate from since-midnight trading signals.
 
 Every HKO snapshot should produce a content hash. If the hash changes, the event bus emits `HKO_UPDATE_DETECTED`.
+
+Rate-limit and failure backoff:
+
+- On HTTP 429, timeout, DNS/network failure, or repeated non-2xx responses, immediately slow that source to a 10-second cadence.
+- If failures continue, slow that source to a 60-second cadence.
+- Emit a terminal warning when backoff starts, escalates, or clears.
+- Freeze new entries if source freshness exceeds configured safety limits.
+- Clear backoff after a successful fetch plus one additional successful confirmation fetch.
 
 Required latency metrics:
 
