@@ -126,13 +126,12 @@ HKO webhooks are preferred if a reliable official event feed exists, but assume 
 
 Polling strategy:
 
-- Baseline: every 60 seconds while relevant markets are open.
-- Aggressive windows around expected HKO update times: every 5-15 seconds.
-- Extra aggressive polling during live market-critical periods:
-  - shortly before/after forecast issuance windows
-  - late day when current observed max approaches key thresholds
-  - after warning changes
-  - after sudden weather changes from current report
+- HKO since-midnight max/min CSV: poll only during the Hong Kong weather day from 10:00 to 20:00 HKT, every 15 seconds. Outside 10:00-20:00 HKT, do not poll.
+- HKO 9-day forecast `fnd`: poll every 1 second around the expected noon and midnight HKT update windows. Otherwise poll every 1 hour for POC testing, to verify whether it changes between noon and midnight. If it does not change between scheduled updates, remove the hourly check later.
+- HKO hourly local forecast `flw`: poll every 1 second around top-of-hour update windows.
+- Polymarket markets/orderbooks: monitor active target-day markets until the Hong Kong day ends.
+- Resolution watcher: after the target day ends, check Polymarket once per day for final resolution.
+- Final Daily Extract: since resolution uses finalized data only, final settlement audit is separate from since-midnight trading signals.
 
 Every HKO snapshot should produce a content hash. If the hash changes, the event bus emits `HKO_UPDATE_DETECTED`.
 
@@ -144,6 +143,15 @@ Required latency metrics:
 - `parse_completed_at_utc`
 - `signal_completed_at_utc`
 - `market_snapshot_at_utc`
+
+Scheduler safeguards:
+
+- Use a single-process lock per database so two schedulers cannot double-trade the same signals.
+- Dedupe HKO events by source, target date, old value, new value, and HKO update/detection time.
+- Upsert/dedupe Polymarket events/outcomes.
+- Treat unchanged HKO payload hashes as already seen and do not emit a new event.
+- Default scheduler mode is paper trading; live mode must fail closed until separately enabled.
+- On restart, load existing paper positions and continue from SQLite state.
 
 ## 6. Local Data Store
 
@@ -340,8 +348,21 @@ For an entry candidate, compare the directional impact of the HKO event to the e
 - `price_response`: whether price moved with the event enough to erase the latency opportunity.
 - `price_lag`: affected outcome has not moved enough in the direction implied by the event.
 - `spread_ok`: spread is tight enough to enter and later exit, unless the trade is explicitly hold-to-maturity after a settling observation.
-- `depth_ok`: executable size exists at or near the stale price.
-- `time_since_event`: still inside the latency capture window.
+- `depth_ok`: executable depth is economically meaningful; for the POC, take any visible depth whose expected gross edge is larger than expected transaction fees.
+- `time_since_event`: still inside the stale-price window.
+
+Stale-price window definition:
+
+- The stale-price window starts when the bot detects and persists a new HKO event that materially affects one or more market outcomes.
+- The event timestamp is the earliest trusted timestamp available in this order: HKO payload `updateTime`, HKO observation time, then local `fetched_at_utc`.
+- The bot snapshots relevant Polymarket prices immediately before or at detection if available, then repeatedly checks current executable bid/ask during the window.
+- During the window, an entry is valid only if the relevant YES/NO executable price has not moved in the event-implied direction by the configured minimum move.
+- If the price has already moved with the event before the bot can enter, log a missed buy with reason `price_already_moved`.
+- If no executable depth exists, log a missed buy with reason `no_executable_depth`.
+- If visible depth is not economically meaningful after expected transaction fees, log a missed buy with reason `below_fee_threshold`.
+- If the window expires without a fill, log a missed buy with reason `stale_window_expired`.
+- The window is for opening a new latency trade only. Once a paper position is opened, exit is governed by take-profit, invalidation, hold-to-maturity, or risk rules.
+- Initial POC default: 90 seconds after event detection, configurable.
 
 Directional impact examples:
 
@@ -381,7 +402,7 @@ Trade candidate requirements:
 - Price movement lag >= configured stale-price threshold.
 - Current data freshness within allowed limit.
 - Market parser confidence is high.
-- Outcome liquidity supports the simulated fill.
+- Outcome liquidity is sufficient for a fee-positive simulated fill; otherwise log a missed trade.
 - Risk caps pass.
 
 Default stale-price thresholds:
@@ -391,6 +412,11 @@ Default stale-price thresholds:
 - Stop/timeout: exit or cancel if repricing does not occur within the configured window.
 - Hold to maturity: allowed when an official/current HKO observation has already satisfied the market predicate, the parser is high-confidence, and remaining resolution risk is mainly operational rather than meteorological.
 - Live thresholds should start more conservative until paper data proves fill behavior.
+
+Missed trade definitions:
+
+- `buy_missed`: signal generated, but no executable depth, expected edge below transaction fee, spread/depth guard failed, risk cap rejected, duplicate signal rejected, stale data guard fired, or price already moved with the event.
+- `sell_missed`: exit condition met, but no executable bid/depth, expected proceeds below transaction fee, stale orderbook, or risk/safety guard blocked execution.
 
 ## 9. Trading Scenarios
 
@@ -630,7 +656,47 @@ VPS-ready later:
 - log rotation
 - alert channel
 
-## 14. Milestones
+## 14. Alerts And Dashboard
+
+Alerting is terminal/log-only for the POC.
+
+Alert severity:
+
+- `info`: HKO update ingested, market discovered, scheduler heartbeat.
+- `trade`: paper buy/sell placed or missed.
+- `warning`: parser miss, stale source data, no orderbook, duplicate scheduler lock attempt.
+- `critical`: drawdown breach, auth failure, live kill switch, schema failure.
+
+Alerting requirements:
+
+- Alerts must be persisted in SQLite and visible in the dashboard.
+- Repeated identical warnings should be throttled to avoid terminal spam.
+- External alert channels are deferred until after the POC.
+
+Minimal dashboard:
+
+- local terminal summary first, optionally generated static HTML later
+- unique HKO forecast snapshots ingested
+- latest HKO since-midnight max
+- current `fnd` forecast max by target date
+- latest `flw` parsed range
+- discovered markets/outcomes
+- latest YES/NO bid/ask per outcome
+- buy orders placed
+- buy orders missed
+- sell orders placed
+- sell orders missed
+- open paper positions
+- realized PnL
+- executable mark-to-market estimate using current bid for longs
+- theoretical midpoint mark for reference only
+- total profit = realized PnL + executable unrealized PnL estimate
+- worst-case open loss if all open tokens go to zero
+- last successful poll per source: HKO CSV, HKO `fnd`, HKO `flw`, Gamma, CLOB
+- decision counters: signals generated, ignored, risk-blocked, stale-price-blocked, liquidity-blocked
+- last scheduler run time and recent errors
+
+## 15. Milestones
 
 ### Milestone 1: Project Skeleton
 
@@ -680,7 +746,7 @@ VPS-ready later:
 - Wallet/API credential setup.
 - Live mode remains disabled until explicitly enabled.
 
-## 15. Open Questions
+## 16. Open Questions
 
 - HKO since-midnight max/min endpoint is confirmed: `https://data.weather.gov.hk/weatherAPI/hko_data/csdi/dataset/latest_since_midnight_maxmin_csdi_4.csv`.
 - HKO 9-day forecast endpoint is confirmed: `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=fnd&lang=en`; read `weatherForecast[].forecastMaxtemp.value`.
@@ -689,7 +755,7 @@ VPS-ready later:
 - Paper-mode daily drawdown is intentionally set to USD 4,000 / 80% for stress testing. Live-mode drawdown needs a safer value before enablement.
 - Wallet plan for live mode: continue using the same Polymarket wallet/account even at larger account sizes. Existing MetaMask/browser-wallet Polymarket accounts generally use `GNOSIS_SAFE` signature type `2` with the Polymarket proxy wallet as funder. Security plan must assume the funder may hold materially more than the bot's daily trading risk.
 
-## 16. References
+## 17. References
 
 - HKO Open Data API documentation: https://data.weather.gov.hk/weatherAPI/doc/HKO_Open_Data_API_Documentation.pdf
 - HKO Weather API endpoint: https://data.weather.gov.hk/weatherAPI/opendata/weather.php

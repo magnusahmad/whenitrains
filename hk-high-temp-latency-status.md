@@ -293,3 +293,38 @@ Paper-mode milestones 1-5 are complete as local building blocks and one-shot CLI
 - Add kill switch behavior that cancels live orders.
 - Reduce live drawdown from the paper-mode 80% stress-test setting.
 - Add integration tests using recorded HKO/Gamma/CLOB fixtures.
+
+## Scheduler/Alert/Dashboard Decisions
+
+Scheduler defaults for the POC:
+
+- HKO since-midnight max/min CSV: poll from 10:00 to 20:00 HKT only, every 15 seconds.
+- HKO `fnd`: poll every second around noon and midnight HKT update windows; otherwise every hour for now to test whether it changes between scheduled updates.
+- HKO `flw`: poll every second around top-of-hour update windows.
+- Polymarket/orderbooks: monitor target-day markets until the Hong Kong day ends.
+- Resolution: after the target day ends, check Polymarket once per day for final resolution.
+- Scheduler must use a single-process DB lock and dedupe unchanged HKO payload hashes.
+
+Stale-price window:
+
+- Starts when a new HKO event is detected and persisted.
+- Event time comes from HKO `updateTime`, HKO observation time, or local fetch time in that order.
+- Entry remains eligible only while the relevant YES/NO price has not moved in the event-implied direction by the configured minimum move.
+- Initial POC value: 90 seconds after event detection.
+- Expiry means no new entry from that HKO event; existing positions still use take-profit, invalidation, hold-to-maturity, or risk rules.
+
+Missed trade definitions:
+
+- `buy_missed`: price already moved, no executable depth, below fee threshold, spread/depth guard failed, risk cap rejected, duplicate signal rejected, or stale data guard fired.
+- `sell_missed`: exit condition met but no executable bid/depth, below fee threshold, stale orderbook, or risk/safety guard blocked execution.
+
+Alerts:
+
+- Terminal/log-only first.
+- Severity levels: info, trade, warning, critical.
+- Repeated identical warnings should be throttled.
+
+Dashboard:
+
+- Start with a terminal summary command backed by SQLite.
+- Track unique HKO forecasts, latest since-midnight max, current forecast max by day, latest `flw` range, discovered markets/outcomes, latest bid/ask, buys/sells placed, buys/sells missed, open positions, realized PnL, executable unrealized PnL, total profit, worst-case open loss, source freshness, decision counters, last scheduler run, and recent errors.
