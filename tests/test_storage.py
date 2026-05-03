@@ -52,7 +52,7 @@ class StorageTests(unittest.TestCase):
                     HkoForecast(
                         source_type="flw_page",
                         forecast_date_hkt=date(2026, 5, 4),
-                        forecast_min_c=21,
+                        forecast_min_c=None,
                         forecast_max_c=25,
                         update_time="2026-05-04T00:45:00+08:00",
                         parse_warning=False,

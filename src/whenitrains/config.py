@@ -10,4 +10,4 @@ class Settings:
     max_daily_drawdown_usd: float = 4000.0
     stale_price_min_move: float = 0.02
     take_profit_move: float = 0.03
-
+    max_hold_minutes: float = 10.0

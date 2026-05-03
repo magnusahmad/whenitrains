@@ -103,16 +103,14 @@ def parse_flw_page(text: str) -> HkoForecast:
     )
     if not range_match:
         warning = True
-        min_c = None
         max_c = None
     else:
-        min_c = int(range_match.group(1))
         max_c = int(range_match.group(2))
 
     return HkoForecast(
         source_type="flw_page",
         forecast_date_hkt=forecast_date,
-        forecast_min_c=min_c,
+        forecast_min_c=None,
         forecast_max_c=max_c,
         weather_text=plain,
         update_time=update_time,

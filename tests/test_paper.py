@@ -1,6 +1,7 @@
 import unittest
 import tempfile
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 from whenitrains.paper import PaperTrader, RiskConfig
 from whenitrains.paper_db import (
@@ -73,6 +74,36 @@ class PaperDbTests(unittest.TestCase):
                 "select realized_pnl from paper_positions where outcome_id = 'yes25'"
             ).fetchone()[0]
             self.assertGreater(pnl, 0)
+
+    def test_calculate_exit_sells_after_max_hold_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            execute_paper_buy(
+                db,
+                token_id="yes25",
+                side="YES",
+                size_usd=100,
+                asks=[(0.40, 1000)],
+                max_order_usd=250,
+                reason="test buy",
+            )
+            entry_time = datetime(2026, 5, 4, 1, 0, tzinfo=timezone.utc)
+            db.execute(
+                "update paper_positions set updated_at_utc = ? where outcome_id = ?",
+                (entry_time.isoformat(), "yes25"),
+            )
+            db.commit()
+            exit_check = calculate_exit(
+                db,
+                "yes25",
+                current_bid=0.40,
+                take_profit=0.03,
+                max_hold_minutes=10,
+                now=entry_time + timedelta(minutes=10),
+            )
+            self.assertTrue(exit_check.should_sell)
+            self.assertEqual(exit_check.reason, "max hold time reached")
 
 
 if __name__ == "__main__":

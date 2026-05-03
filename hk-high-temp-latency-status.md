@@ -54,11 +54,11 @@ Observed text patterns:
 
 Findings:
 
-- This webpage is the source to scrape for the current-day forecast range.
+- This webpage is the source to scrape for the current-day forecast high.
 - The public HTML is Vue-rendered. It currently loads the rendered bulletin fields from `https://www.weather.gov.hk/json/DYN_DAT_MINDS_FLW.json`; when the static HTML shell lacks the bulletin text, the scraper fetches that page data payload, reconstructs the bulletin text, and applies the same `Bulletin updated at ...` and `between ... degrees` patterns.
 - The Open Data API `flw` feed can lag the actual bulletin update and is removed from the trading signal path.
 - The Open Data API `fnd` / 9-day forecast feed has no reliable low-latency signal pattern yet and is removed from the trading signal path.
-- Because this bulletin only provides the current-day range, paper trading is limited to the current-day market from midnight HKT onward.
+- Because this bulletin only provides the current-day forecast high, paper trading is limited to the current-day market from midnight HKT onward.
 
 ### Polymarket
 
@@ -114,7 +114,7 @@ OK
 Current green run after replacing API forecast ingestion with the bulletin webpage scraper:
 
 ```text
-Ran 22 tests in 0.025s
+Ran 23 tests in 0.030s
 OK
 ```
 
@@ -176,7 +176,7 @@ Details:
 - Scrapes/parses the current-day HKO bulletin webpage.
 - Falls back to the webpage's Vue data payload when the static HTML contains only template placeholders.
 - Parses bulletin update datetime from `Bulletin updated at HH:MM HKT DD/Mon/YYYY`.
-- Parses current-day range via `between {min} and {max} degrees` or `ranging between {min} and {max} degrees`.
+- Parses the current-day high from `between {min} and {max} degrees` or `ranging between {min} and {max} degrees`.
 - Emits `parse_warning=True` when the update-time or range pattern is missing.
 
 ### Milestone 3: Polymarket Ingestion
@@ -235,6 +235,7 @@ Tests:
 - `tests/test_paper.py::test_drawdown_freezes_new_entries_at_80_percent`
 - `tests/test_paper.py::test_calculate_entry_uses_visible_ask_depth`
 - `tests/test_paper.py::test_paper_buy_and_sell_persist_position_and_pnl`
+- `tests/test_paper.py::test_calculate_exit_sells_after_max_hold_time`
 
 Implementation:
 
@@ -251,6 +252,7 @@ Details:
 - Persists paper orders and paper positions keyed by CLOB token ID.
 - Calculates entry quote: limit price, average fill, shares, and cost.
 - Calculates exit condition using current executable bid minus average entry price.
+- Exits after 10 minutes if the price has not moved favorably enough to hit take-profit.
 
 ## Paper PnL And Market Impact
 
@@ -339,4 +341,4 @@ Alerts:
 Dashboard:
 
 - Start with a terminal summary command backed by SQLite.
-- Track unique HKO forecasts, latest since-midnight max, current forecast max by day, latest `flw` range, discovered markets/outcomes, latest bid/ask, buys/sells placed, buys/sells missed, open positions, realized PnL, executable unrealized PnL, total profit, worst-case open loss, source freshness, decision counters, last scheduler run, and recent errors.
+- Track unique HKO forecasts, latest since-midnight max, current forecast max by day, latest scraped bulletin high, discovered markets/outcomes, latest bid/ask, buys/sells placed, buys/sells missed, open positions, realized PnL, executable unrealized PnL, total profit, worst-case open loss, source freshness, decision counters, last scheduler run, and recent errors.

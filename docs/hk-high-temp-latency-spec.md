@@ -64,10 +64,10 @@ Use direct HKO sources that publish quickly enough for latency trading.
 Parsing rules:
 
 - Since-midnight actuals: use the Hong Kong Observatory automatic weather station row. This is the station that resolves the target markets.
-- Local weather forecast bulletin webpage: run a headless/no-GUI scraper against the page, extract `Bulletin updated at HH:MM HKT DD/Mon/YYYY`, and parse the text pattern `between {min} and {max} degrees` or `ranging between {min} and {max} degrees`. The public page is Vue-rendered and loads `https://www.weather.gov.hk/json/DYN_DAT_MINDS_FLW.json`; when the static HTML shell does not contain the rendered bulletin text, fetch that page data payload, reconstruct the rendered bulletin text, and apply the same patterns. Emit a warning log if either pattern is not found.
+- Local weather forecast bulletin webpage: run a headless/no-GUI scraper against the page, extract `Bulletin updated at HH:MM HKT DD/Mon/YYYY`, and parse the text pattern `between {min} and {max} degrees` or `ranging between {min} and {max} degrees`. The trading signal only stores/uses the higher number. The public page is Vue-rendered and loads `https://www.weather.gov.hk/json/DYN_DAT_MINDS_FLW.json`; when the static HTML shell does not contain the rendered bulletin text, fetch that page data payload, reconstruct the rendered bulletin text, and apply the same patterns. Emit a warning log if either pattern is not found.
 - The Open Data API `flw` and `fnd` feeds are removed as trading inputs for this POC because historical evidence shows they can lag the actual bulletin/webpage update or have unclear update timing.
 - The 9-day forecast is removed for this POC until a reliable low-latency signal pattern is established.
-- Because the bulletin only gives the current-day forecast range, betting is limited to the current-day market from midnight HKT onward.
+- Because the bulletin only gives the current-day forecast high, betting is limited to the current-day market from midnight HKT onward.
 
 Store every fetched HKO response as raw HTML/JSON/CSV plus normalized rows. The raw snapshot is part of the audit trail.
 
@@ -192,7 +192,6 @@ Core tables:
   - `snapshot_id`
   - `source_type`
   - `forecast_date_hkt`
-  - `forecast_min_c`
   - `forecast_max_c`
   - `weather_text`
   - `wind_text`
@@ -429,7 +428,7 @@ Default stale-price thresholds:
 
 - Entry: affected outcome has moved less than 1-2 cents after a material HKO event while neighboring/related outcomes or market context imply repricing should occur.
 - Take profit: exit after 2-5 cents favorable movement, configurable per market liquidity.
-- Stop/timeout: exit or cancel if repricing does not occur within the configured window.
+- Stop/timeout: after a buy fills, exit if the executable bid has not moved favorably within 10 minutes. This is separate from the stale-price entry window.
 - Hold to maturity: allowed when an official/current HKO observation has already satisfied the market predicate, the parser is high-confidence, and remaining resolution risk is mainly operational rather than meteorological.
 - Live thresholds should start more conservative until paper data proves fill behavior.
 
@@ -699,7 +698,7 @@ Minimal dashboard:
 - unique HKO forecast snapshots ingested
 - latest HKO since-midnight max
 - current-day scraped bulletin forecast max
-- latest scraped bulletin parsed range and bulletin update time
+- latest scraped bulletin forecast high and bulletin update time
 - discovered markets/outcomes
 - latest YES/NO bid/ask per outcome
 - buy orders placed
@@ -769,7 +768,7 @@ Minimal dashboard:
 ## 16. Open Questions
 
 - HKO since-midnight max/min endpoint is confirmed: `https://data.weather.gov.hk/weatherAPI/hko_data/csdi/dataset/latest_since_midnight_maxmin_csdi_4.csv`.
-- HKO local weather forecast bulletin webpage is confirmed as the current-day forecast source: `https://www.weather.gov.hk/en/wxinfo/currwx/flw.htm`; parse bulletin update time and `between {min} and {max} degrees`.
+- HKO local weather forecast bulletin webpage is confirmed as the current-day forecast source: `https://www.weather.gov.hk/en/wxinfo/currwx/flw.htm`; parse bulletin update time and the higher number from `between {min} and {max} degrees`.
 - Polymarket market semantics are confirmed from sampled May 4 and May 5, 2026 HK highest-temperature markets: final HKO Daily Extract `Absolute Daily Max (deg. C)`, one-decimal precision, no rounding for integer buckets, finalized data only, and no later revisions considered.
 - Paper-mode daily drawdown is intentionally set to USD 4,000 / 80% for stress testing. Live-mode drawdown needs a safer value before enablement.
 - Wallet plan for live mode: continue using the same Polymarket wallet/account even at larger account sizes. Existing MetaMask/browser-wallet Polymarket accounts generally use `GNOSIS_SAFE` signature type `2` with the Polymarket proxy wallet as funder. Security plan must assume the funder may hold materially more than the bot's daily trading risk.

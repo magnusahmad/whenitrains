@@ -30,7 +30,7 @@ class HkoParserTests(unittest.TestCase):
         row = parse_flw_page(html)
         self.assertEqual(row.source_type, "flw_page")
         self.assertEqual(row.update_time, "2026-05-04T00:45:00+08:00")
-        self.assertEqual(row.forecast_min_c, 21)
+        self.assertIsNone(row.forecast_min_c)
         self.assertEqual(row.forecast_max_c, 25)
         self.assertFalse(row.parse_warning)
 
@@ -56,7 +56,7 @@ class HkoParserTests(unittest.TestCase):
         row = parse_flw_page_data_json(payload)
         self.assertEqual(row.source_type, "flw_page")
         self.assertEqual(row.update_time, "2026-05-04T00:45:00+08:00")
-        self.assertEqual(row.forecast_min_c, 21)
+        self.assertIsNone(row.forecast_min_c)
         self.assertEqual(row.forecast_max_c, 25)
         self.assertFalse(row.parse_warning)
 

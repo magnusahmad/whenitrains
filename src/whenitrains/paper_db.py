@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from .storage import (
     get_paper_position,
@@ -132,7 +133,12 @@ def execute_paper_buy(
 
 
 def calculate_exit(
-    db: sqlite3.Connection, token_id: str, current_bid: float, take_profit: float
+    db: sqlite3.Connection,
+    token_id: str,
+    current_bid: float,
+    take_profit: float,
+    max_hold_minutes: float = 10.0,
+    now: datetime | None = None,
 ) -> ExitQuote:
     pos = get_paper_position(db, token_id)
     if pos is None or float(pos["net_shares"]) <= 0:
@@ -140,9 +146,38 @@ def calculate_exit(
     avg_price = float(pos["avg_price"])
     shares = float(pos["net_shares"])
     move = current_bid - avg_price
-    should_sell = move >= take_profit
-    reason = "take profit reached" if should_sell else "hold"
+    if move >= take_profit:
+        return ExitQuote(
+            token_id,
+            current_bid,
+            avg_price,
+            shares,
+            move,
+            True,
+            "take profit reached",
+        )
+    entry_time = _parse_utc_timestamp(pos["updated_at_utc"])
+    current_time = now or datetime.now(timezone.utc)
+    if current_time - entry_time >= timedelta(minutes=max_hold_minutes):
+        return ExitQuote(
+            token_id,
+            current_bid,
+            avg_price,
+            shares,
+            move,
+            True,
+            "max hold time reached",
+        )
+    should_sell = False
+    reason = "hold"
     return ExitQuote(token_id, current_bid, avg_price, shares, move, should_sell, reason)
+
+
+def _parse_utc_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def execute_paper_sell(

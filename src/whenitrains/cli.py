@@ -51,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     check_exit.add_argument("label")
     check_exit.add_argument("side", choices=["YES", "NO"])
     check_exit.add_argument("--take-profit", type=float, default=Settings.take_profit_move)
+    check_exit.add_argument("--max-hold-minutes", type=float, default=Settings.max_hold_minutes)
     paper_sell = sub.add_parser("paper-sell")
     paper_sell.add_argument("label")
     paper_sell.add_argument("side", choices=["YES", "NO"])
@@ -145,7 +146,13 @@ def main(argv: list[str] | None = None) -> int:
         if current_bid is None:
             print("no current bid")
             return 2
-        quote = calculate_exit(db, token_id, current_bid, args.take_profit)
+        quote = calculate_exit(
+            db,
+            token_id,
+            current_bid,
+            args.take_profit,
+            max_hold_minutes=args.max_hold_minutes,
+        )
         print(
             f"{args.label} {args.side} bid={current_bid:.4f} "
             f"entry={quote.avg_entry_price:.4f} move={quote.price_move:.4f} "
