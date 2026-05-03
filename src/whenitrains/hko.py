@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import html
 import json
 import re
 from dataclasses import dataclass
@@ -15,8 +16,8 @@ SINCE_MIDNIGHT_URL = (
     "https://data.weather.gov.hk/weatherAPI/hko_data/csdi/dataset/"
     "latest_since_midnight_maxmin_csdi_4.csv"
 )
-FND_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=fnd&lang=en"
-FLW_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=flw&lang=en"
+FLW_PAGE_URL = "https://www.weather.gov.hk/en/wxinfo/currwx/flw.htm"
+FLW_PAGE_DATA_URL = "https://www.weather.gov.hk/json/DYN_DAT_MINDS_FLW.json"
 
 
 @dataclass(frozen=True)
@@ -48,10 +49,6 @@ def fetch_text(url: str) -> str:
         return response.read().decode("utf-8-sig")
 
 
-def fetch_json(url: str) -> dict[str, Any]:
-    return json.loads(fetch_text(url))
-
-
 def parse_since_midnight_csv(text: str) -> HkoObservation:
     reader = csv.DictReader(StringIO(text.lstrip("\ufeff")))
     for row in reader:
@@ -76,49 +73,92 @@ def parse_since_midnight_csv(text: str) -> HkoObservation:
     raise ValueError("HK Observatory row not found in since-midnight CSV")
 
 
-def parse_fnd_forecasts(payload: dict[str, Any]) -> list[HkoForecast]:
-    rows: list[HkoForecast] = []
-    for item in payload.get("weatherForecast", []):
-        forecast_date = datetime.strptime(item["forecastDate"], "%Y%m%d").date()
-        rows.append(
-            HkoForecast(
-                source_type="fnd",
-                forecast_date_hkt=forecast_date,
-                forecast_min_c=item.get("forecastMintemp", {}).get("value"),
-                forecast_max_c=item.get("forecastMaxtemp", {}).get("value"),
-                weather_text=item.get("forecastWeather", ""),
-                wind_text=item.get("forecastWind", ""),
-                psr=item.get("PSR", ""),
-                update_time=payload.get("updateTime"),
-                raw=item,
-            )
-        )
-    return rows
-
-
-def parse_flw_forecast(payload: dict[str, Any]) -> HkoForecast:
-    desc = payload.get("forecastDesc", "")
-    match = re.search(
-        r"between\s+(-?\d+)\s+and\s+(-?\d+)\s+degrees", desc, flags=re.IGNORECASE
+def parse_flw_page(text: str) -> HkoForecast:
+    plain = _html_to_text(text)
+    time_match = re.search(
+        r"Bulletin updated at\s+(\d{2}):(\d{2})\s+HKT\s+"
+        r"(\d{1,2})/([A-Za-z]{3})/(\d{4})",
+        plain,
+        flags=re.IGNORECASE,
     )
-    if not match:
-        return HkoForecast(
-            source_type="flw",
-            forecast_date_hkt=None,
-            forecast_min_c=None,
-            forecast_max_c=None,
-            weather_text=desc,
-            update_time=payload.get("updateTime"),
-            parse_warning=True,
-            raw=payload,
-        )
+    update_time = None
+    forecast_date = None
+    warning = False
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2))
+        day = int(time_match.group(3))
+        month = datetime.strptime(time_match.group(4).title(), "%b").month
+        year = int(time_match.group(5))
+        dt = datetime(year, month, day, hour, minute, tzinfo=HKT)
+        update_time = dt.isoformat()
+        forecast_date = dt.date()
+    else:
+        warning = True
+
+    range_match = re.search(
+        r"(?:between|ranging between)\s+(-?\d+)\s+and\s+(-?\d+)\s+degrees",
+        plain,
+        flags=re.IGNORECASE,
+    )
+    if not range_match:
+        warning = True
+        min_c = None
+        max_c = None
+    else:
+        min_c = int(range_match.group(1))
+        max_c = int(range_match.group(2))
+
     return HkoForecast(
-        source_type="flw",
-        forecast_date_hkt=None,
-        forecast_min_c=int(match.group(1)),
-        forecast_max_c=int(match.group(2)),
-        weather_text=desc,
-        update_time=payload.get("updateTime"),
-        parse_warning=False,
+        source_type="flw_page",
+        forecast_date_hkt=forecast_date,
+        forecast_min_c=min_c,
+        forecast_max_c=max_c,
+        weather_text=plain,
+        update_time=update_time,
+        parse_warning=warning,
+        raw={"text": plain},
+    )
+
+
+def parse_flw_page_data_json(text: str) -> HkoForecast:
+    payload = json.loads(text)
+    data = payload.get("DYN_DAT_MINDS_FLW", {})
+    date_text = data.get("BulletinDate", {}).get("Val_Eng", "")
+    time_text = data.get("BulletinTime", {}).get("Val_Eng", "")
+    update_text = ""
+    if re.fullmatch(r"\d{8}", date_text) and re.fullmatch(r"\d{4}", time_text):
+        dt = datetime.strptime(date_text + time_text, "%Y%m%d%H%M").replace(tzinfo=HKT)
+        update_text = dt.strftime("Bulletin updated at %H:%M HKT %d/%b/%Y")
+
+    parts = [
+        update_text,
+        data.get("FLW_WxForecastGeneralSituation", {}).get("Val_Eng", ""),
+        data.get("FLW_WxForecastPeriod", {}).get("Val_Eng", ""),
+        data.get("FLW_WxForecastWxDesc", {}).get("Val_Eng", ""),
+        (
+            data.get("FLW_WxOutlookTitle", {}).get("Val_Eng", "")
+            + " : "
+            + data.get("FLW_WxOutlookContent", {}).get("Val_Eng", "")
+        ).strip(" :"),
+    ]
+    rendered_text = " ".join(part for part in parts if part)
+    forecast = parse_flw_page(rendered_text)
+    return HkoForecast(
+        source_type=forecast.source_type,
+        forecast_date_hkt=forecast.forecast_date_hkt,
+        forecast_min_c=forecast.forecast_min_c,
+        forecast_max_c=forecast.forecast_max_c,
+        weather_text=rendered_text,
+        update_time=forecast.update_time,
+        parse_warning=forecast.parse_warning,
         raw=payload,
     )
+
+
+def _html_to_text(text: str) -> str:
+    text = re.sub(r"<script\b[^>]*>.*?</script>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()

@@ -1,13 +1,13 @@
 # HK High Temp Latency Status
 
-Last updated: 2026-05-03 HKT
+Last updated: 2026-05-04 HKT
 
 ## Current State
 
 Milestones 1-5 are implemented for local paper trading:
 
 - Milestone 1: Python project skeleton, config, CLI, test setup.
-- Milestone 2: HKO ingestion/parser layer for since-midnight CSV, 9-day forecast JSON, hourly local forecast JSON, and SQLite persistence.
+- Milestone 2: HKO ingestion/parser layer for since-midnight CSV, the current-day HKO bulletin webpage scraper, and SQLite persistence.
 - Milestone 3: Polymarket event/market parsing, CLOB orderbook parsing, and SQLite persistence.
 - Milestone 4: Latency signal primitives for directional impact, price-response classification, and trade candidate generation.
 - Milestone 5: Paper trader with executable-depth fills, position tracking, risk rejects, and CLI-ready local storage.
@@ -42,30 +42,23 @@ Observed schema:
 
 The resolving row uses `Automatic Weather Station = HK Observatory`.
 
-9-day forecast:
+Current-day local weather forecast bulletin webpage:
 
-`https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=fnd&lang=en`
+`https://www.weather.gov.hk/en/wxinfo/currwx/flw.htm`
 
-Observed fields:
+Observed text patterns:
 
-- `updateTime`
-- `weatherForecast[].forecastDate`
-- `weatherForecast[].forecastMaxtemp.value`
-- `weatherForecast[].forecastMintemp.value`
-- `weatherForecast[].forecastWind`
-- `weatherForecast[].forecastWeather`
-- `weatherForecast[].PSR`
+- `Bulletin updated at HH:MM HKT DD/Mon/YYYY`
+- `between {min} and {max} degrees`
+- `ranging between {min} and {max} degrees`
 
-Hourly local forecast:
+Findings:
 
-`https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=flw&lang=en`
-
-Observed fields:
-
-- `updateTime`
-- `forecastDesc`
-
-The current text contains the expected pattern: `between {min} and {max} degrees`.
+- This webpage is the source to scrape for the current-day forecast range.
+- The public HTML is Vue-rendered. It currently loads the rendered bulletin fields from `https://www.weather.gov.hk/json/DYN_DAT_MINDS_FLW.json`; when the static HTML shell lacks the bulletin text, the scraper fetches that page data payload, reconstructs the bulletin text, and applies the same `Bulletin updated at ...` and `between ... degrees` patterns.
+- The Open Data API `flw` feed can lag the actual bulletin update and is removed from the trading signal path.
+- The Open Data API `fnd` / 9-day forecast feed has no reliable low-latency signal pattern yet and is removed from the trading signal path.
+- Because this bulletin only provides the current-day range, paper trading is limited to the current-day market from midnight HKT onward.
 
 ### Polymarket
 
@@ -111,10 +104,17 @@ Green run:
 PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
-Result:
+Earlier green run:
 
 ```text
 Ran 18 tests in 0.015s
+OK
+```
+
+Current green run after replacing API forecast ingestion with the bulletin webpage scraper:
+
+```text
+Ran 22 tests in 0.025s
 OK
 ```
 
@@ -161,9 +161,9 @@ Implementation files:
 Tests:
 
 - `tests/test_hko.py::test_parse_since_midnight_hk_observatory_row`
-- `tests/test_hko.py::test_parse_fnd_forecast_maxtemp`
-- `tests/test_hko.py::test_parse_flw_between_pattern`
-- `tests/test_hko.py::test_parse_flw_warns_when_range_missing`
+- `tests/test_hko.py::test_parse_flw_webpage_bulletin_time_and_range`
+- `tests/test_hko.py::test_parse_flw_page_warns_when_range_missing`
+- `tests/test_hko.py::test_parse_flw_page_data_json_builds_rendered_bulletin`
 
 Implementation:
 
@@ -173,9 +173,11 @@ Details:
 
 - Parses HKO Observatory since-midnight max/min CSV.
 - Parses HKT timestamp from CSV fields.
-- Parses 9-day `forecastMaxtemp.value`.
-- Parses hourly `forecastDesc` range via `between {min} and {max} degrees`.
-- Emits `parse_warning=True` when the range pattern is missing.
+- Scrapes/parses the current-day HKO bulletin webpage.
+- Falls back to the webpage's Vue data payload when the static HTML contains only template placeholders.
+- Parses bulletin update datetime from `Bulletin updated at HH:MM HKT DD/Mon/YYYY`.
+- Parses current-day range via `between {min} and {max} degrees` or `ranging between {min} and {max} degrees`.
+- Emits `parse_warning=True` when the update-time or range pattern is missing.
 
 ### Milestone 3: Polymarket Ingestion
 
@@ -185,6 +187,7 @@ Tests:
 - `tests/test_markets.py::test_top_boundary_bucket`
 - `tests/test_markets.py::test_bottom_boundary_bucket`
 - `tests/test_markets.py::test_parse_event_markets_maps_yes_no_tokens`
+- `tests/test_markets.py::test_current_day_market_filter`
 - CLI smoke: `discover-market 2026-05-04` persisted 11 live outcomes.
 
 Implementation:
@@ -197,6 +200,7 @@ Details:
 - Parses exact buckets such as `25°C`.
 - Parses top boundary buckets such as `26°C or higher`.
 - Parses bottom boundary buckets such as `16°C or below`.
+- Filters trading scope to the current-day market for the current-day bulletin signal.
 - Maps Gamma nested market rows to YES/NO CLOB token IDs.
 - Parses CLOB orderbook price/size strings.
 
@@ -306,8 +310,7 @@ Scheduler defaults for the POC:
 
 - HKO since-midnight max/min CSV: source updates extremely regularly every 10 minutes, typically near `:00`, `:09`, `:19`, `:29`, `:38`, `:48`, and `:58`; poll from 10:00 to 20:00 HKT only.
 - HKO since-midnight max/min CSV: for each expected publication time, poll from T-1m through T+2m every 10 seconds. If the content hash changes, perform one confirmation fetch, then stop polling that window.
-- HKO `fnd`: expected updates are 00:00, 03:20, 09:20, 15:20, and 21:20 HKT. For each expected publication time, poll from T-1m through T+2m every 10 seconds. If the content hash changes, perform one confirmation fetch, then stop polling that window.
-- HKO `flw`: expected updates are hourly at `HH:08` HKT based on historical samples. For each expected publication time, poll from T-1m through T+2m every 10 seconds. If the content hash changes, perform one confirmation fetch, then stop polling that window.
+- HKO local weather forecast bulletin webpage: expected updates are 00:00 HKT, 45 minutes past each hour, 16:15 HKT, and 23:15 HKT. For each expected publication time, poll from T-30s through T+2m every 10 seconds. If the content hash changes, perform one confirmation fetch, then stop polling that window.
 - Polymarket/orderbooks: monitor target-day markets until the Hong Kong day ends.
 - Resolution: after the target day ends, check Polymarket once per day for final resolution.
 - Scheduler must use a single-process DB lock and dedupe unchanged HKO payload hashes.

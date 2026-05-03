@@ -50,10 +50,12 @@ class StorageTests(unittest.TestCase):
                 snapshot.id,
                 [
                     HkoForecast(
-                        source_type="fnd",
+                        source_type="flw_page",
                         forecast_date_hkt=date(2026, 5, 4),
                         forecast_min_c=21,
                         forecast_max_c=25,
+                        update_time="2026-05-04T00:45:00+08:00",
+                        parse_warning=False,
                     )
                 ],
             )
@@ -90,6 +92,11 @@ class StorageTests(unittest.TestCase):
             )
             self.assertEqual(db.execute("select count(*) from hko_current_observations").fetchone()[0], 1)
             self.assertEqual(db.execute("select count(*) from hko_forecasts").fetchone()[0], 1)
+            forecast = db.execute(
+                "select update_time, parse_warning from hko_forecasts"
+            ).fetchone()
+            self.assertEqual(forecast["update_time"], "2026-05-04T00:45:00+08:00")
+            self.assertEqual(forecast["parse_warning"], 0)
             self.assertEqual(db.execute("select count(*) from outcomes").fetchone()[0], 1)
             self.assertEqual(db.execute("select count(*) from orderbook_snapshots").fetchone()[0], 1)
             self.assertEqual(db.execute("select count(*) from signals").fetchone()[0], 1)

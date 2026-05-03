@@ -67,6 +67,10 @@ def event_slug_for_date(target: date) -> str:
     return f"highest-temperature-in-hong-kong-on-{target.strftime('%B').lower()}-{target.day}-{target.year}"
 
 
+def is_current_day_market(target: date | None, today_hkt: date) -> bool:
+    return target == today_hkt
+
+
 def fetch_hk_temperature_event(slug: str) -> dict[str, Any] | None:
     items = fetch_json(f"{GAMMA_EVENTS}?slug={quote(slug)}")
     return items[0] if items else None

@@ -1,7 +1,9 @@
 import unittest
+from datetime import date
 
 from whenitrains.markets import PredicateType, parse_outcome_label, predicate_matches
 from whenitrains.polymarket import parse_event_markets
+from whenitrains.polymarket import is_current_day_market
 
 
 class MarketSemanticsTests(unittest.TestCase):
@@ -51,6 +53,10 @@ class MarketSemanticsTests(unittest.TestCase):
         self.assertEqual(markets[0].outcomes[0].yes_token_id, "YES_TOKEN")
         self.assertEqual(markets[0].outcomes[0].no_token_id, "NO_TOKEN")
         self.assertEqual(markets[0].outcomes[0].predicate.value_c, 25)
+
+    def test_current_day_market_filter(self):
+        self.assertTrue(is_current_day_market(date(2026, 5, 4), date(2026, 5, 4)))
+        self.assertFalse(is_current_day_market(date(2026, 5, 5), date(2026, 5, 4)))
 
 
 if __name__ == "__main__":

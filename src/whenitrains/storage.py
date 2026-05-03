@@ -46,6 +46,8 @@ def migrate(db: sqlite3.Connection) -> None:
             weather_text text,
             wind_text text,
             psr text,
+            update_time text,
+            parse_warning integer not null default 0,
             raw_forecast text
         );
 
@@ -142,7 +144,19 @@ def migrate(db: sqlite3.Connection) -> None:
         );
         """
     )
+    _add_column_if_missing(db, "hko_forecasts", "update_time", "text")
+    _add_column_if_missing(
+        db, "hko_forecasts", "parse_warning", "integer not null default 0"
+    )
     db.commit()
+
+
+def _add_column_if_missing(
+    db: sqlite3.Connection, table: str, column: str, definition: str
+) -> None:
+    existing = {row["name"] for row in db.execute(f"pragma table_info({table})")}
+    if column not in existing:
+        db.execute(f"alter table {table} add column {column} {definition}")
 
 
 def store_raw_snapshot(
@@ -197,8 +211,9 @@ def store_hko_forecasts(
             """
             insert into hko_forecasts
             (snapshot_id, source_type, forecast_date_hkt, forecast_min_c,
-             forecast_max_c, weather_text, wind_text, psr, raw_forecast)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             forecast_max_c, weather_text, wind_text, psr, update_time,
+             parse_warning, raw_forecast)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot_id,
@@ -211,6 +226,8 @@ def store_hko_forecasts(
                 forecast.weather_text,
                 forecast.wind_text,
                 forecast.psr,
+                forecast.update_time,
+                1 if forecast.parse_warning else 0,
                 json.dumps(forecast.raw or {}),
             ),
         )
