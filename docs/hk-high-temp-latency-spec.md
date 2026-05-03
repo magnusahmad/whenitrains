@@ -129,19 +129,23 @@ Polling strategy:
 - HKO since-midnight max/min CSV:
   - source updates extremely regularly every 10 minutes, typically near `:00`, `:09`, `:19`, `:29`, `:38`, `:48`, and `:58`
   - poll only during the Hong Kong weather day from 10:00 to 20:00 HKT
-  - scheduled checks: poll once just after each expected 10-minute publication time
-  - delay handling: if content hash has not changed when expected, retry every 15 seconds for up to 2 minutes, then stop until the next expected publication time
+  - polling window: from 1 minute before each expected publication time through 2 minutes after it
+  - cadence inside the window: every 10 seconds
+  - if content hash changes, perform one confirmation fetch, then stop polling that window
+  - if no change by the end of the window, log a warning and wait for the next expected publication time
   - outside 10:00-20:00 HKT: do not poll
 - HKO 9-day forecast `fnd`:
-  - expected updates are noon and midnight HKT
-  - scheduled checks: poll once at each expected update time and shortly after
-  - delay handling: if content hash has not changed when expected, retry every 15 seconds for up to 10 minutes, then stop
-  - normal cadence outside expected update windows: every 1 hour for POC testing, to verify whether it changes between noon and midnight
-  - if it does not change between scheduled updates, remove the hourly check later
+  - expected updates are 00:00, 03:20, 09:20, 15:20, and 21:20 HKT
+  - polling window: from 1 minute before each expected publication time through 2 minutes after it
+  - cadence inside the window: every 10 seconds
+  - if content hash changes, perform one confirmation fetch, then stop polling that window
+  - if no change by the end of the window, log a warning and wait for the next expected publication time
 - HKO hourly local forecast `flw`:
-  - expected updates are hourly near the top of the hour
-  - scheduled checks: poll once at each expected hourly update time and shortly after
-  - delay handling: if content hash has not changed when expected, retry every 15 seconds for up to 5 minutes, then stop until the next hour
+  - expected updates are hourly at `HH:08` HKT based on historical samples
+  - polling window: from 1 minute before each expected publication time through 2 minutes after it
+  - cadence inside the window: every 10 seconds
+  - if content hash changes, perform one confirmation fetch, then stop polling that window
+  - if no change by the end of the window, log a warning and wait for the next expected publication time
 - Polymarket markets/orderbooks: monitor active target-day markets until the Hong Kong day ends.
 - Resolution watcher: after the target day ends, check Polymarket once per day for final resolution.
 - Final Daily Extract: since resolution uses finalized data only, final settlement audit is separate from since-midnight trading signals.
