@@ -118,6 +118,11 @@ CLI smoke checks:
 PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-smoke.sqlite3 init-db
 PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-smoke.sqlite3 fetch-hko
 PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-smoke.sqlite3 discover-market 2026-05-04
+PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 fetch-orderbooks
+PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 calc-entry '25°C' YES 100
+PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 paper-buy '25°C' YES 100
+PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 check-exit '25°C' YES --take-profit 0.03
+PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 paper-sell '25°C' YES
 ```
 
 Results:
@@ -125,6 +130,11 @@ Results:
 - DB initialization succeeded.
 - HKO live snapshots were fetched and stored.
 - Polymarket May 4 event discovery succeeded and stored 11 outcomes.
+- Orderbooks were fetched for every May 4 YES and NO token.
+- Entry calculation produced visible-depth average fill estimates.
+- Paper buy persisted a token-keyed position.
+- Exit check compared current bid to average entry price.
+- Paper sell walked visible bid depth, closed the position, and persisted realized PnL.
 - Python `urllib` initially received HTTP 403 from Gamma; adding `User-Agent: whenitrains/0.1` fixed the discovery call.
 
 ## Test Coverage
@@ -213,10 +223,13 @@ Tests:
 - `tests/test_paper.py::test_buy_fills_through_ask_depth_and_updates_position`
 - `tests/test_paper.py::test_rejects_order_over_max_size`
 - `tests/test_paper.py::test_drawdown_freezes_new_entries_at_80_percent`
+- `tests/test_paper.py::test_calculate_entry_uses_visible_ask_depth`
+- `tests/test_paper.py::test_paper_buy_and_sell_persist_position_and_pnl`
 
 Implementation:
 
 - `src/whenitrains/paper.py`
+- `src/whenitrains/paper_db.py`
 
 Details:
 
@@ -225,6 +238,34 @@ Details:
 - Updates average entry price and realized PnL.
 - Rejects orders above max order size.
 - Freezes new buys after the paper-mode 80% daily drawdown limit.
+- Persists paper orders and paper positions keyed by CLOB token ID.
+- Calculates entry quote: limit price, average fill, shares, and cost.
+- Calculates exit condition using current executable bid minus average entry price.
+
+## Paper PnL And Market Impact
+
+Paper trading cannot know exact real profit because a real order can change the market.
+
+What the simulator does account for:
+
+- Visible depth at the time of the snapshot.
+- Average fill price through multiple ask or bid levels.
+- Direct slippage from consuming displayed liquidity.
+- Realized PnL from simulated proceeds minus average entry cost.
+
+What it cannot know:
+
+- Queue priority if we post instead of take.
+- Liquidity cancellations between snapshot and order arrival.
+- Other traders reacting after our order appears.
+- Hidden liquidity or maker behavior.
+- Whether a live order would partially fill and then move the market.
+
+Interpretation:
+
+- Small paper trades near top of book are the most reliable.
+- Larger paper trades are useful stress tests but should be treated as rough scenario estimates.
+- Before scaling live size, run small live pilot orders and compare actual fill quality against paper assumptions.
 
 ## Implementation Steps Completed
 

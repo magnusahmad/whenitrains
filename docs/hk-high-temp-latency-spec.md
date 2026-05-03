@@ -550,6 +550,16 @@ Paper order simulation should support:
 - rejected orders when depth is insufficient
 - explicit slippage assumptions
 
+Paper trading realism limits:
+
+- Paper fills use the visible CLOB book at the time of the snapshot.
+- The simulator assumes our order can immediately take displayed liquidity at or within the calculated limit price.
+- Real fills can differ due to queue priority, latency, hidden/changed liquidity, partial fills, and our own order moving the market.
+- For larger paper orders, the simulator already walks visible depth, so it estimates direct market impact from the displayed book.
+- It cannot estimate second-order impact: other traders reacting to our order, makers cancelling after seeing flow, or price movement between snapshot and order arrival.
+- Paper PnL should be treated as an upper-bound or scenario estimate, not audited real PnL.
+- Live readiness should compare paper fills to small live pilot fills before scaling size.
+
 Live execution later should support:
 
 - limit orders only by default

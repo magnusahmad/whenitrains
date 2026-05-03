@@ -94,6 +94,21 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(db.execute("select count(*) from orderbook_snapshots").fetchone()[0], 1)
             self.assertEqual(db.execute("select count(*) from signals").fetchone()[0], 1)
 
+    def test_latest_orderbook_sorts_executable_prices(self):
+        from whenitrains.storage import latest_orderbook
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_orderbook(
+                db,
+                "yes",
+                OrderBook("yes", bids=[(0.20, 5), (0.30, 5)], asks=[(0.50, 5), (0.40, 5)], tick_size=0.01, min_order_size=5),
+            )
+            book = latest_orderbook(db, "yes")
+            self.assertEqual(book.bids[0], (0.30, 5))
+            self.assertEqual(book.asks[0], (0.40, 5))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -278,6 +278,120 @@ def store_orderbook(db: sqlite3.Connection, outcome_id: str, book: OrderBook) ->
     db.commit()
 
 
+def latest_orderbook(db: sqlite3.Connection, token_id: str) -> OrderBook:
+    row = db.execute(
+        """
+        select depth_json from orderbook_snapshots
+        where outcome_id = ?
+        order by fetched_at_utc desc, id desc
+        limit 1
+        """,
+        (token_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"no orderbook snapshot for token {token_id}")
+    depth = json.loads(row["depth_json"])
+    bids = sorted([tuple(item) for item in depth.get("bids", [])], reverse=True)
+    asks = sorted([tuple(item) for item in depth.get("asks", [])])
+    return OrderBook(token_id=token_id, bids=bids, asks=asks, tick_size=0.01, min_order_size=5)
+
+
+def list_outcomes(db: sqlite3.Connection) -> list[sqlite3.Row]:
+    return list(
+        db.execute(
+            """
+            select id, label, predicate_type, predicate_value_c, yes_token_id, no_token_id
+            from outcomes
+            order by predicate_value_c, label
+            """
+        )
+    )
+
+
+def find_outcome_by_label(db: sqlite3.Connection, label: str) -> sqlite3.Row:
+    row = db.execute(
+        """
+        select id, label, predicate_type, predicate_value_c, yes_token_id, no_token_id
+        from outcomes
+        where label = ?
+        order by id desc
+        limit 1
+        """,
+        (label,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"outcome label not found: {label}")
+    return row
+
+
+def store_paper_order_result(
+    db: sqlite3.Connection,
+    token_id: str,
+    side: str,
+    limit_price: float | None,
+    size_usd: float,
+    fill_price: float | None,
+    fill_size_usd: float,
+    status: str,
+    reason: str,
+) -> None:
+    db.execute(
+        """
+        insert into paper_orders
+        (created_at_utc, outcome_id, side, limit_price, size_usd,
+         simulated_fill_price, simulated_fill_size_usd, status, reason)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            datetime.now(timezone.utc).isoformat(),
+            token_id,
+            side,
+            limit_price,
+            size_usd,
+            fill_price,
+            fill_size_usd,
+            status,
+            reason,
+        ),
+    )
+    db.commit()
+
+
+def get_paper_position(db: sqlite3.Connection, token_id: str) -> sqlite3.Row | None:
+    return db.execute(
+        "select * from paper_positions where outcome_id = ?", (token_id,)
+    ).fetchone()
+
+
+def upsert_paper_position(
+    db: sqlite3.Connection,
+    token_id: str,
+    shares: float,
+    avg_price: float,
+    realized_pnl: float,
+) -> None:
+    db.execute(
+        """
+        insert into paper_positions
+        (outcome_id, net_shares, avg_price, realized_pnl, updated_at_utc)
+        values (?, ?, ?, ?, ?)
+        on conflict(outcome_id) do update set
+            net_shares = excluded.net_shares,
+            avg_price = excluded.avg_price,
+            realized_pnl = excluded.realized_pnl,
+            updated_at_utc = excluded.updated_at_utc
+        """,
+        (
+            token_id,
+            shares,
+            avg_price,
+            realized_pnl,
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    db.commit()
+
+
 def store_signal(
     db: sqlite3.Connection,
     market_id: str,
