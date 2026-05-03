@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import time
+from datetime import date, datetime
 from pathlib import Path
 
 from .config import Settings
@@ -12,15 +14,18 @@ from .hko import (
     parse_flw_page,
     parse_flw_page_data_json,
     parse_since_midnight_csv,
+    HKT,
 )
 from .polymarket import event_slug_for_date, fetch_hk_temperature_event, parse_event_markets
 from .polymarket import fetch_orderbook
+from .runner import render_dashboard, run_paper_loop, run_paper_tick
 from .paper_db import calculate_entry, calculate_exit, execute_paper_buy, execute_paper_sell
 from .storage import (
     connect,
     find_outcome_by_label,
     latest_orderbook,
     list_outcomes,
+    list_outcomes_for_date,
     migrate,
     store_hko_forecasts,
     store_hko_observation,
@@ -55,6 +60,13 @@ def main(argv: list[str] | None = None) -> int:
     paper_sell = sub.add_parser("paper-sell")
     paper_sell.add_argument("label")
     paper_sell.add_argument("side", choices=["YES", "NO"])
+    paper_tick = sub.add_parser("paper-tick")
+    paper_tick.add_argument("--no-fetch", action="store_true")
+    paper_loop = sub.add_parser("paper-loop")
+    paper_loop.add_argument("--interval", type=float, default=15.0)
+    paper_loop.add_argument("--ticks", type=int)
+    paper_loop.add_argument("--no-fetch", action="store_true")
+    sub.add_parser("dashboard")
     args = parser.parse_args(argv)
 
     db = connect(Path(args.db))
@@ -64,46 +76,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "fetch-hko":
         migrate(db)
-        csv_text = fetch_text(SINCE_MIDNIGHT_URL)
-        obs_snapshot = store_raw_snapshot(db, "hko", SINCE_MIDNIGHT_URL, csv_text)
-        store_hko_observation(db, obs_snapshot.id, parse_since_midnight_csv(csv_text))
-
-        flw_page = fetch_text(FLW_PAGE_URL)
-        flw_snapshot = store_raw_snapshot(db, "hko", FLW_PAGE_URL, flw_page)
-        flw_forecast = parse_flw_page(flw_page)
-        if flw_forecast.parse_warning:
-            flw_data = fetch_text(FLW_PAGE_DATA_URL)
-            flw_snapshot = store_raw_snapshot(db, "hko", FLW_PAGE_DATA_URL, flw_data)
-            flw_forecast = parse_flw_page_data_json(flw_data)
-        store_hko_forecasts(db, flw_snapshot.id, [flw_forecast])
+        _fetch_hko(db)
         print("stored HKO snapshots")
         return 0
     if args.command == "discover-market":
         migrate(db)
-        from datetime import date
-
         target_date = date.fromisoformat(args.date)
-        event = fetch_hk_temperature_event(event_slug_for_date(target_date))
-        if not event:
+        if not _discover_market(db, target_date):
             print("no market event found")
             return 2
-        markets = parse_event_markets(event)
-        for market in markets:
-            store_polymarket_event(db, market)
-            print(f"stored {market.event_slug} with {len(market.outcomes)} outcomes")
+        print(f"stored {event_slug_for_date(target_date)}")
         return 0
     if args.command == "fetch-orderbooks":
         migrate(db)
-        for outcome in list_outcomes(db):
-            yes_book = fetch_orderbook(outcome["yes_token_id"])
-            no_book = fetch_orderbook(outcome["no_token_id"])
-            store_orderbook(db, outcome["yes_token_id"], yes_book)
-            store_orderbook(db, outcome["no_token_id"], no_book)
-            print(
-                f"{outcome['label']} | "
-                f"YES bid {_fmt(yes_book.best_bid)} ask {_fmt(yes_book.best_ask)} | "
-                f"NO bid {_fmt(no_book.best_bid)} ask {_fmt(no_book.best_ask)}"
-            )
+        _fetch_orderbooks(db)
         return 0
     if args.command == "calc-entry":
         outcome = find_outcome_by_label(db, args.label)
@@ -176,7 +162,89 @@ def main(argv: list[str] | None = None) -> int:
             f"shares={result.shares:.4f} reason={result.reason}"
         )
         return 0 if result.status == "filled" else 2
+    if args.command == "paper-tick":
+        migrate(db)
+        today = datetime.now(HKT).date()
+        if not args.no_fetch:
+            _fetch_hko(db)
+            _discover_market(db, today)
+            _fetch_orderbooks(db, today)
+        result = run_paper_tick(db, today_hkt=today)
+        print(
+            f"paper-tick buys={result.buys_filled}/{result.buys_missed} "
+            f"sells={result.sells_filled}/{result.sells_missed} "
+            f"signals={result.signals} notes={'; '.join(result.notes)}"
+        )
+        return 0
+    if args.command == "paper-loop":
+        migrate(db)
+        today = datetime.now(HKT).date()
+        if args.no_fetch:
+            run_paper_loop(db, tick_seconds=args.interval, max_ticks=args.ticks, today_hkt=today)
+            return 0
+        ticks = 0
+        while args.ticks is None or ticks < args.ticks:
+            _fetch_hko(db)
+            _discover_market(db, today)
+            _fetch_orderbooks(db, today)
+            result = run_paper_tick(db, today_hkt=today)
+            print(
+                f"paper-tick buys={result.buys_filled}/{result.buys_missed} "
+                f"sells={result.sells_filled}/{result.sells_missed} "
+                f"signals={result.signals} notes={'; '.join(result.notes)}"
+            )
+            ticks += 1
+            if args.ticks is None or ticks < args.ticks:
+                time.sleep(args.interval)
+        return 0
+    if args.command == "dashboard":
+        migrate(db)
+        print(render_dashboard(db))
+        return 0
     return 1
+
+
+def _fetch_hko(db) -> None:
+    csv_text = fetch_text(SINCE_MIDNIGHT_URL)
+    obs_snapshot = store_raw_snapshot(db, "hko", SINCE_MIDNIGHT_URL, csv_text)
+    store_hko_observation(db, obs_snapshot.id, parse_since_midnight_csv(csv_text))
+
+    flw_page = fetch_text(FLW_PAGE_URL)
+    flw_snapshot = store_raw_snapshot(db, "hko", FLW_PAGE_URL, flw_page)
+    flw_forecast = parse_flw_page(flw_page)
+    if flw_forecast.parse_warning:
+        flw_data = fetch_text(FLW_PAGE_DATA_URL)
+        flw_snapshot = store_raw_snapshot(db, "hko", FLW_PAGE_DATA_URL, flw_data)
+        flw_forecast = parse_flw_page_data_json(flw_data)
+    store_hko_forecasts(db, flw_snapshot.id, [flw_forecast])
+
+
+def _discover_market(db, target_date) -> bool:
+    event = fetch_hk_temperature_event(event_slug_for_date(target_date))
+    if not event:
+        return False
+    markets = parse_event_markets(event)
+    for market in markets:
+        store_polymarket_event(db, market)
+    return True
+
+
+def _fetch_orderbooks(db, target_date=None) -> None:
+    outcomes = (
+        list_outcomes_for_date(db, target_date.isoformat())
+        if target_date is not None
+        else list_outcomes(db)
+    )
+    for outcome in outcomes:
+        yes_book = fetch_orderbook(outcome["yes_token_id"])
+        no_book = fetch_orderbook(outcome["no_token_id"])
+        store_orderbook(db, outcome["yes_token_id"], yes_book)
+        store_orderbook(db, outcome["no_token_id"], no_book)
+        print(
+            f"{outcome['label']} | "
+            f"YES bid {_fmt(yes_book.best_bid)} ask {_fmt(yes_book.best_ask)} | "
+            f"NO bid {_fmt(no_book.best_bid)} ask {_fmt(no_book.best_ask)}"
+        )
 
 
 def _fmt(value: float | None) -> str:

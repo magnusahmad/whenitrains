@@ -111,10 +111,10 @@ Ran 18 tests in 0.015s
 OK
 ```
 
-Current green run after replacing API forecast ingestion with the bulletin webpage scraper:
+Current green run after adding the paper runner, dashboard, missed-decision logging, and actual-cross entry handling:
 
 ```text
-Ran 23 tests in 0.030s
+Ran 28 tests in 0.148s
 OK
 ```
 
@@ -129,6 +129,8 @@ PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-sm
 PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 paper-buy '25°C' YES 100
 PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 check-exit '25°C' YES --take-profit 0.03
 PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 paper-sell '25°C' YES
+PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-live-paper-smoke.sqlite3 paper-loop --ticks 1 --interval 1
+PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-live-paper-smoke.sqlite3 dashboard
 ```
 
 Results:
@@ -141,6 +143,8 @@ Results:
 - Paper buy persisted a token-keyed position.
 - Exit check compared current bid to average entry price.
 - Paper sell walked visible bid depth, closed the position, and persisted realized PnL.
+- Full paper-loop smoke fetched HKO, discovered the current-day market, fetched 22 token orderbooks, and ran the decision pass.
+- Dashboard smoke reported latest forecast high, latest since-midnight max, market/outcome counts, orderbook snapshots, buy/sell counters, realized PnL, executable unrealized PnL, total profit estimate, and worst-case open loss.
 - Python `urllib` initially received HTTP 403 from Gamma; adding `User-Agent: whenitrains/0.1` fixed the discovery call.
 
 ## Test Coverage
@@ -236,11 +240,17 @@ Tests:
 - `tests/test_paper.py::test_calculate_entry_uses_visible_ask_depth`
 - `tests/test_paper.py::test_paper_buy_and_sell_persist_position_and_pnl`
 - `tests/test_paper.py::test_calculate_exit_sells_after_max_hold_time`
+- `tests/test_runner.py::test_forecast_change_buys_stale_affected_outcome`
+- `tests/test_runner.py::test_actual_cross_buys_stale_gte_outcome`
+- `tests/test_runner.py::test_exit_loop_sells_on_timeout`
+- `tests/test_runner.py::test_tick_exits_invalidated_exact_position`
+- `tests/test_runner.py::test_dashboard_reports_key_stats`
 
 Implementation:
 
 - `src/whenitrains/paper.py`
 - `src/whenitrains/paper_db.py`
+- `src/whenitrains/runner.py`
 
 Details:
 
@@ -253,6 +263,9 @@ Details:
 - Calculates entry quote: limit price, average fill, shares, and cost.
 - Calculates exit condition using current executable bid minus average entry price.
 - Exits after 10 minutes if the price has not moved favorably enough to hit take-profit.
+- Runs a local autonomous paper tick/loop that fetches HKO, discovers the current-day market, refreshes current-day orderbooks, detects HKO events, writes paper decisions, places paper buys, and exits open positions.
+- Logs missed buy/sell decisions to `paper_decisions`.
+- Dashboard reports realized PnL, executable unrealized PnL, total profit estimate, worst-case open loss, and decision counters.
 
 ## Paper PnL And Market Impact
 
@@ -296,15 +309,14 @@ Interpretation:
 
 ## Remaining Work
 
-Paper-mode milestones 1-5 are complete as local building blocks and one-shot CLI commands. The remaining work is the next layer of productionization:
+Paper-mode milestones 1-5 are complete as local building blocks, one-shot CLI commands, and an autonomous local paper loop. Remaining work is now the live-trading review layer and richer operations:
 
-- Build the long-running scheduler around the implemented one-shot commands.
-- Add persisted paper-order write paths from the live strategy loop, not just the `PaperTrader` domain object.
-- Add alerting.
+- Add external alerting beyond the current terminal output.
 - Add live CLOB credential setup.
 - Add kill switch behavior that cancels live orders.
 - Reduce live drawdown from the paper-mode 80% stress-test setting.
 - Add integration tests using recorded HKO/Gamma/CLOB fixtures.
+- Implement exact polling-window scheduler cadence instead of the current configurable interval loop.
 
 ## Scheduler/Alert/Dashboard Decisions
 

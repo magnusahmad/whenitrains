@@ -37,3 +37,15 @@ PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 paper-bu
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 check-exit '25°C' YES --take-profit 0.03
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 paper-sell '25°C' YES
 ```
+
+Run the autonomous local paper loop once:
+
+```bash
+PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 paper-loop --ticks 1
+```
+
+Inspect the paper dashboard:
+
+```bash
+PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 dashboard
+```

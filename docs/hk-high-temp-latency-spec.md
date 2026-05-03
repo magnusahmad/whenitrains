@@ -748,6 +748,10 @@ Minimal dashboard:
 - Entry/exit trigger generation.
 - Scenario-specific signal labels.
 - Full audit trail.
+- Current-day-only paper runner.
+- Forecast-change paper entries.
+- Market-settling actual-cross entries for `or higher` outcomes.
+- Invalidation, take-profit, and 10-minute timeout exits.
 
 ### Milestone 5: Paper Trader
 
@@ -755,7 +759,7 @@ Minimal dashboard:
 - Position accounting.
 - Mark-to-market PnL.
 - Risk caps.
-- Kill switch.
+- Terminal dashboard with realized PnL, executable unrealized PnL, total profit estimate, worst-case open loss, and missed-trade counters.
 
 ### Milestone 6: Review Gate For Live Trading
 

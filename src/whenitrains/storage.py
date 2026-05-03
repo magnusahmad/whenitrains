@@ -142,6 +142,19 @@ def migrate(db: sqlite3.Connection) -> None:
             severity text,
             details_json text
         );
+
+        create table if not exists paper_decisions (
+            id integer primary key autoincrement,
+            created_at_utc text,
+            event_type text,
+            outcome_id text,
+            label text,
+            side text,
+            action text,
+            status text,
+            reason text,
+            details_json text
+        );
         """
     )
     _add_column_if_missing(db, "hko_forecasts", "update_time", "text")
@@ -235,6 +248,12 @@ def store_hko_forecasts(
 
 
 def store_polymarket_event(db: sqlite3.Connection, market: TemperatureMarket) -> None:
+    existing = db.execute(
+        "select id from markets where slug = ? order by id desc limit 1",
+        (market.event_slug,),
+    ).fetchone()
+    if existing is not None:
+        return
     market_row = db.execute(
         """
         insert into markets
@@ -325,6 +344,23 @@ def list_outcomes(db: sqlite3.Connection) -> list[sqlite3.Row]:
     )
 
 
+def list_outcomes_for_date(db: sqlite3.Connection, target_date_hkt: str) -> list[sqlite3.Row]:
+    return list(
+        db.execute(
+            """
+            select o.id, o.market_id, o.polymarket_market_id, o.label,
+                   o.predicate_type, o.predicate_value_c, o.yes_token_id, o.no_token_id,
+                   m.target_date_hkt, m.slug
+            from outcomes o
+            join markets m on m.id = o.market_id
+            where m.target_date_hkt = ?
+            order by o.predicate_value_c, o.label
+            """,
+            (target_date_hkt,),
+        )
+    )
+
+
 def find_outcome_by_label(db: sqlite3.Connection, label: str) -> sqlite3.Row:
     row = db.execute(
         """
@@ -339,6 +375,22 @@ def find_outcome_by_label(db: sqlite3.Connection, label: str) -> sqlite3.Row:
     if row is None:
         raise ValueError(f"outcome label not found: {label}")
     return row
+
+
+def find_outcome_by_token(db: sqlite3.Connection, token_id: str) -> sqlite3.Row | None:
+    return db.execute(
+        """
+        select o.id, o.market_id, o.polymarket_market_id, o.label,
+               o.predicate_type, o.predicate_value_c, o.yes_token_id, o.no_token_id,
+               m.target_date_hkt, m.slug
+        from outcomes o
+        join markets m on m.id = o.market_id
+        where o.yes_token_id = ? or o.no_token_id = ?
+        order by o.id desc
+        limit 1
+        """,
+        (token_id, token_id),
+    ).fetchone()
 
 
 def store_paper_order_result(
@@ -378,6 +430,18 @@ def get_paper_position(db: sqlite3.Connection, token_id: str) -> sqlite3.Row | N
     return db.execute(
         "select * from paper_positions where outcome_id = ?", (token_id,)
     ).fetchone()
+
+
+def list_open_paper_positions(db: sqlite3.Connection) -> list[sqlite3.Row]:
+    return list(
+        db.execute(
+            """
+            select * from paper_positions
+            where net_shares > 0
+            order by updated_at_utc
+            """
+        )
+    )
 
 
 def upsert_paper_position(
@@ -439,3 +503,165 @@ def store_signal(
         ),
     )
     db.commit()
+
+
+def store_paper_decision(
+    db: sqlite3.Connection,
+    event_type: str,
+    outcome_id: str | None,
+    label: str | None,
+    side: str | None,
+    action: str,
+    status: str,
+    reason: str,
+    details: dict | None = None,
+) -> None:
+    db.execute(
+        """
+        insert into paper_decisions
+        (created_at_utc, event_type, outcome_id, label, side, action, status, reason, details_json)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            datetime.now(timezone.utc).isoformat(),
+            event_type,
+            outcome_id,
+            label,
+            side,
+            action,
+            status,
+            reason,
+            json.dumps(details or {}),
+        ),
+    )
+    db.commit()
+
+
+def latest_two_forecast_highs(db: sqlite3.Connection) -> list[sqlite3.Row]:
+    return list(
+        db.execute(
+            """
+            select forecast_date_hkt, forecast_max_c, update_time, parse_warning, max(id) as id
+            from hko_forecasts
+            where source_type = 'flw_page'
+              and forecast_max_c is not null
+              and coalesce(parse_warning, 0) = 0
+            group by forecast_date_hkt, forecast_max_c, update_time
+            order by id desc
+            limit 2
+            """
+        )
+    )
+
+
+def latest_two_observed_maxes(db: sqlite3.Connection) -> list[sqlite3.Row]:
+    return list(
+        db.execute(
+            """
+            select observed_at_hkt, since_midnight_max_c, max(id) as id
+            from hko_current_observations
+            where since_midnight_max_c is not null
+            group by observed_at_hkt, since_midnight_max_c
+            order by id desc
+            limit 2
+            """
+        )
+    )
+
+
+def latest_two_orderbook_prices(
+    db: sqlite3.Connection, token_id: str
+) -> list[sqlite3.Row]:
+    return list(
+        db.execute(
+            """
+            select id, fetched_at_utc, best_bid, best_ask, depth_json
+            from orderbook_snapshots
+            where outcome_id = ?
+            order by fetched_at_utc desc, id desc
+            limit 2
+            """,
+            (token_id,),
+        )
+    )
+
+
+def dashboard_stats(db: sqlite3.Connection) -> dict:
+    row = db.execute(
+        """
+        select forecast_date_hkt, forecast_max_c, update_time, parse_warning
+        from hko_forecasts
+        where source_type = 'flw_page'
+        order by id desc
+        limit 1
+        """
+    ).fetchone()
+    obs = db.execute(
+        """
+        select observed_at_hkt, since_midnight_max_c
+        from hko_current_observations
+        order by id desc
+        limit 1
+        """
+    ).fetchone()
+    counts = {
+        "hko_forecasts": db.execute(
+            """
+            select count(*) from (
+                select distinct forecast_date_hkt, forecast_max_c, update_time
+                from hko_forecasts
+                where source_type = 'flw_page'
+            )
+            """
+        ).fetchone()[0],
+        "markets": db.execute("select count(*) from markets").fetchone()[0],
+        "outcomes": db.execute("select count(*) from outcomes").fetchone()[0],
+        "orderbooks": db.execute("select count(*) from orderbook_snapshots").fetchone()[0],
+        "buy_filled": db.execute(
+            "select count(*) from paper_orders where side like 'BUY_%' and status = 'filled'"
+        ).fetchone()[0],
+        "buy_missed": db.execute(
+            "select count(*) from paper_decisions where action = 'BUY' and status = 'missed'"
+        ).fetchone()[0],
+        "sell_filled": db.execute(
+            "select count(*) from paper_orders where side = 'SELL' and status = 'filled'"
+        ).fetchone()[0],
+        "sell_missed": db.execute(
+            "select count(*) from paper_decisions where action = 'SELL' and status = 'missed'"
+        ).fetchone()[0],
+    }
+    realized_pnl = db.execute(
+        "select coalesce(sum(realized_pnl), 0) from paper_positions"
+    ).fetchone()[0]
+    executable_unrealized = 0.0
+    worst_case_open_loss = 0.0
+    for pos in list_open_paper_positions(db):
+        shares = float(pos["net_shares"])
+        avg_price = float(pos["avg_price"])
+        worst_case_open_loss += shares * avg_price
+        bid_row = db.execute(
+            """
+            select best_bid
+            from orderbook_snapshots
+            where outcome_id = ? and best_bid is not null
+            order by fetched_at_utc desc, id desc
+            limit 1
+            """,
+            (pos["outcome_id"],),
+        ).fetchone()
+        bid = float(bid_row["best_bid"]) if bid_row else 0.0
+        executable_unrealized += shares * (bid - avg_price)
+    open_positions = db.execute(
+        "select count(*) from paper_positions where net_shares > 0"
+    ).fetchone()[0]
+    realized = float(realized_pnl or 0)
+    return {
+        "latest_forecast": dict(row) if row else None,
+        "latest_observation": dict(obs) if obs else None,
+        "counts": counts,
+        "open_positions": open_positions,
+        "realized_pnl": realized,
+        "executable_unrealized_pnl": executable_unrealized,
+        "total_profit": realized + executable_unrealized,
+        "worst_case_open_loss": worst_case_open_loss,
+    }
