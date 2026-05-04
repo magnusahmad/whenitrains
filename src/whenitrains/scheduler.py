@@ -11,11 +11,7 @@ from .runner import run_paper_tick
 
 
 SINCE_MIDNIGHT_MINUTES = (0, 9, 19, 29, 38, 48, 58)
-BULLETIN_TIMES = (
-    day_time(0, 0),
-    day_time(16, 15),
-    day_time(23, 15),
-)
+FORECAST_POLL_MINUTES = tuple(range(0, 60, 10))
 
 
 @dataclass(frozen=True)
@@ -45,12 +41,16 @@ class SchedulerActions:
     run_decisions: bool = True
 
 
-def due_hko_sources(now_hkt: datetime, state: SchedulerState) -> list[SourcePollPlan]:
+def due_hko_sources(
+    now_hkt: datetime,
+    state: SchedulerState,
+    learned_forecast_times: list[day_time] | tuple[day_time, ...] = (),
+) -> list[SourcePollPlan]:
     due: list[SourcePollPlan] = []
     for plan in _since_midnight_plans(now_hkt.date()):
         if _is_due(plan, now_hkt, state):
             due.append(plan)
-    for plan in _bulletin_plans(now_hkt.date()):
+    for plan in _bulletin_plans(now_hkt.date(), learned_forecast_times):
         if _is_due(plan, now_hkt, state):
             due.append(plan)
     return due
@@ -59,10 +59,13 @@ def due_hko_sources(now_hkt: datetime, state: SchedulerState) -> list[SourcePoll
 def scheduler_actions(
     now_hkt: datetime,
     state: SchedulerState,
+    learned_forecast_times: list[day_time] | tuple[day_time, ...] = (),
     orderbook_interval_seconds: int = 15,
     market_discovery_interval_seconds: int = 300,
 ) -> SchedulerActions:
-    sources = {plan.source for plan in due_hko_sources(now_hkt, state)}
+    sources = {
+        plan.source for plan in due_hko_sources(now_hkt, state, learned_forecast_times)
+    }
     market_due = (
         state.last_market_discovery_at is None
         or now_hkt - state.last_market_discovery_at
@@ -121,6 +124,7 @@ def run_scheduled_paper_loop(
     fetch_bulletin,
     discover_market,
     fetch_orderbooks,
+    learned_forecast_times=None,
     base_sleep_seconds: float = 1.0,
     max_ticks: int | None = None,
     now_fn=None,
@@ -132,8 +136,11 @@ def run_scheduled_paper_loop(
     print("paper-scheduler started")
     while max_ticks is None or tick < max_ticks:
         now = clock()
-        actions = scheduler_actions(now, state)
-        plans = {plan.source: plan for plan in due_hko_sources(now, state)}
+        learned_times = learned_forecast_times() if learned_forecast_times else []
+        actions = scheduler_actions(now, state, learned_times)
+        plans = {
+            plan.source: plan for plan in due_hko_sources(now, state, learned_times)
+        }
         notes: list[str] = []
         if actions.fetch_since_midnight:
             payload = fetch_since_midnight()
@@ -142,7 +149,7 @@ def run_scheduled_paper_loop(
         if actions.fetch_bulletin:
             payload = fetch_bulletin()
             if mark_source_fetch(state, plans["bulletin"], payload, now):
-                notes.append("bulletin changed")
+                notes.append("forecast changed")
         if actions.discover_market:
             discover_market(now.date())
             mark_market_discovered(state, now)
@@ -188,18 +195,30 @@ def _since_midnight_plans(target: date) -> list[SourcePollPlan]:
     return plans
 
 
-def _bulletin_plans(target: date) -> list[SourcePollPlan]:
-    times = [day_time(hour, 45) for hour in range(24)]
-    times.extend(BULLETIN_TIMES)
+def _bulletin_plans(
+    target: date, learned_forecast_times: list[day_time] | tuple[day_time, ...] = ()
+) -> list[SourcePollPlan]:
     plans = []
-    for scheduled_time in sorted(set(times)):
-        scheduled = datetime.combine(target, scheduled_time, tzinfo=HKT)
+    for hour in range(24):
+        for minute in FORECAST_POLL_MINUTES:
+            scheduled = datetime.combine(target, day_time(hour, minute), tzinfo=HKT)
+            plans.append(
+                SourcePollPlan(
+                    source="bulletin",
+                    scheduled_at=scheduled,
+                    window_start=scheduled,
+                    window_end=scheduled + timedelta(seconds=10),
+                    cadence_seconds=10,
+                )
+            )
+    for learned_time in sorted(set(learned_forecast_times)):
+        scheduled = datetime.combine(target, learned_time, tzinfo=HKT)
         plans.append(
             SourcePollPlan(
                 source="bulletin",
                 scheduled_at=scheduled,
-                window_start=scheduled - timedelta(seconds=30),
-                window_end=scheduled + timedelta(minutes=2),
+                window_start=scheduled,
+                window_end=scheduled + timedelta(seconds=59),
                 cadence_seconds=10,
             )
         )
@@ -233,5 +252,5 @@ def should_print_scheduled_tick(notes: list[str], result, quiet: bool) -> bool:
         return True
     if result.signals:
         return True
-    interesting_actions = {"since_midnight changed", "bulletin changed"}
+    interesting_actions = {"since_midnight changed", "forecast changed"}
     return any(note in interesting_actions for note in notes)

@@ -9,14 +9,22 @@ from .config import Settings
 from .hko import (
     FLW_PAGE_DATA_URL,
     FLW_PAGE_URL,
+    OCF_STATION_URL,
     SINCE_MIDNIGHT_URL,
-    fetch_text,
+    fetch_response,
     parse_flw_page,
     parse_flw_page_data_json,
+    parse_http_datetime_hkt,
+    parse_ocf_station_json,
     parse_since_midnight_csv,
     HKT,
 )
-from .polymarket import event_slug_for_date, fetch_hk_temperature_event, parse_event_markets
+from .polymarket import (
+    event_slug_for_date,
+    fetch_hk_temperature_event,
+    parse_event_markets,
+    resolution_rules_warning,
+)
 from .polymarket import fetch_orderbook
 from .runner import render_dashboard, run_paper_loop, run_paper_tick
 from .scheduler import run_scheduled_paper_loop
@@ -25,15 +33,19 @@ from .storage import (
     connect,
     find_outcome_by_label,
     latest_orderbook,
+    list_hko_update_times,
     list_outcomes,
     list_outcomes_for_date,
     migrate,
     reset_paper_state,
+    record_hko_update_minute,
     store_hko_forecasts,
     store_hko_observation,
     store_orderbook,
+    store_ocf_forecast_samples,
     store_polymarket_event,
     store_raw_snapshot,
+    store_risk_event,
 )
 
 
@@ -72,6 +84,10 @@ def main(argv: list[str] | None = None) -> int:
     scheduled_loop.add_argument("--sleep", type=float, default=1.0)
     scheduled_loop.add_argument("--ticks", type=int)
     scheduled_loop.add_argument("--verbose", action="store_true")
+    ocf_sample = sub.add_parser("sample-ocf")
+    ocf_sample.add_argument("--interval-minutes", type=float, default=10.0)
+    ocf_sample.add_argument("--hours", type=float, default=24.0)
+    ocf_sample.add_argument("--ticks", type=int)
     reset_paper = sub.add_parser("reset-paper")
     reset_paper.add_argument("--yes", action="store_true")
     sub.add_parser("dashboard")
@@ -215,12 +231,41 @@ def main(argv: list[str] | None = None) -> int:
             db,
             fetch_since_midnight=lambda: _fetch_since_midnight(db),
             fetch_bulletin=lambda: _fetch_bulletin(db),
+            learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
             discover_market=lambda target: _discover_market(db, target),
             fetch_orderbooks=lambda target: _fetch_orderbooks(db, target, quiet=not args.verbose),
             base_sleep_seconds=args.sleep,
             max_ticks=args.ticks,
             quiet=not args.verbose,
         )
+        return 0
+    if args.command == "sample-ocf":
+        migrate(db)
+        interval_seconds = max(args.interval_minutes * 60.0, 0.0)
+        ticks = args.ticks
+        if ticks is None:
+            if args.interval_minutes <= 0:
+                print("sample-ocf requires --ticks when --interval-minutes is 0")
+                return 2
+            ticks = int((args.hours * 60.0) / args.interval_minutes)
+        print(
+            "ocf-sampler started "
+            f"interval={args.interval_minutes:g}m ticks={ticks}"
+        )
+        previous_hash = None
+        for tick in range(ticks):
+            snapshot_hash, forecasts = _fetch_ocf_forecast(db)
+            changed = previous_hash is None or previous_hash != snapshot_hash
+            previous_hash = snapshot_hash
+            current = forecasts[0] if forecasts else None
+            print(
+                f"ocf-sample tick={tick + 1}/{ticks} changed={changed} "
+                f"rows={len(forecasts)} "
+                f"first={current.forecast_date_hkt.isoformat() if current and current.forecast_date_hkt else 'n/a'} "
+                f"high={current.forecast_max_c if current else 'n/a'}"
+            )
+            if tick + 1 < ticks and interval_seconds:
+                time.sleep(interval_seconds)
         return 0
     if args.command == "reset-paper":
         migrate(db)
@@ -239,22 +284,74 @@ def _fetch_hko(db) -> None:
 
 
 def _fetch_since_midnight(db) -> str:
-    csv_text = fetch_text(SINCE_MIDNIGHT_URL)
-    obs_snapshot = store_raw_snapshot(db, "hko", SINCE_MIDNIGHT_URL, csv_text)
-    store_hko_observation(db, obs_snapshot.id, parse_since_midnight_csv(csv_text))
-    return csv_text
+    response = fetch_response(SINCE_MIDNIGHT_URL)
+    obs_snapshot = store_raw_snapshot(
+        db, "hko", SINCE_MIDNIGHT_URL, response.text, response.headers
+    )
+    store_hko_observation(db, obs_snapshot.id, parse_since_midnight_csv(response.text))
+    return response.text
 
 
 def _fetch_bulletin(db) -> str:
-    flw_page = fetch_text(FLW_PAGE_URL)
-    flw_snapshot = store_raw_snapshot(db, "hko", FLW_PAGE_URL, flw_page)
-    flw_forecast = parse_flw_page(flw_page)
-    payload = flw_page
+    snapshot_hash, _forecasts = _fetch_ocf_forecast(db)
+    return snapshot_hash
+
+
+def _fetch_ocf_forecast(db) -> tuple[str, list]:
+    response = fetch_response(OCF_STATION_URL)
+    ocf_snapshot = store_raw_snapshot(
+        db, "hko", OCF_STATION_URL, response.text, response.headers
+    )
+    forecasts, samples = parse_ocf_station_json(response.text)
+    store_hko_forecasts(db, ocf_snapshot.id, forecasts)
+    store_ocf_forecast_samples(db, ocf_snapshot.id, samples)
+    _record_ocf_update_minutes(db, response.headers, forecasts)
+    return ocf_snapshot.content_hash, forecasts
+
+
+def _record_ocf_update_minutes(db, headers: dict[str, str], forecasts: list) -> None:
+    seen: set[str] = set()
+    for forecast in forecasts[:1]:
+        if forecast.update_time and forecast.update_time not in seen:
+            seen.add(forecast.update_time)
+            record_hko_update_minute(
+                db,
+                "ocf_station",
+                datetime.fromisoformat(forecast.update_time),
+                {"kind": "payload_LastModified", "value": forecast.update_time},
+            )
+    header_last_modified = parse_http_datetime_hkt(headers.get("Last-Modified"))
+    if header_last_modified is not None:
+        record_hko_update_minute(
+            db,
+            "ocf_station",
+            header_last_modified,
+            {
+                "kind": "http_Last-Modified",
+                "value": headers.get("Last-Modified"),
+                "etag": headers.get("Etag") or headers.get("ETag"),
+            },
+        )
+
+
+def _fetch_flw_bulletin(db) -> str:
+    flw_response = fetch_response(FLW_PAGE_URL)
+    flw_snapshot = store_raw_snapshot(
+        db, "hko", FLW_PAGE_URL, flw_response.text, flw_response.headers
+    )
+    flw_forecast = parse_flw_page(flw_response.text)
+    payload = flw_response.text
     if flw_forecast.parse_warning:
-        flw_data = fetch_text(FLW_PAGE_DATA_URL)
-        flw_snapshot = store_raw_snapshot(db, "hko", FLW_PAGE_DATA_URL, flw_data)
-        flw_forecast = parse_flw_page_data_json(flw_data)
-        payload = flw_data
+        flw_data_response = fetch_response(FLW_PAGE_DATA_URL)
+        flw_snapshot = store_raw_snapshot(
+            db,
+            "hko",
+            FLW_PAGE_DATA_URL,
+            flw_data_response.text,
+            flw_data_response.headers,
+        )
+        flw_forecast = parse_flw_page_data_json(flw_data_response.text)
+        payload = flw_data_response.text
     store_hko_forecasts(db, flw_snapshot.id, [flw_forecast])
     return payload
 
@@ -266,6 +363,19 @@ def _discover_market(db, target_date) -> bool:
     markets = parse_event_markets(event)
     for market in markets:
         store_polymarket_event(db, market)
+        warning = resolution_rules_warning(market)
+        if warning is not None:
+            print(f"🚨🚨🚨 RESOLUTION RULES WARNING: {warning} 🚨🚨🚨")
+            store_risk_event(
+                db,
+                "resolution_rules_mismatch",
+                "critical",
+                {
+                    "slug": market.event_slug,
+                    "warning": warning,
+                    "resolution_rules_text": market.resolution_rules_text,
+                },
+            )
     return True
 
 

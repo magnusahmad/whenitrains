@@ -54,7 +54,9 @@ Parser examples:
 Use direct HKO sources that publish quickly enough for latency trading.
 
 - Since-midnight max/min actuals for the Hong Kong Observatory automatic weather station, updated every 10 minutes: `https://data.weather.gov.hk/weatherAPI/hko_data/csdi/dataset/latest_since_midnight_maxmin_csdi_4.csv`
-- Local weather forecast bulletin webpage: `https://www.weather.gov.hk/en/wxinfo/currwx/flw.htm`
+- OCF HKO station forecast page: `https://maps.weather.gov.hk/ocf/text_e.html?mode=0&station=HKO`
+- OCF HKO station forecast data feed discovered behind that page: `https://maps.weather.gov.hk/ocf/dat/HKO.xml`
+- Local weather forecast bulletin webpage, retained as an old fallback/parser fixture only: `https://www.weather.gov.hk/en/wxinfo/currwx/flw.htm`
 - Current weather report: `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=en`
 - Warning summary: `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=warnsum&lang=en`
 - Warning details: `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=warningInfo&lang=en`
@@ -64,12 +66,13 @@ Use direct HKO sources that publish quickly enough for latency trading.
 Parsing rules:
 
 - Since-midnight actuals: use the Hong Kong Observatory automatic weather station row. This is the station that resolves the target markets.
-- Local weather forecast bulletin webpage: run a headless/no-GUI scraper against the page, extract `Bulletin updated at HH:MM HKT DD/Mon/YYYY`, and parse the text pattern `between {min} and {max} degrees` or `ranging between {min} and {max} degrees`. The trading signal only stores/uses the higher number. The public page is Vue-rendered and loads `https://www.weather.gov.hk/json/DYN_DAT_MINDS_FLW.json`; when the static HTML shell does not contain the rendered bulletin text, fetch that page data payload, reconstruct the rendered bulletin text, and apply the same patterns. Emit a warning log if either pattern is not found.
+- OCF station forecast: fetch the HKO station feed and parse `DailyForecast[].ForecastDate`, `ForecastMaximumTemperature`, `ForecastMinimumTemperature`, and `HourlyWeatherForecast[]`. The visual page labels this as `Max & Min Temperature Forecast (°C)` and `Temperature Forecast (°C)`. For trading signals, use the displayed integer max from the max/min table, reproduced from `ForecastMaximumTemperature` using nearest-integer display rounding; keep the raw decimal in sampler/audit storage.
 - The Open Data API `flw` and `fnd` feeds are removed as trading inputs for this POC because historical evidence shows they can lag the actual bulletin/webpage update or have unclear update timing.
-- The 9-day forecast is removed for this POC until a reliable low-latency signal pattern is established.
-- Because the bulletin only gives the current-day forecast high, betting is limited to the current-day market from midnight HKT onward.
+- The old local weather forecast bulletin and 9-day forecast are removed from the trading signal path for this POC.
+- The OCF station feed provides multiple days, but the current paper latency strategy still focuses on the current-day HK highest-temperature market first.
 
 Store every fetched HKO response as raw HTML/JSON/CSV plus normalized rows. The raw snapshot is part of the audit trail.
+Raw snapshots are not deduplicated by content hash: unchanged payloads can still carry new HTTP response metadata. Persist response headers, HTTP `Date`, HTTP `Last-Modified`, and `ETag` with every fetch.
 
 ### Polymarket Sources
 
@@ -135,17 +138,18 @@ Polling strategy:
   - if content hash changes, perform one confirmation fetch, then stop polling that window
   - if no change by the end of the window, log a warning and wait for the next expected publication time
   - outside 10:00-20:00 HKT: do not poll
-- HKO local weather forecast bulletin webpage:
-  - expected updates are 00:00 HKT, 45 minutes past each hour, 16:15 HKT, and 23:15 HKT
-  - polling window: from 30 seconds before each expected publication time through 2 minutes after it
-  - cadence inside the window: every 10 seconds
-  - if content hash changes, perform one confirmation fetch, then stop polling that window
-  - if no change by the end of the window, log a warning and wait for the next expected publication time
+- HKO OCF station forecast feed:
+  - update cadence is not yet confirmed
+  - interim trading scheduler cadence: poll every 10 minutes with a narrow 10-second window
+  - separate discovery sampler: run `sample-ocf --interval-minutes 10 --hours 24` to persist raw snapshots, normalized max/min forecast rows, and hourly temperature forecast rows for cadence analysis
+  - automatic cadence discovery: when payload `LastModified` or HTTP `Last-Modified` reveals a new HKT minute-of-day, store that minute in `hko_source_update_minutes`; the scheduler adds those learned minutes as daily forecast polling windows
+  - once the cadence is established, replace the interim 10-minute polling with precise update windows
 - Polymarket markets/orderbooks: monitor active target-day markets until the Hong Kong day ends.
 - Resolution watcher: after the target day ends, check Polymarket once per day for final resolution.
 - Final Daily Extract: since resolution uses finalized data only, final settlement audit is separate from since-midnight trading signals.
+- Resolution-rule guard: every discovered HK highest-temperature event must include the expected HKO Daily Extract resolution wording. The first sentence date may vary, but the remainder must match the expected `Absolute Daily Max (deg. C)`, finalized Daily Extract, one-decimal precision, and no-post-finalization-revisions language. If the normalized text is missing or changed, print a critical terminal warning and persist a `risk_events` row before any trading decisions rely on that market.
 
-Every HKO snapshot should produce a content hash. If the hash changes, the event bus emits `HKO_UPDATE_DETECTED`.
+Every HKO snapshot should produce a content hash. If the hash changes, the event bus emits `HKO_UPDATE_DETECTED`. OCF forecast event-time precedence is payload `LastModified`, then HTTP `Last-Modified`, then local fetch time.
 
 Rate-limit and failure backoff:
 
@@ -301,7 +305,7 @@ The core thesis is:
 
 Inputs:
 
-- Latest current-day HKO forecast max scraped from the local weather forecast bulletin webpage.
+- Latest current-day HKO forecast max from the OCF HKO station forecast feed.
 - Latest current temperature observations.
 - Current observed max since midnight if available from HKO/API page.
 - Time of day in HKT.
@@ -697,8 +701,8 @@ Minimal dashboard:
 - local terminal summary first, optionally generated static HTML later
 - unique HKO forecast snapshots ingested
 - latest HKO since-midnight max
-- current-day scraped bulletin forecast max
-- latest scraped bulletin forecast high and bulletin update time
+- current-day OCF station forecast max
+- latest OCF station forecast high and feed update time
 - discovered markets/outcomes
 - latest YES/NO bid/ask per outcome
 - buy orders placed
@@ -711,7 +715,7 @@ Minimal dashboard:
 - theoretical midpoint mark for reference only
 - total profit = realized PnL + executable unrealized PnL estimate
 - worst-case open loss if all open tokens go to zero
-- last successful poll per source: HKO CSV, HKO bulletin webpage, Gamma, CLOB
+- last successful poll per source: HKO CSV, HKO OCF station feed, Gamma, CLOB
 - decision counters: signals generated, ignored, risk-blocked, stale-price-blocked, liquidity-blocked
 - last scheduler run time and recent errors
 
@@ -728,7 +732,7 @@ Minimal dashboard:
 ### Milestone 2: HKO Ingestion
 
 - Fetch and store raw HKO forecast/current/warning snapshots.
-- Normalize scraped current-day bulletin forecast rows.
+- Normalize OCF station forecast rows.
 - Normalize current observations.
 - Load daily max actuals for the HKO station.
 - Detect HKO update changes by content hash.
@@ -749,7 +753,7 @@ Minimal dashboard:
 - Scenario-specific signal labels.
 - Full audit trail.
 - Current-day-only paper runner.
-- Polling-window scheduler for HKO actuals and bulletin updates.
+- Polling-window scheduler for HKO actuals and OCF forecast updates.
 - Forecast-change paper entries.
 - Market-settling actual-cross entries for `or higher` outcomes.
 - Invalidation, take-profit, and 10-minute timeout exits.
@@ -773,7 +777,7 @@ Minimal dashboard:
 ## 16. Open Questions
 
 - HKO since-midnight max/min endpoint is confirmed: `https://data.weather.gov.hk/weatherAPI/hko_data/csdi/dataset/latest_since_midnight_maxmin_csdi_4.csv`.
-- HKO local weather forecast bulletin webpage is confirmed as the current-day forecast source: `https://www.weather.gov.hk/en/wxinfo/currwx/flw.htm`; parse bulletin update time and the higher number from `between {min} and {max} degrees`.
+- HKO OCF station feed is confirmed as the current forecast source: `https://maps.weather.gov.hk/ocf/dat/HKO.xml`; parse displayed max/min forecast rows from `DailyForecast` and retain raw hourly forecast rows from `HourlyWeatherForecast`.
 - Polymarket market semantics are confirmed from sampled May 4 and May 5, 2026 HK highest-temperature markets: final HKO Daily Extract `Absolute Daily Max (deg. C)`, one-decimal precision, no rounding for integer buckets, finalized data only, and no later revisions considered.
 - Paper-mode daily drawdown is intentionally set to USD 4,000 / 80% for stress testing. Live-mode drawdown needs a safer value before enablement.
 - Wallet plan for live mode: continue using the same Polymarket wallet/account even at larger account sizes. Existing MetaMask/browser-wallet Polymarket accounts generally use `GNOSIS_SAFE` signature type `2` with the Polymarket proxy wallet as funder. Security plan must assume the funder may hold materially more than the bot's daily trading risk.

@@ -53,7 +53,7 @@ def run_paper_tick(db: sqlite3.Connection, today_hkt: date | None = None) -> Run
 
 
 def process_forecast_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerResult:
-    latest = latest_two_forecast_highs(db)
+    latest = latest_two_forecast_highs(db, today_hkt.isoformat())
     if len(latest) < 2:
         return RunnerResult(notes=("need two forecast highs",))
     new, old = latest[0], latest[1]

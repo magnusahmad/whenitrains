@@ -1,6 +1,6 @@
 import unittest
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from io import StringIO
 from pathlib import Path
 from contextlib import redirect_stdout
@@ -19,11 +19,11 @@ from whenitrains.storage import connect, migrate
 
 
 class SchedulerTests(unittest.TestCase):
-    def test_bulletin_window_is_thirty_seconds_before_to_two_minutes_after(self):
-        before = datetime(2026, 5, 4, 0, 44, 29, tzinfo=HKT)
-        start = datetime(2026, 5, 4, 0, 44, 30, tzinfo=HKT)
-        end = datetime(2026, 5, 4, 0, 47, 0, tzinfo=HKT)
-        after = datetime(2026, 5, 4, 0, 47, 1, tzinfo=HKT)
+    def test_forecast_window_is_every_ten_minutes_for_ten_seconds(self):
+        before = datetime(2026, 5, 4, 0, 9, 59, tzinfo=HKT)
+        start = datetime(2026, 5, 4, 0, 10, 0, tzinfo=HKT)
+        end = datetime(2026, 5, 4, 0, 10, 10, tzinfo=HKT)
+        after = datetime(2026, 5, 4, 0, 10, 11, tzinfo=HKT)
 
         self.assertNotIn("bulletin", _due_sources(before))
         self.assertIn("bulletin", _due_sources(start))
@@ -51,8 +51,21 @@ class SchedulerTests(unittest.TestCase):
             _due_sources(datetime(2026, 5, 4, 20, 8, 0, tzinfo=HKT)),
         )
 
+    def test_learned_forecast_minute_is_due_inside_that_minute(self):
+        learned = [time(13, 12)]
+        before = datetime(2026, 5, 4, 13, 11, 59, tzinfo=HKT)
+        start = datetime(2026, 5, 4, 13, 12, 0, tzinfo=HKT)
+        end = datetime(2026, 5, 4, 13, 12, 59, tzinfo=HKT)
+        after = datetime(2026, 5, 4, 13, 13, 0, tzinfo=HKT)
+
+        state = SchedulerState()
+        self.assertNotIn("bulletin", {item.source for item in due_hko_sources(before, state, learned)})
+        self.assertIn("bulletin", {item.source for item in due_hko_sources(start, state, learned)})
+        self.assertIn("bulletin", {item.source for item in due_hko_sources(end, state, learned)})
+        self.assertNotIn("bulletin", {item.source for item in due_hko_sources(after, state, learned)})
+
     def test_content_change_marks_window_complete(self):
-        now = datetime(2026, 5, 4, 0, 44, 30, tzinfo=HKT)
+        now = datetime(2026, 5, 4, 0, 10, 0, tzinfo=HKT)
         state = SchedulerState(last_hashes={"bulletin": "old"})
         plan = [item for item in due_hko_sources(now, state) if item.source == "bulletin"][0]
 
@@ -62,7 +75,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(due_hko_sources(now + timedelta(seconds=10), state), [])
 
     def test_unchanged_source_respects_ten_second_window_cadence(self):
-        now = datetime(2026, 5, 4, 0, 44, 30, tzinfo=HKT)
+        now = datetime(2026, 5, 4, 0, 10, 0, tzinfo=HKT)
         state = SchedulerState(last_hashes={"bulletin": "same"})
         plan = [item for item in due_hko_sources(now, state) if item.source == "bulletin"][0]
 
@@ -104,7 +117,7 @@ class SchedulerTests(unittest.TestCase):
         noop = RunnerResult()
         trade = RunnerResult(buys_filled=1)
         self.assertTrue(
-            should_print_scheduled_tick(["bulletin changed"], noop, quiet=True)
+            should_print_scheduled_tick(["forecast changed"], noop, quiet=True)
         )
         self.assertTrue(
             should_print_scheduled_tick(["fetched orderbooks"], trade, quiet=True)

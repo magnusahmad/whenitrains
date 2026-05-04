@@ -29,6 +29,12 @@ PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 discover
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 fetch-orderbooks
 ```
 
+Sample the HKO OCF station forecast source every 10 minutes for 24 hours:
+
+```bash
+PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 sample-ocf --interval-minutes 10 --hours 24
+```
+
 Try paper trade lifecycle commands:
 
 ```bash

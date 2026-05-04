@@ -3,6 +3,8 @@ import unittest
 from whenitrains.hko import (
     parse_flw_page,
     parse_flw_page_data_json,
+    parse_http_datetime_hkt,
+    parse_ocf_station_json,
     parse_since_midnight_csv,
 )
 
@@ -59,6 +61,54 @@ class HkoParserTests(unittest.TestCase):
         self.assertIsNone(row.forecast_min_c)
         self.assertEqual(row.forecast_max_c, 25)
         self.assertFalse(row.parse_warning)
+
+    def test_parse_ocf_station_json_daily_and_hourly_forecasts(self):
+        payload = """
+        {
+          "LastModified": 20260504131147,
+          "StationCode": "HKO",
+          "ModelTime": 2026050312,
+          "DailyForecast": [
+            {
+              "ForecastDate": "20260504",
+              "ForecastChanceOfRain": "80%",
+              "ForecastDailyWeather": 60,
+              "ForecastMaximumTemperature": 27.1,
+              "ForecastMinimumTemperature": 21.9
+            },
+            {
+              "ForecastDate": "20260505",
+              "ForecastChanceOfRain": "80%",
+              "ForecastDailyWeather": 62,
+              "ForecastMaximumTemperature": 24.0,
+              "ForecastMinimumTemperature": 21.0
+            }
+          ],
+          "HourlyWeatherForecast": [
+            {"ForecastHour": "2026050413", "ForecastTemperature": 27.1},
+            {"ForecastHour": "2026050414", "ForecastTemperature": 26.9},
+            {"ForecastHour": "2026050500", "ForecastTemperature": 23.5}
+          ]
+        }
+        """
+        forecasts, samples = parse_ocf_station_json(payload)
+
+        self.assertEqual(len(forecasts), 2)
+        self.assertEqual(forecasts[0].source_type, "ocf_station")
+        self.assertEqual(forecasts[0].forecast_date_hkt.isoformat(), "2026-05-04")
+        self.assertEqual(forecasts[0].forecast_min_c, 22)
+        self.assertEqual(forecasts[0].forecast_max_c, 27)
+        self.assertEqual(forecasts[0].update_time, "2026-05-04T13:11:47+08:00")
+        self.assertEqual(forecasts[0].psr, "80%")
+        self.assertFalse(forecasts[0].parse_warning)
+        self.assertEqual(samples[0].raw_max_c, 27.1)
+        self.assertEqual(len(samples[0].hourly_temperatures), 2)
+        self.assertEqual(samples[1].forecast_max_c, 24)
+
+    def test_parse_http_datetime_header_to_hkt(self):
+        parsed = parse_http_datetime_hkt("Mon, 04 May 2026 05:12:19 GMT")
+
+        self.assertEqual(parsed.isoformat(), "2026-05-04T13:12:19+08:00")
 
 
 if __name__ == "__main__":

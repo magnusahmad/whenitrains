@@ -4,10 +4,10 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, time as day_time, timezone
 from pathlib import Path
 
-from .hko import HkoForecast, HkoObservation
+from .hko import HKT, HkoForecast, HkoObservation, OcfForecastSample
 from .polymarket import OrderBook, TemperatureMarket
 
 
@@ -25,6 +25,7 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def migrate(db: sqlite3.Connection) -> None:
+    _rebuild_raw_snapshots_without_unique_hash(db)
     db.executescript(
         """
         create table if not exists raw_snapshots (
@@ -32,8 +33,12 @@ def migrate(db: sqlite3.Connection) -> None:
             source text not null,
             endpoint text not null,
             fetched_at_utc text not null,
-            content_hash text not null unique,
-            payload text not null
+            content_hash text not null,
+            payload text not null,
+            response_headers_json text,
+            http_date text,
+            http_last_modified text,
+            http_etag text
         );
 
         create table if not exists hko_forecasts (
@@ -49,6 +54,19 @@ def migrate(db: sqlite3.Connection) -> None:
             update_time text,
             parse_warning integer not null default 0,
             raw_forecast text
+        );
+
+        create table if not exists ocf_forecast_samples (
+            id integer primary key autoincrement,
+            snapshot_id integer,
+            fetched_at_utc text not null,
+            forecast_date_hkt text not null,
+            forecast_min_c real,
+            forecast_max_c real,
+            raw_min_c real,
+            raw_max_c real,
+            hourly_temperatures_json text,
+            raw_daily_forecast text
         );
 
         create table if not exists hko_current_observations (
@@ -156,8 +174,23 @@ def migrate(db: sqlite3.Connection) -> None:
             reason text,
             details_json text
         );
+
+        create table if not exists hko_source_update_minutes (
+            id integer primary key autoincrement,
+            source text not null,
+            update_minute_hkt text not null,
+            first_seen_utc text not null,
+            last_seen_utc text not null,
+            seen_count integer not null,
+            evidence_json text,
+            unique(source, update_minute_hkt)
+        );
         """
     )
+    _add_column_if_missing(db, "raw_snapshots", "response_headers_json", "text")
+    _add_column_if_missing(db, "raw_snapshots", "http_date", "text")
+    _add_column_if_missing(db, "raw_snapshots", "http_last_modified", "text")
+    _add_column_if_missing(db, "raw_snapshots", "http_etag", "text")
     _add_column_if_missing(db, "paper_decisions", "event_key", "text")
     _add_column_if_missing(db, "hko_forecasts", "update_time", "text")
     _add_column_if_missing(
@@ -174,25 +207,112 @@ def _add_column_if_missing(
         db.execute(f"alter table {table} add column {column} {definition}")
 
 
+def _rebuild_raw_snapshots_without_unique_hash(db: sqlite3.Connection) -> None:
+    row = db.execute(
+        """
+        select sql from sqlite_master
+        where type = 'table' and name = 'raw_snapshots'
+        """
+    ).fetchone()
+    if row is None or "content_hash text not null unique" not in (row["sql"] or ""):
+        return
+    db.executescript(
+        """
+        alter table raw_snapshots rename to raw_snapshots_old;
+        create table raw_snapshots (
+            id integer primary key autoincrement,
+            source text not null,
+            endpoint text not null,
+            fetched_at_utc text not null,
+            content_hash text not null,
+            payload text not null,
+            response_headers_json text,
+            http_date text,
+            http_last_modified text,
+            http_etag text
+        );
+        insert into raw_snapshots
+        (id, source, endpoint, fetched_at_utc, content_hash, payload)
+        select id, source, endpoint, fetched_at_utc, content_hash, payload
+        from raw_snapshots_old;
+        drop table raw_snapshots_old;
+        """
+    )
+
+
 def store_raw_snapshot(
-    db: sqlite3.Connection, source: str, endpoint: str, payload: str
+    db: sqlite3.Connection,
+    source: str,
+    endpoint: str,
+    payload: str,
+    response_headers: dict[str, str] | None = None,
 ) -> RawSnapshotRecord:
     content_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     now = datetime.now(timezone.utc).isoformat()
-    db.execute(
+    headers = response_headers or {}
+    cursor = db.execute(
         """
-        insert or ignore into raw_snapshots
-        (source, endpoint, fetched_at_utc, content_hash, payload)
-        values (?, ?, ?, ?, ?)
+        insert into raw_snapshots
+        (source, endpoint, fetched_at_utc, content_hash, payload,
+         response_headers_json, http_date, http_last_modified, http_etag)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (source, endpoint, now, content_hash, payload),
+        (
+            source,
+            endpoint,
+            now,
+            content_hash,
+            payload,
+            json.dumps(headers),
+            headers.get("Date"),
+            headers.get("Last-Modified"),
+            headers.get("Etag") or headers.get("ETag"),
+        ),
     )
     db.commit()
-    row = db.execute(
-        "select id, content_hash from raw_snapshots where content_hash = ?",
-        (content_hash,),
-    ).fetchone()
-    return RawSnapshotRecord(id=int(row["id"]), content_hash=str(row["content_hash"]))
+    return RawSnapshotRecord(id=int(cursor.lastrowid), content_hash=content_hash)
+
+
+def record_hko_update_minute(
+    db: sqlite3.Connection,
+    source: str,
+    update_time_hkt: datetime,
+    evidence: dict,
+) -> None:
+    minute = update_time_hkt.strftime("%H:%M")
+    now = datetime.now(timezone.utc).isoformat()
+    db.execute(
+        """
+        insert into hko_source_update_minutes
+        (source, update_minute_hkt, first_seen_utc, last_seen_utc, seen_count, evidence_json)
+        values (?, ?, ?, ?, 1, ?)
+        on conflict(source, update_minute_hkt) do update set
+            last_seen_utc = excluded.last_seen_utc,
+            seen_count = hko_source_update_minutes.seen_count + 1,
+            evidence_json = excluded.evidence_json
+        """,
+        (source, minute, now, now, json.dumps(evidence)),
+    )
+    db.commit()
+
+
+def list_hko_update_times(db: sqlite3.Connection, source: str) -> list[day_time]:
+    rows = db.execute(
+        """
+        select update_minute_hkt
+        from hko_source_update_minutes
+        where source = ?
+        order by update_minute_hkt
+        """,
+        (source,),
+    )
+    times = []
+    for row in rows:
+        try:
+            times.append(datetime.strptime(row["update_minute_hkt"], "%H:%M").time())
+        except ValueError:
+            continue
+    return times
 
 
 def store_hko_observation(
@@ -249,29 +369,83 @@ def store_hko_forecasts(
     db.commit()
 
 
+def store_ocf_forecast_samples(
+    db: sqlite3.Connection, snapshot_id: int, samples: list[OcfForecastSample]
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    for sample in samples:
+        db.execute(
+            """
+            insert into ocf_forecast_samples
+            (snapshot_id, fetched_at_utc, forecast_date_hkt, forecast_min_c,
+             forecast_max_c, raw_min_c, raw_max_c, hourly_temperatures_json,
+             raw_daily_forecast)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot_id,
+                now,
+                sample.forecast_date_hkt.isoformat(),
+                sample.forecast_min_c,
+                sample.forecast_max_c,
+                sample.raw_min_c,
+                sample.raw_max_c,
+                json.dumps(sample.hourly_temperatures),
+                json.dumps(sample.raw),
+            ),
+        )
+    db.commit()
+
+
 def store_polymarket_event(db: sqlite3.Connection, market: TemperatureMarket) -> None:
     existing = db.execute(
         "select id from markets where slug = ? order by id desc limit 1",
         (market.event_slug,),
     ).fetchone()
     if existing is not None:
+        local_market_id = int(existing["id"])
+        db.execute(
+            """
+            update markets
+            set polymarket_event_id = ?,
+                question = ?,
+                target_date_hkt = ?,
+                status = ?,
+                resolution_source_text = ?,
+                raw_market = ?
+            where id = ?
+            """,
+            (
+                market.event_id,
+                market.title,
+                market.target_date.isoformat() if market.target_date else None,
+                "active",
+                market.resolution_rules_text,
+                json.dumps(market.raw_event or {}),
+                local_market_id,
+            ),
+        )
+        db.commit()
         return
-    market_row = db.execute(
-        """
-        insert into markets
-        (polymarket_event_id, slug, question, target_date_hkt, status, raw_market)
-        values (?, ?, ?, ?, ?, ?)
-        """,
-        (
-            market.event_id,
-            market.event_slug,
-            market.title,
-            market.target_date.isoformat() if market.target_date else None,
-            "active",
-            "{}",
-        ),
-    )
-    local_market_id = market_row.lastrowid
+    else:
+        market_row = db.execute(
+            """
+            insert into markets
+            (polymarket_event_id, slug, question, target_date_hkt, status,
+             resolution_source_text, raw_market)
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                market.event_id,
+                market.event_slug,
+                market.title,
+                market.target_date.isoformat() if market.target_date else None,
+                "active",
+                market.resolution_rules_text,
+                json.dumps(market.raw_event or {}),
+            ),
+        )
+        local_market_id = market_row.lastrowid
     for outcome in market.outcomes:
         db.execute(
             """
@@ -291,6 +465,28 @@ def store_polymarket_event(db: sqlite3.Connection, market: TemperatureMarket) ->
                 "{}",
             ),
         )
+    db.commit()
+
+
+def store_risk_event(
+    db: sqlite3.Connection,
+    event_type: str,
+    severity: str,
+    details: dict,
+) -> None:
+    db.execute(
+        """
+        insert into risk_events
+        (created_at_utc, event_type, severity, details_json)
+        values (?, ?, ?, ?)
+        """,
+        (
+            datetime.now(timezone.utc).isoformat(),
+            event_type,
+            severity,
+            json.dumps(details),
+        ),
+    )
     db.commit()
 
 
@@ -555,19 +751,28 @@ def has_processed_event(db: sqlite3.Connection, event_key: str) -> bool:
     )
 
 
-def latest_two_forecast_highs(db: sqlite3.Connection) -> list[sqlite3.Row]:
+def latest_two_forecast_highs(
+    db: sqlite3.Connection, forecast_date_hkt: str | None = None
+) -> list[sqlite3.Row]:
+    params: tuple[str, ...] = ()
+    date_filter = ""
+    if forecast_date_hkt is not None:
+        date_filter = "and forecast_date_hkt = ?"
+        params = (forecast_date_hkt,)
     return list(
         db.execute(
-            """
+            f"""
             select forecast_date_hkt, forecast_max_c, update_time, parse_warning, max(id) as id
             from hko_forecasts
-            where source_type = 'flw_page'
+            where source_type in ('ocf_station', 'flw_page')
               and forecast_max_c is not null
               and coalesce(parse_warning, 0) = 0
+              {date_filter}
             group by forecast_date_hkt, forecast_max_c, update_time
             order by id desc
             limit 2
-            """
+            """,
+            params,
         )
     )
 
@@ -605,14 +810,17 @@ def latest_two_orderbook_prices(
 
 
 def dashboard_stats(db: sqlite3.Connection) -> dict:
+    today_hkt = datetime.now(HKT).date().isoformat()
     row = db.execute(
         """
         select forecast_date_hkt, forecast_max_c, update_time, parse_warning
         from hko_forecasts
-        where source_type = 'flw_page'
+        where source_type in ('ocf_station', 'flw_page')
+          and forecast_date_hkt = ?
         order by id desc
         limit 1
-        """
+        """,
+        (today_hkt,),
     ).fetchone()
     obs = db.execute(
         """
@@ -628,7 +836,7 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
             select count(*) from (
                 select distinct forecast_date_hkt, forecast_max_c, update_time
                 from hko_forecasts
-                where source_type = 'flw_page'
+                where source_type in ('ocf_station', 'flw_page')
             )
             """
         ).fetchone()[0],

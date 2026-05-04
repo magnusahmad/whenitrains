@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
+from html import unescape
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -31,6 +33,8 @@ class TemperatureMarket:
     event_slug: str
     title: str
     target_date: date | None
+    resolution_rules_text: str = ""
+    raw_event: dict[str, Any] = field(default_factory=dict)
     outcomes: list[Outcome] = field(default_factory=list)
 
 
@@ -103,9 +107,71 @@ def parse_event_markets(event: dict[str, Any]) -> list[TemperatureMarket]:
             event_slug=event["slug"],
             title=event["title"],
             target_date=target_date,
+            resolution_rules_text=extract_resolution_rules_text(event),
+            raw_event=event,
             outcomes=outcomes,
         )
     ]
+
+
+EXPECTED_RESOLUTION_TAIL = """
+The resolution source for this market will be information from the Hong Kong Observatory,
+specifically the "Absolute Daily Max (deg. C)" the specified date once information is finalized
+in the relevant "Daily Extract", available here: https://www.weather.gov.hk/en/cis/climat.htm
+
+This market can not resolve to "Yes" until data for this date has been finalized.
+
+The resolution source for this market measures temperatures in Celsius to one decimal place
+(eg, 9.1°C). Thus, this is the level of precision that will be used when resolving the market.
+
+Any revisions to temperatures recorded after data is finalized for this market's timeframe
+will not be considered for this market's resolution.
+"""
+
+
+def extract_resolution_rules_text(event: dict[str, Any]) -> str:
+    candidates: list[str] = []
+    for key in ("description", "rules", "resolutionSource", "marketContext"):
+        value = event.get(key)
+        if isinstance(value, str):
+            candidates.append(value)
+    for market in event.get("markets", []):
+        for key in ("description", "rules", "resolutionSource", "marketContext"):
+            value = market.get(key)
+            if isinstance(value, str):
+                candidates.append(value)
+    return "\n\n".join(dict.fromkeys(item for item in candidates if item.strip()))
+
+
+def resolution_rules_match_expected(text: str) -> bool:
+    normalized = _normalize_resolution_text(text)
+    if not normalized:
+        return False
+    first_sentence_pattern = (
+        r"this market will resolve to the temperature range that contains the "
+        r"highest temperature recorded by the hong kong observatory in degrees "
+        r"celsius on [^.]+\."
+    )
+    if re.search(first_sentence_pattern, normalized) is None:
+        return False
+    return _normalize_resolution_text(EXPECTED_RESOLUTION_TAIL) in normalized
+
+
+def resolution_rules_warning(market: TemperatureMarket) -> str | None:
+    if resolution_rules_match_expected(market.resolution_rules_text):
+        return None
+    return (
+        "resolution rules mismatch for "
+        f"{market.event_slug}: expected HKO Daily Extract Absolute Daily Max "
+        "one-decimal finalized-data wording"
+    )
+
+
+def _normalize_resolution_text(text: str) -> str:
+    text = unescape(text or "")
+    text = text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip().lower()
 
 
 def fetch_orderbook(token_id: str) -> OrderBook:

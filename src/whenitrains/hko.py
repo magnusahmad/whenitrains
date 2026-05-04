@@ -6,6 +6,8 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
+from math import floor
 from io import StringIO
 from typing import Any
 from urllib.request import Request, urlopen
@@ -18,6 +20,8 @@ SINCE_MIDNIGHT_URL = (
 )
 FLW_PAGE_URL = "https://www.weather.gov.hk/en/wxinfo/currwx/flw.htm"
 FLW_PAGE_DATA_URL = "https://www.weather.gov.hk/json/DYN_DAT_MINDS_FLW.json"
+OCF_STATION_URL = "https://maps.weather.gov.hk/ocf/dat/HKO.xml"
+OCF_TEXT_URL = "https://maps.weather.gov.hk/ocf/text_e.html?mode=0&station=HKO"
 
 
 @dataclass(frozen=True)
@@ -43,10 +47,56 @@ class HkoForecast:
     raw: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class OcfForecastSample:
+    forecast_date_hkt: date
+    forecast_min_c: int | None
+    forecast_max_c: int | None
+    raw_min_c: float | None
+    raw_max_c: float | None
+    hourly_temperatures: list[dict[str, Any]]
+    raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class FetchResponse:
+    url: str
+    text: str
+    headers: dict[str, str]
+
+    @property
+    def http_date(self) -> datetime | None:
+        return _parse_http_datetime(self.headers.get("Date"))
+
+    @property
+    def http_last_modified(self) -> datetime | None:
+        return _parse_http_datetime(self.headers.get("Last-Modified"))
+
+    @property
+    def etag(self) -> str | None:
+        return self.headers.get("Etag") or self.headers.get("ETag")
+
+
 def fetch_text(url: str) -> str:
-    request = Request(url, headers={"User-Agent": "whenitrains/0.1"})
+    return fetch_response(url).text
+
+
+def fetch_response(url: str) -> FetchResponse:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        )
+    }
+    if "maps.weather.gov.hk/ocf/" in url:
+        headers["Referer"] = OCF_TEXT_URL
+    request = Request(url, headers=headers)
     with urlopen(request, timeout=15) as response:
-        return response.read().decode("utf-8-sig")
+        return FetchResponse(
+            url=url,
+            text=response.read().decode("utf-8-sig"),
+            headers=dict(response.headers.items()),
+        )
 
 
 def parse_since_midnight_csv(text: str) -> HkoObservation:
@@ -152,6 +202,118 @@ def parse_flw_page_data_json(text: str) -> HkoForecast:
         parse_warning=forecast.parse_warning,
         raw=payload,
     )
+
+
+def parse_ocf_station_json(text: str) -> tuple[list[HkoForecast], list[OcfForecastSample]]:
+    payload = json.loads(text)
+    update_time = _parse_ocf_datetime(payload.get("LastModified"))
+    daily_rows = payload.get("DailyForecast") or []
+    hourly_by_date = _group_ocf_hourly_temperatures(
+        payload.get("HourlyWeatherForecast") or []
+    )
+    forecasts: list[HkoForecast] = []
+    samples: list[OcfForecastSample] = []
+    for row in daily_rows:
+        forecast_date = _parse_yyyymmdd(row.get("ForecastDate"))
+        raw_min = _as_float(row.get("ForecastMinimumTemperature"))
+        raw_max = _as_float(row.get("ForecastMaximumTemperature"))
+        display_min = _round_table_temperature(raw_min)
+        display_max = _round_table_temperature(raw_max)
+        warning = forecast_date is None or display_max is None
+        raw = dict(row)
+        raw["StationCode"] = payload.get("StationCode")
+        raw["ModelTime"] = payload.get("ModelTime")
+        raw["LastModified"] = payload.get("LastModified")
+        forecasts.append(
+            HkoForecast(
+                source_type="ocf_station",
+                forecast_date_hkt=forecast_date,
+                forecast_min_c=display_min,
+                forecast_max_c=display_max,
+                psr=str(row.get("ForecastChanceOfRain") or ""),
+                update_time=update_time.isoformat() if update_time else None,
+                parse_warning=warning,
+                raw=raw,
+            )
+        )
+        if forecast_date is not None:
+            samples.append(
+                OcfForecastSample(
+                    forecast_date_hkt=forecast_date,
+                    forecast_min_c=display_min,
+                    forecast_max_c=display_max,
+                    raw_min_c=raw_min,
+                    raw_max_c=raw_max,
+                    hourly_temperatures=hourly_by_date.get(forecast_date, []),
+                    raw=raw,
+                )
+            )
+    return forecasts, samples
+
+
+def _parse_ocf_datetime(value: Any) -> datetime | None:
+    text = str(value or "")
+    if not re.fullmatch(r"\d{14}", text):
+        return None
+    return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=HKT)
+
+
+def parse_http_datetime_hkt(value: str | None) -> datetime | None:
+    parsed = _parse_http_datetime(value)
+    if parsed is None:
+        return None
+    return parsed.astimezone(HKT)
+
+
+def _parse_http_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _parse_yyyymmdd(value: Any) -> date | None:
+    text = str(value or "")
+    if not re.fullmatch(r"\d{8}", text):
+        return None
+    return datetime.strptime(text, "%Y%m%d").date()
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _round_table_temperature(value: float | None) -> int | None:
+    if value is None:
+        return None
+    return floor(value + 0.5)
+
+
+def _group_ocf_hourly_temperatures(rows: list[dict[str, Any]]) -> dict[date, list[dict[str, Any]]]:
+    grouped: dict[date, list[dict[str, Any]]] = {}
+    for row in rows:
+        hour_text = str(row.get("ForecastHour") or "")
+        if not re.fullmatch(r"\d{10}", hour_text):
+            continue
+        forecast_date = datetime.strptime(hour_text[:8], "%Y%m%d").date()
+        grouped.setdefault(forecast_date, []).append(
+            {
+                "forecast_hour_hkt": datetime.strptime(hour_text, "%Y%m%d%H")
+                .replace(tzinfo=HKT)
+                .isoformat(),
+                "temperature_c": row.get("ForecastTemperature"),
+                "raw": row,
+            }
+        )
+    return grouped
 
 
 def _html_to_text(text: str) -> str:

@@ -2,7 +2,7 @@ import unittest
 from datetime import date
 
 from whenitrains.markets import PredicateType, parse_outcome_label, predicate_matches
-from whenitrains.polymarket import parse_event_markets
+from whenitrains.polymarket import parse_event_markets, resolution_rules_match_expected
 from whenitrains.polymarket import is_current_day_market
 
 
@@ -57,6 +57,44 @@ class MarketSemanticsTests(unittest.TestCase):
     def test_current_day_market_filter(self):
         self.assertTrue(is_current_day_market(date(2026, 5, 4), date(2026, 5, 4)))
         self.assertFalse(is_current_day_market(date(2026, 5, 5), date(2026, 5, 4)))
+
+    def test_resolution_rules_match_allows_date_only_change(self):
+        text = """
+        This market will resolve to the temperature range that contains the highest temperature
+        recorded by the Hong Kong Observatory in degrees Celsius on 3 May '26.
+
+        The resolution source for this market will be information from the Hong Kong Observatory,
+        specifically the "Absolute Daily Max (deg. C)" the specified date once information is
+        finalized in the relevant "Daily Extract", available here:
+        https://www.weather.gov.hk/en/cis/climat.htm
+
+        This market can not resolve to "Yes" until data for this date has been finalized.
+
+        The resolution source for this market measures temperatures in Celsius to one decimal
+        place (eg, 9.1°C). Thus, this is the level of precision that will be used when resolving
+        the market.
+
+        Any revisions to temperatures recorded after data is finalized for this market's timeframe
+        will not be considered for this market's resolution.
+        """
+
+        self.assertTrue(resolution_rules_match_expected(text))
+        self.assertTrue(resolution_rules_match_expected(text.replace("3 May '26", "4 May '26")))
+
+    def test_resolution_rules_mismatch_when_tail_changes(self):
+        text = """
+        This market will resolve to the temperature range that contains the highest temperature
+        recorded by the Hong Kong Observatory in degrees Celsius on 3 May '26.
+
+        The resolution source for this market will be information from the Hong Kong Observatory,
+        specifically the "Absolute Daily Max (deg. C)" the specified date once information is
+        finalized in the relevant "Daily Extract", available here:
+        https://www.weather.gov.hk/en/cis/climat.htm
+
+        This market can resolve before data for this date has been finalized.
+        """
+
+        self.assertFalse(resolution_rules_match_expected(text))
 
 
 if __name__ == "__main__":
