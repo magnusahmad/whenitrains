@@ -71,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     scheduled_loop = sub.add_parser("paper-scheduler")
     scheduled_loop.add_argument("--sleep", type=float, default=1.0)
     scheduled_loop.add_argument("--ticks", type=int)
+    scheduled_loop.add_argument("--verbose", action="store_true")
     reset_paper = sub.add_parser("reset-paper")
     reset_paper.add_argument("--yes", action="store_true")
     sub.add_parser("dashboard")
@@ -215,9 +216,10 @@ def main(argv: list[str] | None = None) -> int:
             fetch_since_midnight=lambda: _fetch_since_midnight(db),
             fetch_bulletin=lambda: _fetch_bulletin(db),
             discover_market=lambda target: _discover_market(db, target),
-            fetch_orderbooks=lambda target: _fetch_orderbooks(db, target, quiet=True),
+            fetch_orderbooks=lambda target: _fetch_orderbooks(db, target, quiet=not args.verbose),
             base_sleep_seconds=args.sleep,
             max_ticks=args.ticks,
+            quiet=not args.verbose,
         )
         return 0
     if args.command == "reset-paper":

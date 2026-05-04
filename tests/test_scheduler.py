@@ -96,6 +96,9 @@ class SchedulerTests(unittest.TestCase):
         self.assertFalse(
             should_print_scheduled_tick(["discovered market", "fetched orderbooks"], result, quiet=True)
         )
+        self.assertTrue(
+            should_print_scheduled_tick(["discovered market", "fetched orderbooks"], result, quiet=False)
+        )
 
     def test_quiet_scheduler_prints_hko_fetches_and_trades(self):
         noop = RunnerResult()

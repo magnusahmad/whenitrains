@@ -50,6 +50,12 @@ Run the polling-window scheduler:
 PYTHONUNBUFFERED=1 PYTHONPATH=src python3 -u -m whenitrains.cli --db data/whenitrains.sqlite3 paper-scheduler
 ```
 
+Use verbose mode to print every scheduler tick and all orderbook bid/ask lines:
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=src python3 -u -m whenitrains.cli --db data/whenitrains.sqlite3 paper-scheduler --verbose
+```
+
 Clear test paper trades without deleting market/HKO/orderbook history:
 
 ```bash

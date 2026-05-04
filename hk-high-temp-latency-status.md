@@ -327,6 +327,7 @@ Scheduler defaults for the POC:
 - Polymarket/orderbooks: monitor target-day markets until the Hong Kong day ends.
 - Current scheduler implementation: `paper-scheduler` evaluates HKO source windows every loop, fetches HKO only when inside the agreed windows, refreshes current-day Polymarket orderbooks on a separate 15-second cadence, discovers the current-day market on a 5-minute cadence, and runs the paper decision pass every loop.
 - Scheduler output is quiet by default: orderbook-only/no-op ticks are suppressed. It prints when HKO is fetched, a signal/trade/missed-trade occurs, or a non-noop decision is made.
+- Use `paper-scheduler --verbose` to restore noisy output: every scheduler tick plus all orderbook bid/ask lines.
 - HKO source polling respects the in-window 10-second cadence; unchanged HKO payloads no longer print every scheduler tick.
 - Individual Polymarket CLOB orderbook fetch failures are logged as warnings and do not crash the scheduler.
 - Use `reset-paper --yes` to clear paper orders, positions, decisions, and signals without deleting HKO snapshots, markets, or orderbooks.
