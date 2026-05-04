@@ -31,6 +31,7 @@ class SourcePollPlan:
 class SchedulerState:
     completed_windows: set[str] = field(default_factory=set)
     last_hashes: dict[str, str] = field(default_factory=dict)
+    last_source_poll_at: dict[str, datetime] = field(default_factory=dict)
     last_orderbook_fetch_at: datetime | None = None
     last_market_discovery_at: datetime | None = None
 
@@ -85,14 +86,24 @@ def scheduler_actions(
 
 
 def mark_source_fetch(
-    state: SchedulerState, plan: SourcePollPlan, payload: str, changed: bool | None = None
+    state: SchedulerState,
+    plan: SourcePollPlan,
+    payload: str,
+    now_hkt: datetime | None = None,
+    changed: bool | None = None,
 ) -> bool:
+    key = _window_key(plan)
     content_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     previous = state.last_hashes.get(plan.source)
-    did_change = changed if changed is not None else previous is not None and previous != content_hash
+    did_change = (
+        changed
+        if changed is not None
+        else previous is None or previous != content_hash
+    )
     state.last_hashes[plan.source] = content_hash
+    state.last_source_poll_at[key] = now_hkt or datetime.now(HKT)
     if did_change:
-        state.completed_windows.add(_window_key(plan))
+        state.completed_windows.add(key)
     return did_change
 
 
@@ -126,12 +137,12 @@ def run_scheduled_paper_loop(
         notes: list[str] = []
         if actions.fetch_since_midnight:
             payload = fetch_since_midnight()
-            mark_source_fetch(state, plans["since_midnight"], payload)
-            notes.append("fetched since_midnight")
+            if mark_source_fetch(state, plans["since_midnight"], payload, now):
+                notes.append("since_midnight changed")
         if actions.fetch_bulletin:
             payload = fetch_bulletin()
-            mark_source_fetch(state, plans["bulletin"], payload)
-            notes.append("fetched bulletin")
+            if mark_source_fetch(state, plans["bulletin"], payload, now):
+                notes.append("bulletin changed")
         if actions.discover_market:
             discover_market(now.date())
             mark_market_discovered(state, now)
@@ -196,9 +207,15 @@ def _bulletin_plans(target: date) -> list[SourcePollPlan]:
 
 
 def _is_due(plan: SourcePollPlan, now_hkt: datetime, state: SchedulerState) -> bool:
-    if _window_key(plan) in state.completed_windows:
+    key = _window_key(plan)
+    if key in state.completed_windows:
         return False
-    return plan.window_start <= now_hkt <= plan.window_end
+    if not (plan.window_start <= now_hkt <= plan.window_end):
+        return False
+    last_poll = state.last_source_poll_at.get(key)
+    if last_poll is None:
+        return True
+    return now_hkt - last_poll >= timedelta(seconds=plan.cadence_seconds)
 
 
 def _window_key(plan: SourcePollPlan) -> str:
@@ -216,5 +233,5 @@ def should_print_scheduled_tick(notes: list[str], result, quiet: bool) -> bool:
         return True
     if result.signals:
         return True
-    interesting_actions = {"fetched since_midnight", "fetched bulletin"}
+    interesting_actions = {"since_midnight changed", "bulletin changed"}
     return any(note in interesting_actions for note in notes)

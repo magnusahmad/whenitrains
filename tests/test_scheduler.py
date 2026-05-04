@@ -56,10 +56,27 @@ class SchedulerTests(unittest.TestCase):
         state = SchedulerState(last_hashes={"bulletin": "old"})
         plan = [item for item in due_hko_sources(now, state) if item.source == "bulletin"][0]
 
-        changed = mark_source_fetch(state, plan, "new payload", changed=True)
+        changed = mark_source_fetch(state, plan, "new payload", now, changed=True)
 
         self.assertTrue(changed)
         self.assertEqual(due_hko_sources(now + timedelta(seconds=10), state), [])
+
+    def test_unchanged_source_respects_ten_second_window_cadence(self):
+        now = datetime(2026, 5, 4, 0, 44, 30, tzinfo=HKT)
+        state = SchedulerState(last_hashes={"bulletin": "same"})
+        plan = [item for item in due_hko_sources(now, state) if item.source == "bulletin"][0]
+
+        changed = mark_source_fetch(state, plan, "same", now, changed=False)
+
+        self.assertFalse(changed)
+        self.assertNotIn(
+            "bulletin",
+            {item.source for item in due_hko_sources(now + timedelta(seconds=9), state)},
+        )
+        self.assertIn(
+            "bulletin",
+            {item.source for item in due_hko_sources(now + timedelta(seconds=10), state)},
+        )
 
     def test_orderbooks_and_market_discovery_have_separate_cadence(self):
         now = datetime(2026, 5, 4, 12, 0, tzinfo=HKT)
@@ -84,7 +101,7 @@ class SchedulerTests(unittest.TestCase):
         noop = RunnerResult()
         trade = RunnerResult(buys_filled=1)
         self.assertTrue(
-            should_print_scheduled_tick(["fetched bulletin"], noop, quiet=True)
+            should_print_scheduled_tick(["bulletin changed"], noop, quiet=True)
         )
         self.assertTrue(
             should_print_scheduled_tick(["fetched orderbooks"], trade, quiet=True)

@@ -274,15 +274,31 @@ def _fetch_orderbooks(db, target_date=None, quiet: bool = False) -> None:
         else list_outcomes(db)
     )
     for outcome in outcomes:
-        yes_book = fetch_orderbook(outcome["yes_token_id"])
-        no_book = fetch_orderbook(outcome["no_token_id"])
-        store_orderbook(db, outcome["yes_token_id"], yes_book)
-        store_orderbook(db, outcome["no_token_id"], no_book)
+        try:
+            yes_book = fetch_orderbook(outcome["yes_token_id"])
+            store_orderbook(db, outcome["yes_token_id"], yes_book)
+        except Exception as exc:
+            if quiet:
+                print(f"orderbook warning {outcome['label']} YES: {exc}")
+            else:
+                print(f"{outcome['label']} | YES error {exc}")
+            yes_book = None
+        try:
+            no_book = fetch_orderbook(outcome["no_token_id"])
+            store_orderbook(db, outcome["no_token_id"], no_book)
+        except Exception as exc:
+            if quiet:
+                print(f"orderbook warning {outcome['label']} NO: {exc}")
+            else:
+                print(f"{outcome['label']} | NO error {exc}")
+            no_book = None
         if not quiet:
             print(
                 f"{outcome['label']} | "
-                f"YES bid {_fmt(yes_book.best_bid)} ask {_fmt(yes_book.best_ask)} | "
-                f"NO bid {_fmt(no_book.best_bid)} ask {_fmt(no_book.best_ask)}"
+                f"YES bid {_fmt(yes_book.best_bid if yes_book else None)} "
+                f"ask {_fmt(yes_book.best_ask if yes_book else None)} | "
+                f"NO bid {_fmt(no_book.best_bid if no_book else None)} "
+                f"ask {_fmt(no_book.best_ask if no_book else None)}"
             )
 
 
