@@ -8,6 +8,7 @@ from whenitrains.markets import parse_outcome_label
 from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
 from whenitrains.runner import (
     process_actual_entries,
+    process_all_forecast_entries,
     process_forecast_entries,
     process_open_position_exits,
     render_dashboard,
@@ -64,6 +65,54 @@ class RunnerTests(unittest.TestCase):
                 "select count(*) from paper_decisions where action = 'BUY'"
             ).fetchone()[0]
             self.assertEqual(buy_count, 1)
+
+    def test_run_tick_trades_future_forecast_market_but_not_actual_cross(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                target_date=date(2026, 5, 5),
+                outcomes=[
+                    Outcome(
+                        market_id="m29",
+                        label="29°C",
+                        predicate=parse_outcome_label("29°C"),
+                        yes_token_id="future_yes29",
+                        no_token_id="future_no29",
+                    )
+                ],
+            )
+            _store_forecast(db, 28, "2026-05-04T00:45:00+08:00", forecast_date=date(2026, 5, 5))
+            _store_forecast(db, 29, "2026-05-04T01:45:00+08:00", forecast_date=date(2026, 5, 5))
+            _store_book_pair(db, "future_yes29", old_ask=0.40, new_ask=0.405)
+            _store_book_pair(db, "future_no29", old_ask=0.60, new_ask=0.60)
+            _store_observation(db, 29.0)
+            _store_observation(db, 30.0)
+
+            result = run_paper_tick(db, today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 1)
+            position = db.execute(
+                "select net_shares from paper_positions where outcome_id = 'future_yes29'"
+            ).fetchone()
+            self.assertIsNotNone(position)
+            actual_buy_decisions = db.execute(
+                """
+                select count(*) from paper_decisions
+                where event_type = 'actual_cross' and action = 'BUY'
+                """
+            ).fetchone()[0]
+            self.assertEqual(actual_buy_decisions, 0)
+
+    def test_all_forecast_entries_ignores_future_dates_without_market(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_forecast(db, 28, "2026-05-04T00:45:00+08:00", forecast_date=date(2026, 5, 5))
+            _store_forecast(db, 29, "2026-05-04T01:45:00+08:00", forecast_date=date(2026, 5, 5))
+
+            result = process_all_forecast_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(result.notes, ("no tradeable forecast dates",))
 
     def test_exit_loop_sells_on_timeout(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -196,14 +245,14 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("buy orders filled/missed:", output)
 
 
-def _seed_market(path: Path, outcomes=None):
+def _seed_market(path: Path, outcomes=None, target_date=date(2026, 5, 4)):
     db = connect(path)
     migrate(db)
     market = TemperatureMarket(
         event_id="event",
-        event_slug="highest-temperature-in-hong-kong-on-may-4-2026",
-        title="Highest temperature in Hong Kong on May 4?",
-        target_date=date(2026, 5, 4),
+        event_slug=f"highest-temperature-in-hong-kong-on-{target_date.isoformat()}",
+        title=f"Highest temperature in Hong Kong on {target_date.isoformat()}?",
+        target_date=target_date,
         outcomes=outcomes
         or [
             Outcome(
@@ -219,7 +268,7 @@ def _seed_market(path: Path, outcomes=None):
     return db
 
 
-def _store_forecast(db, high: float, update_time: str):
+def _store_forecast(db, high: float, update_time: str, forecast_date=date(2026, 5, 4)):
     snapshot = store_raw_snapshot(db, "hko", f"forecast-{update_time}", str(high))
     store_hko_forecasts(
         db,
@@ -227,7 +276,7 @@ def _store_forecast(db, high: float, update_time: str):
         [
             HkoForecast(
                 source_type="flw_page",
-                forecast_date_hkt=date(2026, 5, 4),
+                forecast_date_hkt=forecast_date,
                 forecast_min_c=None,
                 forecast_max_c=high,
                 update_time=update_time,

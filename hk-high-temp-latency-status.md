@@ -315,6 +315,7 @@ Interpretation:
 14. Added an OCF cadence sampler that records both the max/min daily forecast table and hourly temperature forecast table every 10 minutes for 24 hours.
 15. Added response-header capture for raw snapshots and learned forecast update-minute discovery from payload `LastModified` and HTTP `Last-Modified`.
 16. Added Polymarket resolution-rule guard for HK highest-temperature markets.
+17. Enabled forecast-latency paper trading for future OCF forecast dates with discovered markets.
 
 ## Remaining Work
 
@@ -337,7 +338,9 @@ Scheduler defaults for the POC:
 - HKO OCF station forecast feed: every fetch stores full response headers plus HTTP `Date`, HTTP `Last-Modified`, and `ETag`. Raw snapshots are no longer deduped by content hash because unchanged payloads can still provide useful response metadata.
 - HKO OCF station forecast feed: payload `LastModified` and HTTP `Last-Modified` are converted to HKT minute-of-day entries in `hko_source_update_minutes`. The scheduler includes those learned minutes as daily forecast poll windows while keeping the coarse 10-minute discovery probe.
 - Polymarket/orderbooks: monitor target-day markets until the Hong Kong day ends.
-- Current scheduler implementation: `paper-scheduler` evaluates HKO source windows every loop, fetches HKO only when inside the agreed windows, refreshes current-day Polymarket orderbooks on a separate 15-second cadence, discovers the current-day market on a 5-minute cadence, and runs the paper decision pass every loop.
+- Future-date forecast trading: market discovery now runs for every OCF forecast date at or after the current HKT date. Orderbook polling covers all discovered HK high-temperature outcomes. Forecast-change entries are evaluated per target date.
+- Current-day actual trading: since-midnight actual-cross entries, actual invalidation, and hold-to-maturity logic remain current-day only. Future-date positions can still exit by take-profit or 10-minute timeout, but are not invalidated by today's actual max.
+- Current scheduler implementation: `paper-scheduler` evaluates HKO source windows every loop, fetches HKO only when inside the agreed windows, refreshes all discovered HK high-temperature orderbooks on a separate 15-second cadence, discovers markets for all current/future OCF forecast dates on a 5-minute cadence, and runs the paper decision pass every loop.
 - Scheduler output is quiet by default: orderbook-only/no-op ticks are suppressed. It prints when HKO is fetched, a signal/trade/missed-trade occurs, or a non-noop decision is made.
 - Use `paper-scheduler --verbose` to restore noisy output: every scheduler tick plus all orderbook bid/ask lines.
 - HKO source polling respects the in-window 10-second cadence; unchanged HKO payloads no longer print every scheduler tick.

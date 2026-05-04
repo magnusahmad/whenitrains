@@ -34,6 +34,7 @@ from .storage import (
     find_outcome_by_label,
     latest_orderbook,
     list_hko_update_times,
+    list_hko_forecast_dates,
     list_outcomes,
     list_outcomes_for_date,
     migrate,
@@ -191,8 +192,8 @@ def main(argv: list[str] | None = None) -> int:
         today = datetime.now(HKT).date()
         if not args.no_fetch:
             _fetch_hko(db)
-            _discover_market(db, today)
-            _fetch_orderbooks(db, today)
+            _discover_markets_for_forecast_dates(db, today)
+            _fetch_orderbooks(db)
         result = run_paper_tick(db, today_hkt=today)
         print(
             f"paper-tick buys={result.buys_filled}/{result.buys_missed} "
@@ -209,8 +210,8 @@ def main(argv: list[str] | None = None) -> int:
         ticks = 0
         while args.ticks is None or ticks < args.ticks:
             _fetch_hko(db)
-            _discover_market(db, today)
-            _fetch_orderbooks(db, today)
+            _discover_markets_for_forecast_dates(db, today)
+            _fetch_orderbooks(db)
             result = run_paper_tick(db, today_hkt=today)
             print(
                 f"paper-tick buys={result.buys_filled}/{result.buys_missed} "
@@ -232,8 +233,8 @@ def main(argv: list[str] | None = None) -> int:
             fetch_since_midnight=lambda: _fetch_since_midnight(db),
             fetch_bulletin=lambda: _fetch_bulletin(db),
             learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
-            discover_market=lambda target: _discover_market(db, target),
-            fetch_orderbooks=lambda target: _fetch_orderbooks(db, target, quiet=not args.verbose),
+            discover_market=lambda target: _discover_markets_for_forecast_dates(db, target),
+            fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
             base_sleep_seconds=args.sleep,
             max_ticks=args.ticks,
             quiet=not args.verbose,
@@ -377,6 +378,14 @@ def _discover_market(db, target_date) -> bool:
                 },
             )
     return True
+
+
+def _discover_markets_for_forecast_dates(db, today_hkt) -> int:
+    discovered = 0
+    for forecast_date in list_hko_forecast_dates(db, today_hkt.isoformat()):
+        if _discover_market(db, date.fromisoformat(forecast_date)):
+            discovered += 1
+    return discovered
 
 
 def _fetch_orderbooks(db, target_date=None, quiet: bool = False) -> None:

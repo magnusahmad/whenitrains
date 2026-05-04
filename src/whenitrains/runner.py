@@ -22,6 +22,7 @@ from .storage import (
     latest_two_orderbook_prices,
     list_open_paper_positions,
     list_outcomes_for_date,
+    list_tradeable_forecast_dates,
     store_paper_decision,
     store_signal,
 )
@@ -39,9 +40,9 @@ class RunnerResult:
 
 def run_paper_tick(db: sqlite3.Connection, today_hkt: date | None = None) -> RunnerResult:
     today = today_hkt or datetime.now(HKT).date()
-    forecast_result = process_forecast_entries(db, today)
+    forecast_result = process_all_forecast_entries(db, today)
     actual_result = process_actual_entries(db, today)
-    exit_result = process_open_position_exits(db)
+    exit_result = process_open_position_exits(db, today_hkt=today)
     return RunnerResult(
         buys_filled=forecast_result.buys_filled + actual_result.buys_filled,
         buys_missed=forecast_result.buys_missed + actual_result.buys_missed,
@@ -49,6 +50,34 @@ def run_paper_tick(db: sqlite3.Connection, today_hkt: date | None = None) -> Run
         sells_missed=exit_result.sells_missed,
         signals=forecast_result.signals + actual_result.signals,
         notes=forecast_result.notes + actual_result.notes + exit_result.notes,
+    )
+
+
+def process_all_forecast_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerResult:
+    aggregate = RunnerResult()
+    notes: list[str] = []
+    for target_date_text in list_tradeable_forecast_dates(db, today_hkt.isoformat()):
+        target_date = date.fromisoformat(target_date_text)
+        result = process_forecast_entries(db, target_date)
+        aggregate = RunnerResult(
+            buys_filled=aggregate.buys_filled + result.buys_filled,
+            buys_missed=aggregate.buys_missed + result.buys_missed,
+            sells_filled=aggregate.sells_filled + result.sells_filled,
+            sells_missed=aggregate.sells_missed + result.sells_missed,
+            signals=aggregate.signals + result.signals,
+            notes=(),
+        )
+        if result.notes:
+            notes.extend(f"{target_date_text}: {note}" for note in result.notes)
+    if not notes:
+        notes.append("no tradeable forecast dates")
+    return RunnerResult(
+        buys_filled=aggregate.buys_filled,
+        buys_missed=aggregate.buys_missed,
+        sells_filled=aggregate.sells_filled,
+        sells_missed=aggregate.sells_missed,
+        signals=aggregate.signals,
+        notes=tuple(notes),
     )
 
 
@@ -228,7 +257,10 @@ def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerRes
     )
 
 
-def process_open_position_exits(db: sqlite3.Connection) -> RunnerResult:
+def process_open_position_exits(
+    db: sqlite3.Connection, today_hkt: date | None = None
+) -> RunnerResult:
+    today = today_hkt or datetime.now(HKT).date()
     latest_actual = latest_two_observed_maxes(db)
     current_max = float(latest_actual[0]["since_midnight_max_c"]) if latest_actual else None
     sells_filled = 0
@@ -244,8 +276,12 @@ def process_open_position_exits(db: sqlite3.Connection) -> RunnerResult:
             sells_missed += 1
             continue
         side = "YES" if token_id == outcome["yes_token_id"] else "NO"
-        invalidated = _position_invalidated(outcome, side, current_max)
-        hold_to_maturity = _position_can_hold_to_maturity(outcome, side, current_max)
+        actual_applies = outcome["target_date_hkt"] == today.isoformat()
+        actual_max_for_outcome = current_max if actual_applies else None
+        invalidated = _position_invalidated(outcome, side, actual_max_for_outcome)
+        hold_to_maturity = _position_can_hold_to_maturity(
+            outcome, side, actual_max_for_outcome
+        )
         if hold_to_maturity:
             notes.append(f"holding settled {outcome['label']} {side}")
             continue

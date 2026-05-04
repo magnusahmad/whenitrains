@@ -559,6 +559,58 @@ def list_outcomes_for_date(db: sqlite3.Connection, target_date_hkt: str) -> list
     )
 
 
+def list_hko_forecast_dates(
+    db: sqlite3.Connection, min_date_hkt: str | None = None
+) -> list[str]:
+    params: tuple[str, ...] = ()
+    date_filter = ""
+    if min_date_hkt is not None:
+        date_filter = "and forecast_date_hkt >= ?"
+        params = (min_date_hkt,)
+    return [
+        row["forecast_date_hkt"]
+        for row in db.execute(
+            f"""
+            select distinct forecast_date_hkt
+            from hko_forecasts
+            where source_type in ('ocf_station', 'flw_page')
+              and forecast_date_hkt is not null
+              and forecast_max_c is not null
+              and coalesce(parse_warning, 0) = 0
+              {date_filter}
+            order by forecast_date_hkt
+            """,
+            params,
+        )
+    ]
+
+
+def list_tradeable_forecast_dates(
+    db: sqlite3.Connection, min_date_hkt: str | None = None
+) -> list[str]:
+    params: tuple[str, ...] = ()
+    date_filter = ""
+    if min_date_hkt is not None:
+        date_filter = "and m.target_date_hkt >= ?"
+        params = (min_date_hkt,)
+    return [
+        row["target_date_hkt"]
+        for row in db.execute(
+            f"""
+            select distinct m.target_date_hkt
+            from markets m
+            join hko_forecasts f on f.forecast_date_hkt = m.target_date_hkt
+            where m.target_date_hkt is not null
+              and f.forecast_max_c is not null
+              and coalesce(f.parse_warning, 0) = 0
+              {date_filter}
+            order by m.target_date_hkt
+            """,
+            params,
+        )
+    ]
+
+
 def find_outcome_by_label(db: sqlite3.Connection, label: str) -> sqlite3.Row:
     row = db.execute(
         """

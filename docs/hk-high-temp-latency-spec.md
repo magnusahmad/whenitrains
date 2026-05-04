@@ -145,6 +145,9 @@ Polling strategy:
   - automatic cadence discovery: when payload `LastModified` or HTTP `Last-Modified` reveals a new HKT minute-of-day, store that minute in `hko_source_update_minutes`; the scheduler adds those learned minutes as daily forecast polling windows
   - once the cadence is established, replace the interim 10-minute polling with precise update windows
 - Polymarket markets/orderbooks: monitor active target-day markets until the Hong Kong day ends.
+- Future market discovery: after OCF forecast ingestion, discover HK highest-temperature markets for every OCF forecast date at or after the current HKT date. Fetch orderbooks for all discovered active HK high-temperature outcomes.
+- Forecast-change trading can operate on future target-date markets when the OCF forecast high for that date changes and the corresponding market price is stale.
+- Since-midnight actual-cross trading remains current-day only. Actual-temperature invalidation and hold-to-maturity checks must only apply to positions whose market target date equals the current HKT date.
 - Resolution watcher: after the target day ends, check Polymarket once per day for final resolution.
 - Final Daily Extract: since resolution uses finalized data only, final settlement audit is separate from since-midnight trading signals.
 - Resolution-rule guard: every discovered HK highest-temperature event must include the expected HKO Daily Extract resolution wording. The first sentence date may vary, but the remainder must match the expected `Absolute Daily Max (deg. C)`, finalized Daily Extract, one-decimal precision, and no-post-finalization-revisions language. If the normalized text is missing or changed, print a critical terminal warning and persist a `risk_events` row before any trading decisions rely on that market.
