@@ -330,6 +330,7 @@ Scheduler defaults for the POC:
 - Use `paper-scheduler --verbose` to restore noisy output: every scheduler tick plus all orderbook bid/ask lines.
 - HKO source polling respects the in-window 10-second cadence; unchanged HKO payloads no longer print every scheduler tick.
 - Individual Polymarket CLOB orderbook fetch failures are logged as warnings and do not crash the scheduler.
+- Forecast-change and actual-cross trading events are keyed and processed once. Repeated scheduler ticks no longer create duplicate missed buys for the same HKO event; duplicate open-position attempts are logged as ignored rather than missed.
 - Use `reset-paper --yes` to clear paper orders, positions, decisions, and signals without deleting HKO snapshots, markets, or orderbooks.
 - Resolution: after the target day ends, check Polymarket once per day for final resolution.
 - Scheduler must use a single-process DB lock and dedupe unchanged HKO payload hashes.

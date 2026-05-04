@@ -147,6 +147,7 @@ def migrate(db: sqlite3.Connection) -> None:
             id integer primary key autoincrement,
             created_at_utc text,
             event_type text,
+            event_key text,
             outcome_id text,
             label text,
             side text,
@@ -157,6 +158,7 @@ def migrate(db: sqlite3.Connection) -> None:
         );
         """
     )
+    _add_column_if_missing(db, "paper_decisions", "event_key", "text")
     _add_column_if_missing(db, "hko_forecasts", "update_time", "text")
     _add_column_if_missing(
         db, "hko_forecasts", "parse_warning", "integer not null default 0"
@@ -515,16 +517,18 @@ def store_paper_decision(
     status: str,
     reason: str,
     details: dict | None = None,
+    event_key: str | None = None,
 ) -> None:
     db.execute(
         """
         insert into paper_decisions
-        (created_at_utc, event_type, outcome_id, label, side, action, status, reason, details_json)
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (created_at_utc, event_type, event_key, outcome_id, label, side, action, status, reason, details_json)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             datetime.now(timezone.utc).isoformat(),
             event_type,
+            event_key,
             outcome_id,
             label,
             side,
@@ -535,6 +539,20 @@ def store_paper_decision(
         ),
     )
     db.commit()
+
+
+def has_processed_event(db: sqlite3.Connection, event_key: str) -> bool:
+    return (
+        db.execute(
+            """
+            select 1 from paper_decisions
+            where event_key = ?
+            limit 1
+            """,
+            (event_key,),
+        ).fetchone()
+        is not None
+    )
 
 
 def latest_two_forecast_highs(db: sqlite3.Connection) -> list[sqlite3.Row]:

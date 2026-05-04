@@ -46,6 +46,25 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(decision["status"], "filled")
 
+    def test_forecast_change_event_is_processed_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_forecast(db, 28, "2026-05-04T00:45:00+08:00")
+            _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
+            _store_book_pair(db, "yes29", old_ask=0.40, new_ask=0.405)
+            _store_book_pair(db, "no29", old_ask=0.60, new_ask=0.60)
+
+            first = process_forecast_entries(db, date(2026, 5, 4))
+            second = process_forecast_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(first.buys_filled, 1)
+            self.assertEqual(second.buys_filled, 0)
+            self.assertEqual(second.buys_missed, 0)
+            buy_count = db.execute(
+                "select count(*) from paper_decisions where action = 'BUY'"
+            ).fetchone()[0]
+            self.assertEqual(buy_count, 1)
+
     def test_exit_loop_sells_on_timeout(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(Path(tmp) / "test.db")
@@ -132,6 +151,37 @@ class RunnerTests(unittest.TestCase):
                 "select net_shares from paper_positions where outcome_id = 'yes30'"
             ).fetchone()
             self.assertIsNotNone(position)
+
+    def test_actual_cross_event_is_processed_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m30",
+                        label="30°C or higher",
+                        predicate=parse_outcome_label("30°C or higher"),
+                        yes_token_id="yes30",
+                        no_token_id="no30",
+                    )
+                ],
+            )
+            _store_observation(db, 29.9)
+            _store_observation(db, 30.0)
+            _store_book_pair(db, "yes30", old_ask=0.40, new_ask=0.405)
+            _store_book_pair(db, "no30", old_ask=0.60, new_ask=0.60)
+
+            first = process_actual_entries(db, date(2026, 5, 4))
+            second = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(first.buys_filled, 1)
+            self.assertEqual(second.buys_filled, 0)
+            self.assertEqual(second.buys_missed, 0)
+            self.assertEqual(second.signals, 0)
+            buy_count = db.execute(
+                "select count(*) from paper_decisions where action = 'BUY'"
+            ).fetchone()[0]
+            self.assertEqual(buy_count, 1)
 
     def test_dashboard_reports_key_stats(self):
         with tempfile.TemporaryDirectory() as tmp:

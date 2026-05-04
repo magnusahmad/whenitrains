@@ -15,6 +15,7 @@ from .signals import DirectionalImpact, PriceResponse
 from .storage import (
     dashboard_stats,
     find_outcome_by_token,
+    has_processed_event,
     latest_orderbook,
     latest_two_forecast_highs,
     latest_two_observed_maxes,
@@ -62,6 +63,19 @@ def process_forecast_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerR
     new_high = float(new["forecast_max_c"])
     if old_high == new_high:
         return RunnerResult(notes=("forecast high unchanged",))
+    event_key = (
+        f"forecast_change:{today_hkt.isoformat()}:"
+        f"{old['id']}:{old_high}->{new['id']}:{new_high}"
+    )
+    if has_processed_event(db, event_key):
+        return RunnerResult(notes=("forecast change already processed",))
+    _mark_event_processed(
+        db,
+        event_type="forecast_change",
+        event_key=event_key,
+        reason=f"forecast high changed {old_high} -> {new_high}",
+        details={"old_high": old_high, "new_high": new_high},
+    )
 
     rows = list_outcomes_for_date(db, today_hkt.isoformat())
     outcomes = [_outcome_from_row(row) for row in rows]
@@ -80,6 +94,7 @@ def process_forecast_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerR
                 "missed",
                 "missing prior/current yes ask",
                 {"old_high": old_high, "new_high": new_high},
+                event_key=event_key,
             )
             continue
         current_yes_asks[row["polymarket_market_id"]] = float(prices[0]["best_ask"])
@@ -110,10 +125,10 @@ def process_forecast_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerR
     buys_filled = 0
     buys_missed = 0
     for candidate in candidates:
-        filled = _execute_candidate_buy(db, candidate)
-        if filled:
+        filled = _execute_candidate_buy(db, candidate, event_key=event_key)
+        if filled is True:
             buys_filled += 1
-        else:
+        elif filled is False:
             buys_missed += 1
     return RunnerResult(
         buys_filled=buys_filled,
@@ -132,6 +147,19 @@ def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerRes
     new_max = float(new["since_midnight_max_c"])
     if new_max <= old_max:
         return RunnerResult(notes=("observed max unchanged",))
+    event_key = (
+        f"actual_cross:{today_hkt.isoformat()}:"
+        f"{old['id']}:{old_max}->{new['id']}:{new_max}"
+    )
+    if has_processed_event(db, event_key):
+        return RunnerResult(notes=("actual max event already processed",))
+    _mark_event_processed(
+        db,
+        event_type="actual_cross",
+        event_key=event_key,
+        reason=f"observed max changed {old_max} -> {new_max}",
+        details={"old_max": old_max, "new_max": new_max},
+    )
 
     buys_filled = 0
     buys_missed = 0
@@ -155,6 +183,7 @@ def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerRes
                 "missed",
                 "missing prior/current yes ask",
                 {"old_max": old_max, "new_max": new_max},
+                event_key=event_key,
             )
             buys_missed += 1
             continue
@@ -171,6 +200,7 @@ def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerRes
                 "missed",
                 "price moved with actual cross",
                 {"old_max": old_max, "new_max": new_max, "prior_yes_ask": prior, "current_yes_ask": current},
+                event_key=event_key,
             )
             buys_missed += 1
             continue
@@ -183,9 +213,12 @@ def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerRes
             current_yes_ask=current,
             reason="actual max crossed settling threshold before price moved",
         )
-        if _execute_candidate_buy(db, candidate, event_type="actual_cross"):
+        filled = _execute_candidate_buy(
+            db, candidate, event_type="actual_cross", event_key=event_key
+        )
+        if filled is True:
             buys_filled += 1
-        else:
+        elif filled is False:
             buys_missed += 1
     return RunnerResult(
         buys_filled=buys_filled,
@@ -333,8 +366,11 @@ def render_dashboard(db: sqlite3.Connection) -> str:
 
 
 def _execute_candidate_buy(
-    db: sqlite3.Connection, candidate: TradeCandidate, event_type: str = "forecast_change"
-) -> bool:
+    db: sqlite3.Connection,
+    candidate: TradeCandidate,
+    event_type: str = "forecast_change",
+    event_key: str | None = None,
+) -> bool | None:
     side = "YES" if candidate.side == "BUY_YES" else "NO"
     token_id = candidate.outcome.yes_token_id if side == "YES" else candidate.outcome.no_token_id
     existing = db.execute(
@@ -349,10 +385,11 @@ def _execute_candidate_buy(
             candidate.outcome.label,
             side,
             "BUY",
-            "missed",
+            "ignored",
             "duplicate open position",
+            event_key=event_key,
         )
-        return False
+        return None
     try:
         book = latest_orderbook(db, token_id)
     except ValueError:
@@ -365,6 +402,7 @@ def _execute_candidate_buy(
             "BUY",
             "missed",
             "missing orderbook",
+            event_key=event_key,
         )
         return False
     result = execute_paper_buy(
@@ -391,8 +429,30 @@ def _execute_candidate_buy(
             "prior_yes_ask": candidate.prior_yes_ask,
             "current_yes_ask": candidate.current_yes_ask,
         },
+        event_key=event_key,
     )
     return result.status == "filled"
+
+
+def _mark_event_processed(
+    db: sqlite3.Connection,
+    event_type: str,
+    event_key: str,
+    reason: str,
+    details: dict,
+) -> None:
+    store_paper_decision(
+        db,
+        event_type,
+        None,
+        None,
+        None,
+        "EVENT",
+        "processed",
+        reason,
+        details,
+        event_key=event_key,
+    )
 
 
 def _outcome_from_row(row: sqlite3.Row) -> Outcome:
