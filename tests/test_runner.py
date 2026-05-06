@@ -3,7 +3,7 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from whenitrains.hko import HKT, HkoForecast, HkoObservation
+from whenitrains.hko import HKT, HkoForecast, HkoObservation, OcfForecastSample
 from whenitrains.markets import parse_outcome_label
 from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
 from whenitrains.runner import (
@@ -19,6 +19,7 @@ from whenitrains.storage import (
     migrate,
     store_hko_forecasts,
     store_hko_observation,
+    store_ocf_forecast_samples,
     store_orderbook,
     store_polymarket_event,
     store_raw_snapshot,
@@ -692,6 +693,85 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(decision["label"], "29°C")
             self.assertEqual(decision["side"], "YES")
 
+    def test_forecast_value_blocks_late_day_peak_bucket_buy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_threshold_risk_outcomes(),
+            )
+            _store_forecast(db, 29, "2026-05-04T15:11:53+08:00")
+            _store_late_peak_hourly_forecast(db, date(2026, 5, 4), 29.0)
+            _store_book_pair(db, "yes28", old_ask=0.60, new_ask=0.60)
+            _store_book_pair(db, "yes29", old_ask=0.20, new_ask=0.20)
+            _store_book_pair(db, "yes30", old_ask=0.10, new_ask=0.10)
+
+            result = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 0)
+            order_count = db.execute("select count(*) from paper_orders").fetchone()[0]
+            self.assertEqual(order_count, 0)
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'forecast_value'
+                  and action = 'BUY'
+                  and label = '29°C'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "ignored")
+            self.assertEqual(decision["reason"], "late-day forecast peak guard")
+
+    def test_exit_loop_sells_late_day_peak_bucket_position(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_threshold_risk_outcomes(),
+            )
+            from whenitrains.paper_db import execute_paper_buy
+
+            execute_paper_buy(
+                db,
+                token_id="yes29",
+                side="YES",
+                size_usd=100,
+                asks=[(0.20, 1000)],
+                max_order_usd=250,
+                reason="test",
+            )
+            _store_late_peak_hourly_forecast(db, date(2026, 5, 4), 29.0)
+            store_orderbook(
+                db,
+                "yes29",
+                OrderBook(
+                    "yes29",
+                    bids=[(0.18, 1000)],
+                    asks=[(0.20, 1000)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+
+            result = process_open_position_exits(db, today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(result.sells_filled, 1)
+            position = db.execute(
+                "select net_shares from paper_positions where outcome_id = 'yes29'"
+            ).fetchone()
+            self.assertEqual(position["net_shares"], 0)
+            decision = db.execute(
+                """
+                select reason
+                from paper_decisions
+                where event_type = 'exit_check' and action = 'SELL'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["reason"], "late-day forecast peak guard")
+
     def test_forecast_value_skips_when_favorite_is_above_non_top_forecast_bucket(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
@@ -1109,6 +1189,42 @@ def _store_book_pair(db, token_id: str, old_ask: float, new_ask: float):
         db,
         token_id,
         OrderBook(token_id, bids=[(new_ask - 0.02, 1000)], asks=[(new_ask, 1000)], tick_size=0.01, min_order_size=5),
+    )
+
+
+def _store_late_peak_hourly_forecast(db, forecast_date: date, peak: float):
+    snapshot = store_raw_snapshot(db, "hko", f"ocf-hourly-{forecast_date}", str(peak))
+    store_ocf_forecast_samples(
+        db,
+        snapshot.id,
+        [
+            OcfForecastSample(
+                forecast_date_hkt=forecast_date,
+                forecast_min_c=None,
+                forecast_max_c=int(peak),
+                raw_min_c=None,
+                raw_max_c=peak,
+                hourly_temperatures=[
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T18:00:00+08:00",
+                        "temperature_c": peak - 0.8,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T20:00:00+08:00",
+                        "temperature_c": peak - 0.4,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T21:00:00+08:00",
+                        "temperature_c": peak - 0.2,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T23:00:00+08:00",
+                        "temperature_c": peak,
+                    },
+                ],
+                raw={"LastModified": int(f"{forecast_date:%Y%m%d}151153")},
+            )
+        ],
     )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -610,6 +611,9 @@ def process_open_position_exits(
             float(latest_actual["since_midnight_max_c"]) if latest_actual else None
         )
         invalidated = _position_invalidated(outcome, side, actual_max_for_outcome)
+        late_day_guard = _late_day_forecast_guard_applies(
+            db, outcome["target_date_hkt"], outcome["label"], side
+        )
         hold_to_maturity = _position_can_hold_to_maturity(
             outcome, side, actual_max_for_outcome
         )
@@ -645,9 +649,13 @@ def process_open_position_exits(
             )
             sells_missed += 1
             continue
-        if not invalidated:
+        if not invalidated and not late_day_guard:
             continue
-        reason = "position invalidated by observed max"
+        reason = (
+            "late-day forecast peak guard"
+            if late_day_guard
+            else "position invalidated by observed max"
+        )
         result = execute_paper_sell(db, token_id, book.bids, reason)
         if result.status == "filled":
             store_paper_decision(
@@ -659,7 +667,11 @@ def process_open_position_exits(
                 "SELL",
                 "filled",
                 reason,
-                {"current_max": actual_max_for_outcome, "bid": book.best_bid},
+                {
+                    "current_max": actual_max_for_outcome,
+                    "bid": book.best_bid,
+                    "late_day_forecast_guard": late_day_guard,
+                },
             )
             sells_filled += 1
         else:
@@ -672,7 +684,11 @@ def process_open_position_exits(
                 "SELL",
                 "missed",
                 result.reason,
-                {"current_max": actual_max_for_outcome, "bid": book.best_bid},
+                {
+                    "current_max": actual_max_for_outcome,
+                    "bid": book.best_bid,
+                    "late_day_forecast_guard": late_day_guard,
+                },
             )
             sells_missed += 1
     return RunnerResult(sells_filled=sells_filled, sells_missed=sells_missed, notes=tuple(notes))
@@ -855,6 +871,25 @@ def _execute_candidate_buy(
 ) -> bool | None:
     side = "YES" if candidate.side == "BUY_YES" else "NO"
     token_id = candidate.outcome.yes_token_id if side == "YES" else candidate.outcome.no_token_id
+    outcome_row = find_outcome_by_token(db, token_id)
+    if (
+        outcome_row is not None
+        and _late_day_forecast_guard_applies(
+            db, outcome_row["target_date_hkt"], outcome_row["label"], side
+        )
+    ):
+        store_paper_decision(
+            db,
+            event_type,
+            token_id,
+            candidate.outcome.label,
+            side,
+            "BUY",
+            "ignored",
+            "late-day forecast peak guard",
+            event_key=event_key,
+        )
+        return None
     existing = db.execute(
         "select net_shares from paper_positions where outcome_id = ? and net_shares > 0",
         (token_id,),
@@ -969,6 +1004,82 @@ def _remaining_position_budget(db: sqlite3.Connection, token_id: str) -> float:
         return Settings.max_order_usd
     invested = float(position["net_shares"]) * float(position["avg_price"])
     return max(Settings.max_order_usd - invested, 0.0)
+
+
+def _late_day_forecast_guard_applies(
+    db: sqlite3.Connection,
+    target_date_hkt: str,
+    label: str,
+    side: str,
+    late_start_hour: int = 21,
+) -> bool:
+    if side != "YES":
+        return False
+    predicate = parse_outcome_label(label)
+    if predicate.value_c is None:
+        return False
+    bucket_floor = float(predicate.value_c)
+    rows = _latest_hourly_forecast_for_date(db, target_date_hkt)
+    if not rows:
+        return False
+
+    relevant: list[tuple[int, float]] = []
+    for item in rows:
+        hour_text = str(item.get("forecast_hour_hkt") or "")
+        if not hour_text.startswith(target_date_hkt) or len(hour_text) < 13:
+            continue
+        value = _as_float(item.get("temperature_c"))
+        if value is None:
+            continue
+        try:
+            hour = int(hour_text[11:13])
+        except ValueError:
+            continue
+        relevant.append((hour, value))
+    if not relevant:
+        return False
+
+    late_values = [value for hour, value in relevant if hour >= late_start_hour]
+    early_values = [value for hour, value in relevant if hour < late_start_hour]
+    if not late_values or not early_values:
+        return False
+
+    if max(late_values) < bucket_floor:
+        return False
+    if max(value for _, value in relevant) != max(late_values):
+        return False
+    return max(early_values) < bucket_floor
+
+
+def _latest_hourly_forecast_for_date(
+    db: sqlite3.Connection, target_date_hkt: str
+) -> list[dict]:
+    row = db.execute(
+        """
+        select hourly_temperatures_json
+        from ocf_forecast_samples
+        where forecast_date_hkt = ?
+          and hourly_temperatures_json is not null
+          and hourly_temperatures_json != '[]'
+        order by fetched_at_utc desc, id desc
+        limit 1
+        """,
+        (target_date_hkt,),
+    ).fetchone()
+    if row is None:
+        return []
+    try:
+        payload = json.loads(row["hourly_temperatures_json"] or "[]")
+    except json.JSONDecodeError:
+        return []
+    return payload if isinstance(payload, list) else []
+
+
+def _as_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _mark_event_processed(
