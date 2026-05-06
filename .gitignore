@@ -9,3 +9,4 @@ data/
 *.db
 .env
 .kill-switch
+whenitrains-runtime-state.tgz

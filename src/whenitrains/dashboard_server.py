@@ -90,6 +90,80 @@ def observation_series(
     return actual_max, current
 
 
+def hourly_forecast_series(db: sqlite3.Connection, target_date_hkt: str) -> list[dict]:
+    row = db.execute(
+        """
+        select hourly_temperatures_json
+        from ocf_forecast_samples
+        where forecast_date_hkt = ?
+          and hourly_temperatures_json is not null
+          and hourly_temperatures_json != '[]'
+        order by fetched_at_utc desc, id desc
+        limit 1
+        """,
+        (target_date_hkt,),
+    ).fetchone()
+    if row is None:
+        return []
+    try:
+        hourly = json.loads(row["hourly_temperatures_json"] or "[]")
+    except json.JSONDecodeError:
+        return []
+    points: dict[int, float] = {}
+    for item in hourly:
+        ts = _to_unix(item.get("forecast_hour_hkt"))
+        value = _optional_float(item.get("temperature_c"))
+        if ts is not None and value is not None:
+            points[ts] = value
+    return [{"time": ts, "value": value} for ts, value in sorted(points.items())]
+
+
+def hourly_actual_series(db: sqlite3.Connection, target_date_hkt: str) -> list[dict]:
+    rows = db.execute(
+        """
+        select observed_at_hkt, temperature_c, since_midnight_max_c
+        from hko_current_observations
+        where substr(observed_at_hkt, 1, 10) = ?
+          and (temperature_c is not null or since_midnight_max_c is not null)
+        order by observed_at_hkt asc, id asc
+        """,
+        (target_date_hkt,),
+    ).fetchall()
+    hourly_current: dict[int, float] = {}
+    hourly_max: dict[int, float] = {}
+    for row in rows:
+        try:
+            observed = datetime.fromisoformat(row["observed_at_hkt"]).astimezone(HKT)
+        except (TypeError, ValueError):
+            continue
+        hour = observed.replace(minute=0, second=0, microsecond=0)
+        ts = int(hour.timestamp())
+        if row["temperature_c"] is not None:
+            hourly_current[ts] = float(row["temperature_c"])
+        elif row["since_midnight_max_c"] is not None and ts not in hourly_current:
+            hourly_max[ts] = float(row["since_midnight_max_c"])
+    hourly = hourly_max | hourly_current
+    return [{"time": ts, "value": value} for ts, value in sorted(hourly.items())]
+
+
+def hourly_error_series(
+    hourly_forecast: list[dict], hourly_actual: list[dict]
+) -> list[dict]:
+    forecast_by_hour = {point["time"]: point["value"] for point in hourly_forecast}
+    return [
+        {"time": point["time"], "value": point["value"] - forecast_by_hour[point["time"]]}
+        for point in hourly_actual
+        if point["time"] in forecast_by_hour
+    ]
+
+
+def _optional_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def top_token_price_series(
     db: sqlite3.Connection,
     target_date_hkt: str,
@@ -271,6 +345,8 @@ def forecast_panel(
 ) -> dict:
     target_text = target_date.isoformat()
     actual_max, current = observation_series(db, target_text)
+    hourly_forecast = hourly_forecast_series(db, target_text) if lead_days == 0 else []
+    hourly_actual = hourly_actual_series(db, target_text) if lead_days == 0 else []
     top_tokens = top_token_price_series(
         db, target_text, token_side, limit=None, include_trade_tokens=True
     )
@@ -280,6 +356,9 @@ def forecast_panel(
         "forecast": forecast_series(db, target_text, exact_raw=lead_days == 0),
         "actual_max": actual_max if lead_days == 0 else [],
         "current_temp": current if lead_days == 0 else [],
+        "hourly_forecast": hourly_forecast,
+        "hourly_actual": hourly_actual,
+        "hourly_error": hourly_error_series(hourly_forecast, hourly_actual),
         "token_side": token_side.upper() if token_side.upper() in {"YES", "NO"} else "YES",
         "top_tokens": top_tokens,
         "top_yes": top_tokens if token_side.upper() == "YES" else [],
@@ -550,6 +629,21 @@ INDEX_HTML = r"""<!doctype html>
     color: var(--text);
     font-weight: 500;
   }
+  .chart-section h2 .legend [data-series-key] {
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    cursor: pointer;
+  }
+  .chart-section h2 .legend [data-series-key].off {
+    color: var(--muted);
+    opacity: 0.45;
+  }
   .chart-section h2 .legend i {
     width: 10px; height: 10px; border-radius: 2px; display: inline-block;
   }
@@ -659,9 +753,12 @@ INDEX_HTML = r"""<!doctype html>
     <h2>
       <span><span class="lead-label">D+0</span><span id="d0-date"></span></span>
       <span class="legend">
-        <span><i style="background:#f0b400"></i>OCF forecast high</span>
-        <span><i style="background:#26a69a"></i>Since-midnight max</span>
-        <span><i style="background:#5b9bd5"></i>Current temperature</span>
+        <button type="button" data-series-key="forecastHigh"><i style="background:#f0b400"></i>OCF forecast high</button>
+        <button type="button" data-series-key="hourlyForecast"><i style="background:#c084fc"></i>Hourly forecast</button>
+        <button type="button" data-series-key="hourlyActual"><i style="background:#f97316"></i>Hourly actual</button>
+        <button type="button" data-series-key="hourlyError"><i style="background:#94a3b8"></i>Actual - forecast</button>
+        <button type="button" data-series-key="actualMax"><i style="background:#26a69a"></i>Since-midnight max</button>
+        <button type="button" data-series-key="currentTemp"><i style="background:#5b9bd5"></i>Current temperature</button>
         <span id="d0-legend"></span>
       </span>
     </h2>
@@ -751,6 +848,22 @@ const d0ForecastSeries = charts[0].chart.addLineSeries({
   color: "#f0b400", lineWidth: 2, lineType: LightweightCharts.LineType.WithSteps,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
 });
+const d0HourlyForecastSeries = charts[0].chart.addLineSeries({
+  color: "#c084fc", lineWidth: 1, lineType: LightweightCharts.LineType.WithSteps,
+  priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
+  priceLineVisible: false,
+});
+const d0HourlyActualSeries = charts[0].chart.addLineSeries({
+  color: "#f97316", lineWidth: 2,
+  priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
+  priceLineVisible: false,
+});
+const d0HourlyErrorSeries = charts[0].chart.addHistogramSeries({
+  color: "#94a3b8",
+  priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
+  priceLineVisible: false,
+  base: 0,
+});
 const d0ActualMaxSeries = charts[0].chart.addLineSeries({
   color: "#26a69a", lineWidth: 2,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
@@ -801,12 +914,31 @@ const totalSeries = pnlChart.addLineSeries({
   color: "#f0b400", lineWidth: 2,
 });
 let d0ForecastData = [];
+let d0HourlyForecastData = [];
+let d0HourlyActualData = [];
+let d0HourlyErrorData = [];
 let d0ActualMaxData = [];
 let d0CurrentTempData = [];
 let realizedData = [];
 let unrealizedData = [];
 let totalData = [];
 let tokenSide = "YES";
+const seriesVisibility = {
+  forecastHigh: true,
+  hourlyForecast: true,
+  hourlyActual: true,
+  hourlyError: true,
+  actualMax: true,
+  currentTemp: true,
+};
+const d0SeriesByKey = {
+  forecastHigh: d0ForecastSeries,
+  hourlyForecast: d0HourlyForecastSeries,
+  hourlyActual: d0HourlyActualSeries,
+  hourlyError: d0HourlyErrorSeries,
+  actualMax: d0ActualMaxSeries,
+  currentTemp: d0CurrentTempSeries,
+};
 
 window.addEventListener("resize", () => {
   Object.values(charts).forEach(c => c.chart.timeScale().fitContent());
@@ -888,7 +1020,23 @@ function formatValue(value, kind) {
   if (value == null || Number.isNaN(value)) return "n/a";
   if (kind === "money") return fmtMoney(value);
   if (kind === "odds") return value.toFixed(3);
+  if (kind === "delta") return (value > 0 ? "+" : "") + value.toFixed(1) + "°C";
   return value.toFixed(1) + "°C";
+}
+
+function visibleData(key, data) {
+  return seriesVisibility[key] ? data : [];
+}
+
+function applySeriesVisibility() {
+  Object.entries(d0SeriesByKey).forEach(([key, series]) => {
+    series.applyOptions({ visible: seriesVisibility[key] });
+  });
+  document.querySelectorAll("[data-series-key]").forEach((button) => {
+    const key = button.dataset.seriesKey;
+    button.classList.toggle("off", !seriesVisibility[key]);
+    button.setAttribute("aria-pressed", seriesVisibility[key] ? "true" : "false");
+  });
 }
 
 function nearestTrade(trades, time) {
@@ -1026,9 +1174,12 @@ function attachTooltip(chart, containerId, descriptorsFn) {
 }
 
 attachTooltip(charts[0].chart, "d0-chart", () => [
-  { name: "OCF forecast high", color: "#f0b400", kind: "temp", data: d0ForecastData },
-  { name: "Since-midnight max", color: "#26a69a", kind: "temp", data: d0ActualMaxData },
-  { name: "Current temperature", color: "#5b9bd5", kind: "temp", data: d0CurrentTempData },
+  { name: "OCF forecast high", color: "#f0b400", kind: "temp", data: visibleData("forecastHigh", d0ForecastData) },
+  { name: "Hourly forecast", color: "#c084fc", kind: "temp", data: visibleData("hourlyForecast", d0HourlyForecastData) },
+  { name: "Hourly actual", color: "#f97316", kind: "temp", data: visibleData("hourlyActual", d0HourlyActualData) },
+  { name: "Actual - forecast", color: "#94a3b8", kind: "delta", data: visibleData("hourlyError", d0HourlyErrorData) },
+  { name: "Since-midnight max", color: "#26a69a", kind: "temp", data: visibleData("actualMax", d0ActualMaxData) },
+  { name: "Current temperature", color: "#5b9bd5", kind: "temp", data: visibleData("currentTemp", d0CurrentTempData) },
   ...charts[0].series.map(s => ({ name: s.name, color: s.color, kind: "odds", data: s.data, markers: s.markers })),
 ]);
 attachTooltip(charts[1].chart, "d1-chart", () =>
@@ -1052,9 +1203,15 @@ function renderLeadPanel(panel) {
   if (lead === 0) {
     resetLeadChart(0);
     d0ForecastData = panel.forecast;
+    d0HourlyForecastData = panel.hourly_forecast || [];
+    d0HourlyActualData = panel.hourly_actual || [];
+    d0HourlyErrorData = panel.hourly_error || [];
     d0ActualMaxData = panel.actual_max;
     d0CurrentTempData = panel.current_temp;
     d0ForecastSeries.setData(d0ForecastData);
+    d0HourlyForecastSeries.setData(d0HourlyForecastData);
+    d0HourlyActualSeries.setData(d0HourlyActualData);
+    d0HourlyErrorSeries.setData(d0HourlyErrorData);
     d0ActualMaxSeries.setData(d0ActualMaxData);
     d0CurrentTempSeries.setData(d0CurrentTempData);
     const legend = [];
@@ -1073,7 +1230,7 @@ function renderLeadPanel(panel) {
       legend.push(`<span><i style="background:${color}"></i>${item.label} ${item.side} (${item.latest_price.toFixed(2)})</span>`);
     });
     document.getElementById("d0-legend").innerHTML = legend.join("");
-    if (panel.forecast.length || panel.actual_max.length || panel.current_temp.length || panel.top_tokens.some(s => s.points.length)) {
+    if (panel.forecast.length || d0HourlyForecastData.length || d0HourlyActualData.length || panel.actual_max.length || panel.current_temp.length || panel.top_tokens.some(s => s.points.length)) {
       charts[0].chart.timeScale().fitContent();
     }
     return;
@@ -1143,7 +1300,15 @@ document.getElementById("token-side").addEventListener("change", (event) => {
   tokenSide = event.target.value === "NO" ? "NO" : "YES";
   loadAll();
 });
+document.querySelectorAll("[data-series-key]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const key = button.dataset.seriesKey;
+    seriesVisibility[key] = !seriesVisibility[key];
+    applySeriesVisibility();
+  });
+});
 
+applySeriesVisibility();
 loadAll();
 setInterval(() => loadAll(), 15000);
 </script>

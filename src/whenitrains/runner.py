@@ -106,7 +106,7 @@ def process_forecast_entries(
         )
     event_key = (
         f"forecast_change:{target_date.isoformat()}:"
-        f"{old['id']}:{old_high}->{new['id']}:{new_high}"
+        f"{old['update_time']}:{old_high}->{new['update_time']}:{new_high}"
     )
     if has_processed_event(db, event_key):
         return _merge_runner_results(
@@ -873,7 +873,7 @@ def _execute_candidate_buy(
         )
         return None
     requested_size = Settings.max_order_usd if size_usd is None else size_usd
-    if requested_size <= 0:
+    if requested_size <= Settings.dust_order_epsilon_usd:
         store_paper_decision(
             db,
             event_type,
@@ -921,6 +921,14 @@ def _execute_candidate_buy(
             event_key=event_key,
         )
         return False
+    dynamic_max_buy_price = max_buy_price
+    if book.best_ask is not None:
+        slippage_cap = book.best_ask + Settings.max_entry_limit_slippage
+        dynamic_max_buy_price = (
+            slippage_cap
+            if dynamic_max_buy_price is None
+            else min(dynamic_max_buy_price, slippage_cap)
+        )
     result = execute_paper_buy(
         db,
         token_id=token_id,
@@ -929,7 +937,8 @@ def _execute_candidate_buy(
         asks=book.asks,
         max_order_usd=Settings.max_order_usd,
         reason=candidate.reason,
-        max_price=max_buy_price,
+        max_price=dynamic_max_buy_price,
+        min_fill_usd=min(requested_size, Settings.min_entry_fill_usd),
     )
     status = "filled" if result.status == "filled" else "missed"
     store_paper_decision(

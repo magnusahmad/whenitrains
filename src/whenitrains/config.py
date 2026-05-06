@@ -14,5 +14,8 @@ class Settings:
     max_entry_price: float = 0.98
     forecast_change_max_price_move: float = 0.20
     forecast_change_max_entry_price: float = 0.70
+    max_entry_limit_slippage: float = 0.05
+    min_entry_fill_usd: float = 25.0
+    dust_order_epsilon_usd: float = 0.01
     forecast_value_max_yes_ask: float = 0.30
     forecast_value_max_lead_days: int = 1

@@ -56,6 +56,20 @@ class PaperDbTests(unittest.TestCase):
         self.assertAlmostEqual(entry.estimated_cost_usd, 30.0)
         self.assertAlmostEqual(entry.estimated_shares, 100.0)
 
+    def test_calculate_entry_rejects_tiny_partial_fill_inside_cap(self):
+        asks = [(0.30, 10), (0.60, 1000)]
+        entry = calculate_entry(
+            "yes",
+            250,
+            asks,
+            max_order_usd=250,
+            max_price=0.30,
+            min_fill_usd=25,
+        )
+
+        self.assertEqual(entry.status, "rejected")
+        self.assertEqual(entry.reason, "insufficient ask depth within slippage cap")
+
     def test_paper_buy_and_sell_persist_position_and_pnl(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

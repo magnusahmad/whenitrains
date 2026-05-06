@@ -52,6 +52,7 @@ def calculate_entry(
     asks: list[tuple[float, float]],
     max_order_usd: float,
     max_price: float | None = None,
+    min_fill_usd: float = 0.0,
 ) -> EntryQuote:
     if size_usd > max_order_usd:
         return EntryQuote(
@@ -78,6 +79,18 @@ def calculate_entry(
         return EntryQuote(
             "rejected", token_id, "BUY", size_usd, None, None, 0, 0, reason
         )
+    if spent < min_fill_usd:
+        return EntryQuote(
+            "rejected",
+            token_id,
+            "BUY",
+            size_usd,
+            limit_price,
+            spent / shares,
+            shares,
+            spent,
+            "insufficient ask depth within slippage cap",
+        )
     return EntryQuote(
         "fillable",
         token_id,
@@ -100,8 +113,16 @@ def execute_paper_buy(
     max_order_usd: float,
     reason: str,
     max_price: float | None = None,
+    min_fill_usd: float = 0.0,
 ) -> PersistedPaperResult:
-    quote = calculate_entry(token_id, size_usd, asks, max_order_usd, max_price=max_price)
+    quote = calculate_entry(
+        token_id,
+        size_usd,
+        asks,
+        max_order_usd,
+        max_price=max_price,
+        min_fill_usd=min_fill_usd,
+    )
     if quote.status != "fillable":
         store_paper_order_result(
             db, token_id, f"BUY_{side}", None, size_usd, None, 0, "rejected", quote.reason

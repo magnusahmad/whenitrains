@@ -6,17 +6,28 @@ from pathlib import Path
 from whenitrains.dashboard_server import (
     INDEX_HTML,
     forecast_panels,
+    hourly_actual_series,
+    hourly_error_series,
+    hourly_forecast_series,
     top_token_price_series,
     top_yes_price_series,
 )
-from whenitrains.hko import HKT, HkoForecast, HkoObservation
+from whenitrains.hko import (
+    HKT,
+    HkoCurrentTemperature,
+    HkoForecast,
+    HkoObservation,
+    OcfForecastSample,
+)
 from whenitrains.markets import parse_outcome_label
 from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
 from whenitrains.storage import (
     connect,
     migrate,
     store_hko_forecasts,
+    store_hko_current_temperature,
     store_hko_observation,
+    store_ocf_forecast_samples,
     store_orderbook,
     store_paper_order_result,
     store_polymarket_event,
@@ -134,6 +145,79 @@ class DashboardServerTests(unittest.TestCase):
             no_payload = forecast_panels(db, today=date(2026, 5, 5), token_side="NO")
             self.assertEqual(no_payload["token_side"], "NO")
 
+    def test_d0_panel_includes_hourly_forecast_actual_and_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            snapshot = store_raw_snapshot(db, "hko", "ocf", "{}")
+            store_ocf_forecast_samples(
+                db,
+                snapshot.id,
+                [
+                    OcfForecastSample(
+                        forecast_date_hkt=date(2026, 5, 6),
+                        forecast_min_c=23,
+                        forecast_max_c=25,
+                        raw_min_c=23.0,
+                        raw_max_c=25.0,
+                        hourly_temperatures=[
+                            {
+                                "forecast_hour_hkt": "2026-05-06T13:00:00+08:00",
+                                "temperature_c": 24,
+                            },
+                            {
+                                "forecast_hour_hkt": "2026-05-06T14:00:00+08:00",
+                                "temperature_c": 25,
+                            },
+                        ],
+                        raw={"LastModified": 20260506121145},
+                    )
+                ],
+            )
+            actual_snapshot = store_raw_snapshot(db, "hko", "rhrread", "{}")
+            store_hko_current_temperature(
+                db,
+                actual_snapshot.id,
+                HkoCurrentTemperature(
+                    observed_at_hkt=datetime(2026, 5, 6, 13, 40, tzinfo=HKT),
+                    station="Hong Kong Observatory",
+                    temperature_c=24.6,
+                    raw={},
+                ),
+            )
+
+            panel = forecast_panels(db, today=date(2026, 5, 6))["panels"][0]
+
+            self.assertEqual(panel["hourly_forecast"][0]["value"], 24.0)
+            self.assertEqual(panel["hourly_actual"][0]["value"], 24.6)
+            self.assertAlmostEqual(panel["hourly_error"][0]["value"], 0.6)
+            self.assertEqual(hourly_forecast_series(db, "2026-05-06")[1]["value"], 25.0)
+            actual = hourly_actual_series(db, "2026-05-06")
+            self.assertEqual(actual[0]["value"], 24.6)
+            self.assertAlmostEqual(
+                hourly_error_series(panel["hourly_forecast"], actual)[0]["value"],
+                0.6,
+            )
+
+    def test_hourly_actual_falls_back_to_since_midnight_max(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            snapshot = store_raw_snapshot(db, "hko", "obs", "{}")
+            store_hko_observation(
+                db,
+                snapshot.id,
+                HkoObservation(
+                    observed_at_hkt=datetime(2026, 5, 6, 13, 50, tzinfo=HKT),
+                    station="HK Observatory",
+                    since_midnight_max_c=24.6,
+                    since_midnight_min_c=21.6,
+                    raw={},
+                ),
+            )
+
+            actual = hourly_actual_series(db, "2026-05-06")
+
+            self.assertEqual(actual[0]["value"], 24.6)
+
     def test_forecast_panels_limit_tradeable_tokens_but_force_include_trades(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_dashboard_db(Path(tmp) / "test.db")
@@ -211,6 +295,13 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("nearestTrade(d.markers, param.time)", INDEX_HTML)
         self.assertIn('/api/forecast-panels?side=${encodeURIComponent(tokenSide)}', INDEX_HTML)
         self.assertIn('"#ffb74d", "#4dd0e1"', INDEX_HTML)
+        self.assertIn("Hourly forecast", INDEX_HTML)
+        self.assertIn("Actual - forecast", INDEX_HTML)
+        self.assertIn("d0HourlyForecastSeries.setData", INDEX_HTML)
+        self.assertIn("d0HourlyErrorSeries.setData", INDEX_HTML)
+        self.assertIn('data-series-key="hourlyActual"', INDEX_HTML)
+        self.assertIn("applySeriesVisibility", INDEX_HTML)
+        self.assertIn("seriesVisibility[key] = !seriesVisibility[key]", INDEX_HTML)
         self.assertIn("mouseWheel: false", INDEX_HTML)
         self.assertIn("pressedMouseMove: true", INDEX_HTML)
         self.assertIn("charts[lead].chart.removeSeries(s.series)", INDEX_HTML)

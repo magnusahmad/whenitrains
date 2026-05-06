@@ -77,6 +77,56 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(order["simulated_fill_price"], 0.60)
 
+    def test_forecast_change_does_not_sweep_far_above_top_ask(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_forecast(db, 28, "2026-05-04T00:45:00+08:00")
+            _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
+            store_orderbook(
+                db,
+                "yes29",
+                OrderBook(
+                    "yes29",
+                    bids=[(0.23, 1000)],
+                    asks=[(0.24, 1000)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            store_orderbook(
+                db,
+                "yes29",
+                OrderBook(
+                    "yes29",
+                    bids=[(0.23, 1000)],
+                    asks=[
+                        (0.25, 63),
+                        (0.26, 43),
+                        (0.27, 14.68),
+                        (0.28, 5),
+                        (0.29, 43),
+                        (0.30, 5),
+                        (0.55, 200),
+                    ],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+
+            result = process_forecast_entries(db, date(2026, 5, 4), today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 1)
+            order = db.execute(
+                """
+                select limit_price, simulated_fill_size_usd
+                from paper_orders
+                where status = 'filled'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertAlmostEqual(order["limit_price"], 0.30)
+            self.assertLess(order["simulated_fill_size_usd"], 250.0)
+
     def test_forecast_change_skips_near_settled_repriced_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
@@ -119,6 +169,24 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(first.buys_filled, 1)
             self.assertEqual(second.buys_filled, 0)
             self.assertEqual(second.buys_missed, 0)
+            buy_count = db.execute(
+                "select count(*) from paper_decisions where action = 'BUY'"
+            ).fetchone()[0]
+            self.assertEqual(buy_count, 1)
+
+    def test_forecast_change_duplicate_hko_update_is_processed_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_forecast(db, 28, "2026-05-04T00:45:00+08:00")
+            _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
+            _store_book_pair(db, "yes29", old_ask=0.40, new_ask=0.405)
+
+            first = process_forecast_entries(db, date(2026, 5, 4), today_hkt=date(2026, 5, 4))
+            _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
+            second = process_forecast_entries(db, date(2026, 5, 4), today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(first.buys_filled, 1)
+            self.assertEqual(second.buys_filled, 0)
             buy_count = db.execute(
                 "select count(*) from paper_decisions where action = 'BUY'"
             ).fetchone()[0]
@@ -825,6 +893,48 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(filled_orders[0], 2)
             self.assertAlmostEqual(filled_orders[1], 250.0)
+
+    def test_forecast_value_ignores_floating_point_dust_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_threshold_risk_outcomes(),
+            )
+            _store_forecast(db, 29, "2026-05-05T09:11:53+08:00")
+            _store_book_pair(db, "yes28", old_ask=0.60, new_ask=0.60)
+            _store_book_pair(db, "yes29", old_ask=0.30, new_ask=0.30)
+            _store_book_pair(db, "yes30", old_ask=0.10, new_ask=0.10)
+            db.execute(
+                """
+                insert into paper_positions
+                (outcome_id, net_shares, avg_price, realized_pnl, updated_at_utc)
+                values (?, ?, ?, 0, ?)
+                """,
+                (
+                    "yes29",
+                    833.3333333333333,
+                    0.29999999999999993,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            db.commit()
+
+            result = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 0)
+            order_count = db.execute("select count(*) from paper_orders").fetchone()[0]
+            self.assertEqual(order_count, 0)
+            decision = db.execute(
+                """
+                select status, reason from paper_decisions
+                where action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "ignored")
+            self.assertEqual(decision["reason"], "position budget reached")
 
     def test_flw_forecasts_do_not_trigger_active_forecast_trading(self):
         with tempfile.TemporaryDirectory() as tmp:
