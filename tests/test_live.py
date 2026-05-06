@@ -9,6 +9,7 @@ from whenitrains.live import (
     execute_live_buy,
     execute_live_sell,
     load_live_config,
+    preflight_live,
 )
 from whenitrains.storage import (
     connect,
@@ -58,6 +59,17 @@ class StrictBalanceClient:
             raise AttributeError("params missing signature_type")
         self.params.append(params)
         return {"balance": "5000000", "allowance": "1"}
+
+
+class TimeoutPreflightClient:
+    def signer_address(self):
+        return "0xsigner"
+
+    def balance_usd(self):
+        raise RuntimeError("timeout")
+
+    def allowance_ok(self):
+        raise RuntimeError("timeout")
 
 
 class LiveTests(unittest.TestCase):
@@ -127,6 +139,25 @@ class LiveTests(unittest.TestCase):
         self.assertAlmostEqual(client.balance_usd(), 5.0)
         self.assertTrue(client.allowance_ok())
         self.assertEqual(len(client._client.params), 2)
+
+    def test_preflight_returns_failure_instead_of_raising_on_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            config = LiveConfig(
+                trading_mode="live",
+                private_key="0xabc",
+                signature_type=2,
+                funder_address="0xfunder",
+                api_key="api",
+                api_secret="secret",
+                api_passphrase="passphrase",
+            )
+
+            result = preflight_live(db, TimeoutPreflightClient(), config)
+
+            self.assertFalse(result.ok)
+            self.assertIn("balance/allowance check failed", result.reason)
 
     def test_execute_live_buy_blocks_when_kill_switch_enabled(self):
         with tempfile.TemporaryDirectory() as tmp:

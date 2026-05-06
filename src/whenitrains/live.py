@@ -118,20 +118,28 @@ class PolymarketClobClient:
         return getattr(self._client, "get_address", lambda: None)()
 
     def balance_usd(self) -> float | None:
-        if hasattr(self._client, "get_balance_allowance"):
-            result = self._client.get_balance_allowance(self._collateral_params())
+        result = self._balance_allowance()
+        if result is not None:
             for key in ("balance", "usdc", "available"):
                 if key in result:
                     return _usdc_amount(result[key])
         return None
 
     def allowance_ok(self) -> bool:
-        if hasattr(self._client, "get_balance_allowance"):
-            result = self._client.get_balance_allowance(self._collateral_params())
+        result = self._balance_allowance()
+        if result is not None:
             allowance = result.get("allowance")
             if allowance is not None:
                 return float(allowance) > 0
         return True
+
+    def balance_allowance(self) -> dict | None:
+        return self._balance_allowance()
+
+    def _balance_allowance(self) -> dict | None:
+        if hasattr(self._client, "get_balance_allowance"):
+            return self._client.get_balance_allowance(self._collateral_params())
+        return None
 
     def _collateral_params(self):
         try:
@@ -272,8 +280,23 @@ def preflight_live(
         return LivePreflightResult(
             False, client.signer_address(), config.funder_address, None, False, "entries blocked"
         )
-    balance = client.balance_usd()
-    allowance_ok = client.allowance_ok()
+    try:
+        if hasattr(client, "balance_allowance"):
+            payload = client.balance_allowance()
+            balance = _balance_from_payload(payload)
+            allowance_ok = _allowance_ok_from_payload(payload)
+        else:
+            balance = client.balance_usd()
+            allowance_ok = client.allowance_ok()
+    except Exception as exc:
+        return LivePreflightResult(
+            False,
+            client.signer_address(),
+            config.funder_address,
+            None,
+            False,
+            f"balance/allowance check failed: {type(exc).__name__}",
+        )
     if balance is not None and balance < Settings.live_manual_order_cap_usd:
         return LivePreflightResult(
             False, client.signer_address(), config.funder_address, balance, allowance_ok, "insufficient balance"
@@ -608,3 +631,21 @@ def _usdc_amount(value) -> float:
     if amount >= 1_000_000:
         return amount / 1_000_000
     return amount
+
+
+def _balance_from_payload(payload: dict | None) -> float | None:
+    if payload is None:
+        return None
+    for key in ("balance", "usdc", "available"):
+        if key in payload:
+            return _usdc_amount(payload[key])
+    return None
+
+
+def _allowance_ok_from_payload(payload: dict | None) -> bool:
+    if payload is None:
+        return True
+    allowance = payload.get("allowance")
+    if allowance is None:
+        return True
+    return float(allowance) > 0
