@@ -93,20 +93,10 @@ def active_paper_positions(db: sqlite3.Connection) -> dict[str, dict]:
 def dashboard_stats(db: sqlite3.Connection) -> dict:
     _ensure_paper_order_exclusions(db)
     today_hkt = datetime.now(HKT).date().isoformat()
-    row = db.execute(
-        """
-        select forecast_date_hkt, forecast_max_c, update_time, parse_warning
-        from hko_forecasts
-        where source_type = 'ocf_station'
-          and forecast_date_hkt = ?
-        order by id desc
-        limit 1
-        """,
-        (today_hkt,),
-    ).fetchone()
+    forecast = latest_decimal_forecast_stats(db, today_hkt)
     obs = db.execute(
         """
-        select observed_at_hkt, since_midnight_max_c
+        select observed_at_hkt, since_midnight_min_c, since_midnight_max_c, temperature_c
         from hko_current_observations
         order by id desc
         limit 1
@@ -165,7 +155,7 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
         bid = _latest_bid(db, str(pos["outcome_id"])) or 0.0
         executable_unrealized += shares * (bid - avg_price)
     return {
-        "latest_forecast": dict(row) if row else None,
+        "latest_forecast": forecast,
         "latest_observation": dict(obs) if obs else None,
         "counts": counts,
         "open_positions": open_positions,
@@ -174,6 +164,84 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
         "total_profit": realized + executable_unrealized,
         "worst_case_open_loss": worst_case_open_loss,
     }
+
+
+def latest_decimal_forecast_stats(
+    db: sqlite3.Connection, forecast_date_hkt: str
+) -> dict | None:
+    row = db.execute(
+        """
+        select forecast_date_hkt, fetched_at_utc, raw_min_c, raw_max_c,
+               forecast_min_c, forecast_max_c, hourly_temperatures_json,
+               raw_daily_forecast
+        from ocf_forecast_samples
+        where forecast_date_hkt = ?
+        order by fetched_at_utc desc, id desc
+        limit 1
+        """,
+        (forecast_date_hkt,),
+    ).fetchone()
+    if row is None:
+        fallback = db.execute(
+            """
+            select forecast_date_hkt, forecast_min_c, forecast_max_c, update_time, parse_warning
+            from hko_forecasts
+            where source_type = 'ocf_station'
+              and forecast_date_hkt = ?
+            order by id desc
+            limit 1
+            """,
+            (forecast_date_hkt,),
+        ).fetchone()
+        return dict(fallback) if fallback else None
+
+    hourly_values = _hourly_values_from_json(
+        row["forecast_date_hkt"], row["hourly_temperatures_json"]
+    )
+    forecast_high = max(hourly_values) if hourly_values else _optional_float(row["raw_max_c"])
+    forecast_low = min(hourly_values) if hourly_values else _optional_float(row["raw_min_c"])
+    return {
+        "forecast_date_hkt": row["forecast_date_hkt"],
+        "forecast_min_c": forecast_low,
+        "forecast_max_c": forecast_high,
+        "display_forecast_min_c": row["forecast_min_c"],
+        "display_forecast_max_c": row["forecast_max_c"],
+        "update_time": _forecast_sample_update_time(row),
+        "fetched_at_utc": row["fetched_at_utc"],
+        "parse_warning": 0,
+    }
+
+
+def _hourly_values_from_json(
+    target_date_hkt: str, hourly_temperatures_json: str | None
+) -> list[float]:
+    try:
+        rows = json.loads(hourly_temperatures_json or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(rows, list):
+        return []
+    values = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        hour_text = str(item.get("forecast_hour_hkt") or "")
+        if not hour_text.startswith(target_date_hkt):
+            continue
+        value = _optional_float(item.get("temperature_c"))
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _forecast_sample_update_time(row: sqlite3.Row) -> str | None:
+    try:
+        raw = json.loads(row["raw_daily_forecast"] or "{}")
+    except json.JSONDecodeError:
+        raw = {}
+    if isinstance(raw, dict) and raw.get("LastModified"):
+        return str(raw["LastModified"])
+    return row["fetched_at_utc"]
 
 
 def forecast_series(
@@ -1469,7 +1537,9 @@ function renderStats(stats) {
   const cells = [
     { label: "Forecast date",       value: f.forecast_date_hkt || "n/a" },
     { label: "Forecast high (°C)",  value: f.forecast_max_c != null ? f.forecast_max_c.toFixed(1) : "n/a" },
+    { label: "Forecast low (°C)",   value: f.forecast_min_c != null ? f.forecast_min_c.toFixed(1) : "n/a" },
     { label: "Forecast updated",    value: f.update_time ? f.update_time.slice(11,16) + " HKT" : "n/a" },
+    { label: "Since-midnight min",  value: o.since_midnight_min_c != null ? o.since_midnight_min_c.toFixed(1) + "°C" : (o.temperature_c != null ? o.temperature_c.toFixed(1) + "°C (cur)" : "n/a") },
     { label: "Since-midnight max",  value: o.since_midnight_max_c != null ? o.since_midnight_max_c.toFixed(1) + "°C" : (o.temperature_c != null ? o.temperature_c.toFixed(1) + "°C (cur)" : "n/a") },
     { label: "Observed at",         value: o.observed_at_hkt ? o.observed_at_hkt.slice(11,16) + " HKT" : "n/a" },
     { label: "Open positions",      value: String(stats.open_positions ?? 0), drilldown: "open" },

@@ -14,6 +14,7 @@ from whenitrains.dashboard_server import (
     pnl_series,
     top_token_price_series,
     top_yes_price_series,
+    latest_decimal_forecast_stats,
 )
 from whenitrains.hko import (
     HKT,
@@ -200,6 +201,64 @@ class DashboardServerTests(unittest.TestCase):
                 hourly_error_series(panel["hourly_forecast"], actual)[0]["value"],
                 0.6,
             )
+
+    def test_dashboard_stats_use_decimal_forecast_high_and_low(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            target = date(2026, 5, 6)
+            snapshot = store_raw_snapshot(db, "hko", "ocf", "{}")
+            store_ocf_forecast_samples(
+                db,
+                snapshot.id,
+                [
+                    OcfForecastSample(
+                        forecast_date_hkt=target,
+                        forecast_min_c=23,
+                        forecast_max_c=26,
+                        raw_min_c=22.6,
+                        raw_max_c=25.6,
+                        hourly_temperatures=[
+                            {
+                                "forecast_hour_hkt": "2026-05-06T06:00:00+08:00",
+                                "temperature_c": 22.4,
+                            },
+                            {
+                                "forecast_hour_hkt": "2026-05-06T14:00:00+08:00",
+                                "temperature_c": 25.7,
+                            },
+                        ],
+                        raw={"LastModified": "2026-05-06T12:11:45+08:00"},
+                    )
+                ],
+            )
+
+            forecast = latest_decimal_forecast_stats(db, target.isoformat())
+
+            self.assertEqual(forecast["forecast_min_c"], 22.4)
+            self.assertEqual(forecast["forecast_max_c"], 25.7)
+            self.assertEqual(forecast["display_forecast_min_c"], 23)
+            self.assertEqual(forecast["display_forecast_max_c"], 26)
+
+    def test_dashboard_stats_include_since_midnight_min(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            snapshot = store_raw_snapshot(db, "hko", "obs", "{}")
+            store_hko_observation(
+                db,
+                snapshot.id,
+                HkoObservation(
+                    observed_at_hkt=datetime(2026, 5, 6, 13, 50, tzinfo=HKT),
+                    station="HK Observatory",
+                    since_midnight_min_c=21.6,
+                    since_midnight_max_c=24.6,
+                    raw={},
+                ),
+            )
+
+            stats = dashboard_stats(db)
+
+            self.assertEqual(stats["latest_observation"]["since_midnight_min_c"], 21.6)
+            self.assertEqual(stats["latest_observation"]["since_midnight_max_c"], 24.6)
 
     def test_hourly_actual_ignores_since_midnight_max_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -479,6 +538,8 @@ class DashboardServerTests(unittest.TestCase):
 
     def test_dashboard_html_has_delayed_crosshair_tooltip(self):
         self.assertIn('id="chart-tooltip"', INDEX_HTML)
+        self.assertIn('Forecast low (°C)', INDEX_HTML)
+        self.assertIn('Since-midnight min', INDEX_HTML)
         self.assertIn("setTimeout(() => showTooltip(tooltipState), 1000)", INDEX_HTML)
         self.assertIn("chart.subscribeCrosshairMove", INDEX_HTML)
         self.assertIn("function chartValueAt(points, time)", INDEX_HTML)
