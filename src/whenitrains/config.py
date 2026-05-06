@@ -14,8 +14,16 @@ class Settings:
     max_entry_price: float = 0.98
     forecast_change_max_price_move: float = 0.20
     forecast_change_max_entry_price: float = 0.70
+    forecast_change_d2_max_entry_price: float = 0.20
     max_entry_limit_slippage: float = 0.05
     min_entry_fill_usd: float = 25.0
     dust_order_epsilon_usd: float = 0.01
     forecast_value_max_yes_ask: float = 0.30
     forecast_value_max_lead_days: int = 1
+    live_manual_order_cap_usd: float = 5.0
+    live_scheduler_order_cap_usd: float = 20.0
+    live_total_open_exposure_cap_usd: float = 200.0
+    live_daily_realized_loss_cap_usd: float = 200.0
+    live_keychain_service: str = "whenitrains-polymarket"
+    live_keychain_account: str = "bot-private-key"
+    live_kill_switch_path: Path = Path("data/KILL_SWITCH")

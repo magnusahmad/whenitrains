@@ -8,7 +8,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .hko import HKT
-from .storage import connect, dashboard_stats
+from .storage import connect, live_dashboard_stats
+
+
+ACTIVE_PAPER_ORDER_FILTER = """
+not exists (
+    select 1 from paper_order_exclusions poe where poe.order_id = po.id
+)
+"""
 
 
 def _to_unix(iso_ts: str | None) -> int | None:
@@ -18,6 +25,155 @@ def _to_unix(iso_ts: str | None) -> int | None:
         return int(datetime.fromisoformat(iso_ts).timestamp())
     except ValueError:
         return None
+
+
+def _to_hkt_display(iso_ts: str | None) -> str | None:
+    if not iso_ts:
+        return None
+    try:
+        return datetime.fromisoformat(iso_ts).astimezone(HKT).strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return iso_ts
+
+
+def _ensure_paper_order_exclusions(db: sqlite3.Connection) -> None:
+    db.execute(
+        """
+        create table if not exists paper_order_exclusions (
+            order_id integer primary key,
+            tag text not null,
+            reason text not null,
+            created_at_utc text not null
+        )
+        """
+    )
+
+
+def active_paper_positions(db: sqlite3.Connection) -> dict[str, dict]:
+    _ensure_paper_order_exclusions(db)
+    orders = db.execute(
+        f"""
+        select po.id, po.outcome_id, po.side, po.simulated_fill_price,
+               po.simulated_fill_size_usd
+        from paper_orders po
+        where po.status = 'filled'
+          and po.simulated_fill_price is not null
+          and po.simulated_fill_size_usd is not null
+          and {ACTIVE_PAPER_ORDER_FILTER}
+        order by po.created_at_utc asc, po.id asc
+        """
+    ).fetchall()
+    positions: dict[str, dict] = {}
+    for row in orders:
+        token = row["outcome_id"]
+        side = row["side"] or ""
+        price = _optional_float(row["simulated_fill_price"])
+        usd = _optional_float(row["simulated_fill_size_usd"])
+        if price is None or price <= 0 or usd is None:
+            continue
+        pos = positions.setdefault(
+            token, {"outcome_id": token, "net_shares": 0.0, "avg_price": 0.0, "realized_pnl": 0.0}
+        )
+        shares = float(pos["net_shares"])
+        avg = float(pos["avg_price"])
+        if side.startswith("BUY"):
+            bought = usd / price
+            new_shares = shares + bought
+            pos["net_shares"] = new_shares
+            pos["avg_price"] = (avg * shares + usd) / new_shares if new_shares > 0 else 0.0
+        elif side == "SELL":
+            sold = min(usd / price, shares)
+            pos["realized_pnl"] = float(pos["realized_pnl"]) + usd - sold * avg
+            remaining = shares - sold
+            pos["net_shares"] = remaining
+            pos["avg_price"] = avg if remaining > 0 else 0.0
+    return positions
+
+
+def dashboard_stats(db: sqlite3.Connection) -> dict:
+    _ensure_paper_order_exclusions(db)
+    today_hkt = datetime.now(HKT).date().isoformat()
+    row = db.execute(
+        """
+        select forecast_date_hkt, forecast_max_c, update_time, parse_warning
+        from hko_forecasts
+        where source_type = 'ocf_station'
+          and forecast_date_hkt = ?
+        order by id desc
+        limit 1
+        """,
+        (today_hkt,),
+    ).fetchone()
+    obs = db.execute(
+        """
+        select observed_at_hkt, since_midnight_max_c
+        from hko_current_observations
+        order by id desc
+        limit 1
+        """
+    ).fetchone()
+    counts = {
+        "hko_forecasts": db.execute(
+            """
+            select count(*) from (
+                select distinct forecast_date_hkt, forecast_max_c, update_time
+                from hko_forecasts
+                where source_type in ('ocf_station', 'flw_page')
+            )
+            """
+        ).fetchone()[0],
+        "markets": db.execute("select count(*) from markets").fetchone()[0],
+        "outcomes": db.execute("select count(*) from outcomes").fetchone()[0],
+        "orderbooks": db.execute("select count(*) from orderbook_snapshots").fetchone()[0],
+        "buy_filled": db.execute(
+            f"""
+            select count(*)
+            from paper_orders po
+            where po.side like 'BUY_%'
+              and po.status = 'filled'
+              and {ACTIVE_PAPER_ORDER_FILTER}
+            """
+        ).fetchone()[0],
+        "buy_missed": db.execute(
+            "select count(*) from paper_decisions where action = 'BUY' and status = 'missed'"
+        ).fetchone()[0],
+        "sell_filled": db.execute(
+            f"""
+            select count(*)
+            from paper_orders po
+            where po.side = 'SELL'
+              and po.status = 'filled'
+              and {ACTIVE_PAPER_ORDER_FILTER}
+            """
+        ).fetchone()[0],
+        "sell_missed": db.execute(
+            "select count(*) from paper_decisions where action = 'SELL' and status = 'missed'"
+        ).fetchone()[0],
+    }
+    positions = active_paper_positions(db)
+    realized = sum(float(pos["realized_pnl"]) for pos in positions.values())
+    executable_unrealized = 0.0
+    worst_case_open_loss = 0.0
+    open_positions = 0
+    for pos in positions.values():
+        shares = float(pos["net_shares"])
+        if shares <= 0:
+            continue
+        open_positions += 1
+        avg_price = float(pos["avg_price"])
+        worst_case_open_loss += shares * avg_price
+        bid = _latest_bid(db, str(pos["outcome_id"])) or 0.0
+        executable_unrealized += shares * (bid - avg_price)
+    return {
+        "latest_forecast": dict(row) if row else None,
+        "latest_observation": dict(obs) if obs else None,
+        "counts": counts,
+        "open_positions": open_positions,
+        "realized_pnl": realized,
+        "executable_unrealized_pnl": executable_unrealized,
+        "total_profit": realized + executable_unrealized,
+        "worst_case_open_loss": worst_case_open_loss,
+    }
 
 
 def forecast_series(
@@ -121,16 +277,15 @@ def hourly_forecast_series(db: sqlite3.Connection, target_date_hkt: str) -> list
 def hourly_actual_series(db: sqlite3.Connection, target_date_hkt: str) -> list[dict]:
     rows = db.execute(
         """
-        select observed_at_hkt, temperature_c, since_midnight_max_c
+        select observed_at_hkt, temperature_c
         from hko_current_observations
         where substr(observed_at_hkt, 1, 10) = ?
-          and (temperature_c is not null or since_midnight_max_c is not null)
+          and temperature_c is not null
         order by observed_at_hkt asc, id asc
         """,
         (target_date_hkt,),
     ).fetchall()
     hourly_current: dict[int, float] = {}
-    hourly_max: dict[int, float] = {}
     for row in rows:
         try:
             observed = datetime.fromisoformat(row["observed_at_hkt"]).astimezone(HKT)
@@ -140,10 +295,7 @@ def hourly_actual_series(db: sqlite3.Connection, target_date_hkt: str) -> list[d
         ts = int(hour.timestamp())
         if row["temperature_c"] is not None:
             hourly_current[ts] = float(row["temperature_c"])
-        elif row["since_midnight_max_c"] is not None and ts not in hourly_current:
-            hourly_max[ts] = float(row["since_midnight_max_c"])
-    hourly = hourly_max | hourly_current
-    return [{"time": ts, "value": value} for ts, value in sorted(hourly.items())]
+    return [{"time": ts, "value": value} for ts, value in sorted(hourly_current.items())]
 
 
 def hourly_error_series(
@@ -301,14 +453,17 @@ def top_yes_price_series(
 
 
 def paper_order_markers(db: sqlite3.Connection, token_id: str) -> list[dict]:
+    _ensure_paper_order_exclusions(db)
     rows = db.execute(
-        """
-        select created_at_utc, side, simulated_fill_price, simulated_fill_size_usd, status
-        from paper_orders
-        where outcome_id = ?
-          and status = 'filled'
-          and simulated_fill_price is not null
-          and created_at_utc is not null
+        f"""
+        select po.created_at_utc, po.side, po.simulated_fill_price,
+               po.simulated_fill_size_usd, po.status
+        from paper_orders po
+        where po.outcome_id = ?
+          and po.status = 'filled'
+          and po.simulated_fill_price is not null
+          and po.created_at_utc is not null
+          and {ACTIVE_PAPER_ORDER_FILTER}
         order by created_at_utc asc, id asc
         """,
         (token_id,),
@@ -397,15 +552,17 @@ def available_forecast_dates(db: sqlite3.Connection) -> list[str]:
 def pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
     """Replay paper_orders and orderbook snapshots into realized/unrealized series."""
 
+    _ensure_paper_order_exclusions(db)
     orders = db.execute(
-        """
-        select created_at_utc, outcome_id, side, simulated_fill_price,
-               simulated_fill_size_usd, status
-        from paper_orders
-        where status = 'filled'
-          and simulated_fill_price is not null
-          and simulated_fill_size_usd is not null
-          and created_at_utc is not null
+        f"""
+        select po.created_at_utc, po.outcome_id, po.side, po.simulated_fill_price,
+               po.simulated_fill_size_usd, po.status
+        from paper_orders po
+        where po.status = 'filled'
+          and po.simulated_fill_price is not null
+          and po.simulated_fill_size_usd is not null
+          and po.created_at_utc is not null
+          and {ACTIVE_PAPER_ORDER_FILTER}
         order by created_at_utc asc, id asc
         """
     ).fetchall()
@@ -503,6 +660,168 @@ def pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
     }
 
 
+def paper_trade_rows(db: sqlite3.Connection, view: str) -> dict:
+    _ensure_paper_order_exclusions(db)
+    view = view if view in {"open", "realized", "unrealized"} else "open"
+    active_positions = active_paper_positions(db)
+    if view in {"open", "unrealized"}:
+        tokens = [
+            str(pos["outcome_id"])
+            for pos in active_positions.values()
+            if float(pos["net_shares"]) > 0
+        ]
+    else:
+        token_rows = db.execute(
+            f"""
+            select distinct po.outcome_id
+            from paper_orders po
+            where po.side = 'SELL'
+              and po.status = 'filled'
+              and {ACTIVE_PAPER_ORDER_FILTER}
+            """
+        ).fetchall()
+        tokens = [row["outcome_id"] for row in token_rows]
+    titles = {
+        "open": "Open Position Trades",
+        "realized": "Realized PnL Trades",
+        "unrealized": "Unrealized PnL Trades",
+    }
+    if not tokens:
+        return {"view": view, "title": titles[view], "rows": []}
+
+    placeholders = ",".join("?" for _ in tokens)
+    rows = db.execute(
+        f"""
+        select po.id, po.created_at_utc, po.outcome_id, po.side,
+               po.limit_price, po.size_usd, po.simulated_fill_price,
+               po.simulated_fill_size_usd, po.status, po.reason,
+               o.label, m.target_date_hkt,
+               case
+                   when po.outcome_id = o.yes_token_id then 'YES'
+                   when po.outcome_id = o.no_token_id then 'NO'
+                   else null
+               end as token_side,
+               p.net_shares, p.avg_price, p.realized_pnl
+        from paper_orders po
+        left join outcomes o
+          on po.outcome_id = o.yes_token_id or po.outcome_id = o.no_token_id
+        left join markets m on m.id = o.market_id
+        left join paper_positions p on p.outcome_id = po.outcome_id
+        where po.outcome_id in ({placeholders})
+          and po.status = 'filled'
+          and (? != 'realized' or po.side = 'SELL')
+          and {ACTIVE_PAPER_ORDER_FILTER}
+        order by po.created_at_utc desc, po.id desc
+        """,
+        tuple(tokens) + (view,),
+    ).fetchall()
+    realized_by_order_id = _realized_pnl_by_sell_order_id(db, tokens)
+
+    result = []
+    for row in rows:
+        fill_price = _optional_float(row["simulated_fill_price"])
+        fill_size = _optional_float(row["simulated_fill_size_usd"]) or 0.0
+        shares = fill_size / fill_price if fill_price and fill_price > 0 else None
+        latest_bid = _latest_bid(db, row["outcome_id"])
+        active_pos = active_positions.get(row["outcome_id"], {})
+        net_shares = _optional_float(active_pos.get("net_shares")) or 0.0
+        avg_price = _optional_float(active_pos.get("avg_price")) or 0.0
+        unrealized = (
+            net_shares * (latest_bid - avg_price)
+            if latest_bid is not None and net_shares > 0
+            else 0.0
+        )
+        realized_pnl = (
+            realized_by_order_id.get(int(row["id"]), 0.0)
+            if row["side"] == "SELL"
+            else _optional_float(active_pos.get("realized_pnl")) or 0.0
+        )
+        result.append(
+            {
+                "id": row["id"],
+                "created_at_utc": row["created_at_utc"],
+                "created_at_hkt": _to_hkt_display(row["created_at_utc"]),
+                "target_date_hkt": row["target_date_hkt"],
+                "label": row["label"] or row["outcome_id"],
+                "token_side": row["token_side"],
+                "action": row["side"],
+                "outcome_id": row["outcome_id"],
+                "limit_price": row["limit_price"],
+                "fill_price": fill_price,
+                "fill_size_usd": fill_size,
+                "shares": shares,
+                "net_shares": net_shares,
+                "avg_price": avg_price,
+                "latest_bid": latest_bid,
+                "realized_pnl": realized_pnl,
+                "unrealized_pnl": unrealized,
+                "reason": row["reason"],
+            }
+        )
+    return {"view": view, "title": titles[view], "rows": result}
+
+
+def _realized_pnl_by_sell_order_id(
+    db: sqlite3.Connection, tokens: list[str]
+) -> dict[int, float]:
+    if not tokens:
+        return {}
+    _ensure_paper_order_exclusions(db)
+    placeholders = ",".join("?" for _ in tokens)
+    orders = db.execute(
+        f"""
+        select po.id, po.outcome_id, po.side, po.simulated_fill_price,
+               po.simulated_fill_size_usd
+        from paper_orders po
+        where po.outcome_id in ({placeholders})
+          and po.status = 'filled'
+          and po.simulated_fill_price is not null
+          and po.simulated_fill_size_usd is not null
+          and {ACTIVE_PAPER_ORDER_FILTER}
+        order by po.created_at_utc asc, po.id asc
+        """,
+        tuple(tokens),
+    ).fetchall()
+    positions: dict[str, tuple[float, float]] = {}
+    realized_by_order_id: dict[int, float] = {}
+    for row in orders:
+        token = row["outcome_id"]
+        side = row["side"] or ""
+        price = _optional_float(row["simulated_fill_price"])
+        usd = _optional_float(row["simulated_fill_size_usd"])
+        if price is None or price <= 0 or usd is None:
+            continue
+        shares, avg = positions.get(token, (0.0, 0.0))
+        if side.startswith("BUY"):
+            bought_shares = usd / price
+            new_shares = shares + bought_shares
+            new_avg = (
+                (avg * shares + usd) / new_shares if new_shares > 0 else 0.0
+            )
+            positions[token] = (new_shares, new_avg)
+        elif side == "SELL":
+            sold_shares = min(usd / price, shares)
+            realized = usd - sold_shares * avg
+            realized_by_order_id[int(row["id"])] = realized
+            remaining = shares - sold_shares
+            positions[token] = (remaining, avg if remaining > 0 else 0.0)
+    return realized_by_order_id
+
+
+def _latest_bid(db: sqlite3.Connection, token_id: str) -> float | None:
+    row = db.execute(
+        """
+        select best_bid
+        from orderbook_snapshots
+        where outcome_id = ? and best_bid is not null
+        order by fetched_at_utc desc, id desc
+        limit 1
+        """,
+        (token_id,),
+    ).fetchone()
+    return None if row is None else float(row["best_bid"])
+
+
 INDEX_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
@@ -567,6 +886,12 @@ INDEX_HTML = r"""<!doctype html>
   .stat {
     background: var(--panel);
     padding: 10px 14px;
+  }
+  .stat.clickable {
+    cursor: pointer;
+  }
+  .stat.clickable:hover {
+    background: #1c2330;
   }
   .stat .label {
     color: var(--muted);
@@ -655,6 +980,64 @@ INDEX_HTML = r"""<!doctype html>
     border: 1px solid var(--border);
     border-radius: 4px;
     overflow: hidden;
+  }
+  .drilldown {
+    display: none;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .drilldown.active {
+    display: block;
+  }
+  .drilldown-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .drilldown button {
+    background: #0d1117;
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .drilldown h2 {
+    margin: 0;
+    font-size: 12px;
+    text-transform: uppercase;
+    color: var(--muted);
+    letter-spacing: 0.5px;
+  }
+  .drilldown table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  .drilldown th, .drilldown td {
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    white-space: nowrap;
+  }
+  .drilldown th {
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .drilldown .table-wrap {
+    overflow-x: auto;
+  }
+  .drilldown .empty {
+    color: var(--muted);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 14px;
   }
   .trade-bubble {
     position: absolute;
@@ -749,6 +1132,14 @@ INDEX_HTML = r"""<!doctype html>
     <span class="meta" id="autorefresh">auto-refresh every 15s</span>
   </div>
 
+  <section class="drilldown" id="trade-drilldown">
+    <div class="drilldown-head">
+      <h2 id="trade-drilldown-title">Trades</h2>
+      <button id="close-drilldown">Back to charts</button>
+    </div>
+    <div id="trade-drilldown-body"></div>
+  </section>
+
   <section class="chart-section">
     <h2>
       <span><span class="lead-label">D+0</span><span id="d0-date"></span></span>
@@ -756,7 +1147,6 @@ INDEX_HTML = r"""<!doctype html>
         <button type="button" data-series-key="forecastHigh"><i style="background:#f0b400"></i>OCF forecast high</button>
         <button type="button" data-series-key="hourlyForecast"><i style="background:#c084fc"></i>Hourly forecast</button>
         <button type="button" data-series-key="hourlyActual"><i style="background:#f97316"></i>Hourly actual</button>
-        <button type="button" data-series-key="hourlyError"><i style="background:#94a3b8"></i>Actual - forecast</button>
         <button type="button" data-series-key="actualMax"><i style="background:#26a69a"></i>Since-midnight max</button>
         <button type="button" data-series-key="currentTemp"><i style="background:#5b9bd5"></i>Current temperature</button>
         <span id="d0-legend"></span>
@@ -866,23 +1256,21 @@ const d0HourlyForecastSeries = charts[0].chart.addLineSeries({
   priceLineVisible: false,
 });
 const d0HourlyActualSeries = charts[0].chart.addLineSeries({
-  color: "#f97316", lineWidth: 2,
+  color: "#f97316", lineWidth: 4, lineType: LightweightCharts.LineType.WithSteps,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
   priceLineVisible: false,
-});
-const d0HourlyErrorSeries = charts[0].chart.addHistogramSeries({
-  color: "#94a3b8",
-  priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
-  priceLineVisible: false,
-  base: 0,
+  pointMarkersVisible: true,
+  pointMarkersRadius: 6,
 });
 const d0ActualMaxSeries = charts[0].chart.addLineSeries({
   color: "#26a69a", lineWidth: 2,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
 });
 const d0CurrentTempSeries = charts[0].chart.addLineSeries({
-  color: "#5b9bd5", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted,
+  color: "#5b9bd5", lineWidth: 3, lineStyle: LightweightCharts.LineStyle.Dotted,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
+  pointMarkersVisible: true,
+  pointMarkersRadius: 6,
 });
 
 const pnlChart = LightweightCharts.createChart(document.getElementById("pnl-chart"), {
@@ -940,7 +1328,6 @@ const seriesVisibility = {
   forecastHigh: true,
   hourlyForecast: true,
   hourlyActual: true,
-  hourlyError: true,
   actualMax: true,
   currentTemp: true,
 };
@@ -948,7 +1335,6 @@ const d0SeriesByKey = {
   forecastHigh: d0ForecastSeries,
   hourlyForecast: d0HourlyForecastSeries,
   hourlyActual: d0HourlyActualSeries,
-  hourlyError: d0HourlyErrorSeries,
   actualMax: d0ActualMaxSeries,
   currentTemp: d0CurrentTempSeries,
 };
@@ -976,9 +1362,9 @@ function renderStats(stats) {
     { label: "Forecast updated",    value: f.update_time ? f.update_time.slice(11,16) + " HKT" : "n/a" },
     { label: "Since-midnight max",  value: o.since_midnight_max_c != null ? o.since_midnight_max_c.toFixed(1) + "°C" : (o.temperature_c != null ? o.temperature_c.toFixed(1) + "°C (cur)" : "n/a") },
     { label: "Observed at",         value: o.observed_at_hkt ? o.observed_at_hkt.slice(11,16) + " HKT" : "n/a" },
-    { label: "Open positions",      value: String(stats.open_positions ?? 0) },
-    { label: "Realized PnL",        value: fmtMoney(stats.realized_pnl), cls: classForMoney(stats.realized_pnl) },
-    { label: "Unrealized PnL",      value: fmtMoney(stats.executable_unrealized_pnl), cls: classForMoney(stats.executable_unrealized_pnl) },
+    { label: "Open positions",      value: String(stats.open_positions ?? 0), drilldown: "open" },
+    { label: "Realized PnL",        value: fmtMoney(stats.realized_pnl), cls: classForMoney(stats.realized_pnl), drilldown: "realized" },
+    { label: "Unrealized PnL",      value: fmtMoney(stats.executable_unrealized_pnl), cls: classForMoney(stats.executable_unrealized_pnl), drilldown: "unrealized" },
     { label: "Total profit est.",   value: fmtMoney(stats.total_profit), cls: classForMoney(stats.total_profit) },
     { label: "Worst-case open loss", value: fmtMoney(-Math.abs(stats.worst_case_open_loss || 0)), cls: stats.worst_case_open_loss ? "neg" : "" },
     { label: "Buys filled / missed", value: stats.counts.buy_filled + " / " + stats.counts.buy_missed },
@@ -987,14 +1373,115 @@ function renderStats(stats) {
     { label: "Orderbook snapshots", value: String(stats.counts.orderbooks) },
   ];
   document.getElementById("stats").innerHTML = cells.map(c =>
-    `<div class="stat"><div class="label">${c.label}</div><div class="value ${c.cls||""}">${c.value}</div></div>`
+    `<div class="stat ${c.drilldown ? "clickable" : ""}" ${c.drilldown ? `data-drilldown="${c.drilldown}" tabindex="0" role="button"` : ""}><div class="label">${c.label}</div><div class="value ${c.cls||""}">${c.value}</div></div>`
   ).join("");
+  bindDrilldownTiles();
 }
 
 async function fetchJSON(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(url + " " + res.status);
   return res.json();
+}
+
+let activeDrilldown = null;
+
+function setChartsVisible(visible) {
+  document.querySelectorAll(".chart-section").forEach(section => {
+    section.style.display = visible ? "" : "none";
+  });
+}
+
+function fmtCell(value, kind) {
+  if (value == null || value === "") return "";
+  if (kind === "money") return fmtMoney(Number(value));
+  if (kind === "price") return Number(value).toFixed(3);
+  if (kind === "shares") return Number(value).toFixed(4);
+  return escapeHtml(String(value));
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[ch]));
+}
+
+function renderTradeTable(payload) {
+  const root = document.getElementById("trade-drilldown");
+  document.getElementById("trade-drilldown-title").textContent = payload.title || "Trades";
+  const body = document.getElementById("trade-drilldown-body");
+  if (!payload.rows || payload.rows.length === 0) {
+    body.innerHTML = '<div class="empty">No filled paper trades for this view.</div>';
+    root.classList.add("active");
+    setChartsVisible(false);
+    return;
+  }
+  const rows = payload.rows.map(row => `
+    <tr>
+      <td>${fmtCell(row.created_at_hkt || row.created_at_utc)}</td>
+      <td>${fmtCell(row.target_date_hkt)}</td>
+      <td>${fmtCell(row.label)}</td>
+      <td>${fmtCell(row.token_side)}</td>
+      <td>${fmtCell(row.action)}</td>
+      <td>${fmtCell(row.fill_price, "price")}</td>
+      <td>${fmtCell(row.fill_size_usd, "money")}</td>
+      <td>${fmtCell(row.shares, "shares")}</td>
+      <td>${fmtCell(row.net_shares, "shares")}</td>
+      <td>${fmtCell(row.avg_price, "price")}</td>
+      <td>${fmtCell(row.latest_bid, "price")}</td>
+      <td>${fmtCell(row.realized_pnl, "money")}</td>
+      <td>${fmtCell(row.unrealized_pnl, "money")}</td>
+      <td>${fmtCell(row.reason)}</td>
+    </tr>
+  `).join("");
+  body.innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time HKT</th><th>Date</th><th>Outcome</th><th>Token</th><th>Action</th>
+            <th>Fill</th><th>USD</th><th>Shares</th><th>Open shares</th>
+            <th>Avg entry</th><th>Bid</th><th>Realized</th><th>Unrealized</th><th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+  root.classList.add("active");
+  setChartsVisible(false);
+}
+
+async function showTradeDrilldown(view) {
+  activeDrilldown = view;
+  const payload = await fetchJSON(`/api/paper-trades?view=${encodeURIComponent(view)}`);
+  renderTradeTable(payload);
+}
+
+function closeTradeDrilldown() {
+  activeDrilldown = null;
+  document.getElementById("trade-drilldown").classList.remove("active");
+  setChartsVisible(true);
+  renderAllTradeBubbles();
+}
+
+function bindDrilldownTiles() {
+  document.querySelectorAll("[data-drilldown]").forEach(tile => {
+    if (tile.dataset.drilldownBound === "1") return;
+    tile.dataset.drilldownBound = "1";
+    const open = () => showTradeDrilldown(tile.dataset.drilldown);
+    tile.addEventListener("click", open);
+    tile.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
 }
 
 const oddsColors = ["#ef5350", "#ab47bc", "#66bb6a", "#ffb74d", "#4dd0e1"];
@@ -1037,6 +1524,14 @@ function formatValue(value, kind) {
 
 function visibleData(key, data) {
   return seriesVisibility[key] ? data : [];
+}
+
+function lineDataForDisplay(points, spanSeconds = 600) {
+  if (!points || points.length !== 1) return points || [];
+  return [
+    points[0],
+    { time: points[0].time + spanSeconds, value: points[0].value },
+  ];
 }
 
 function applySeriesVisibility() {
@@ -1249,7 +1744,7 @@ attachTooltip(charts[0].chart, "d0-chart", () => [
   { name: "OCF forecast high", color: "#f0b400", kind: "temp", data: visibleData("forecastHigh", d0ForecastData) },
   { name: "Hourly forecast", color: "#c084fc", kind: "temp", data: visibleData("hourlyForecast", d0HourlyForecastData) },
   { name: "Hourly actual", color: "#f97316", kind: "temp", data: visibleData("hourlyActual", d0HourlyActualData) },
-  { name: "Actual - forecast", color: "#94a3b8", kind: "delta", data: visibleData("hourlyError", d0HourlyErrorData) },
+  { name: "Actual - forecast", color: "#94a3b8", kind: "delta", data: visibleData("hourlyActual", d0HourlyErrorData) },
   { name: "Since-midnight max", color: "#26a69a", kind: "temp", data: visibleData("actualMax", d0ActualMaxData) },
   { name: "Current temperature", color: "#5b9bd5", kind: "temp", data: visibleData("currentTemp", d0CurrentTempData) },
   ...charts[0].series.map(s => ({ name: s.name, color: s.color, kind: "odds", data: visibleData(s.key, s.data), markers: isSeriesVisible(s.key) ? s.markers : [] })),
@@ -1276,14 +1771,13 @@ function renderLeadPanel(panel) {
     resetLeadChart(0);
     d0ForecastData = panel.forecast;
     d0HourlyForecastData = panel.hourly_forecast || [];
-    d0HourlyActualData = panel.hourly_actual || [];
+    d0HourlyActualData = lineDataForDisplay(panel.hourly_actual || [], 600);
     d0HourlyErrorData = panel.hourly_error || [];
     d0ActualMaxData = panel.actual_max;
-    d0CurrentTempData = panel.current_temp;
+    d0CurrentTempData = lineDataForDisplay(panel.current_temp || [], 600);
     d0ForecastSeries.setData(d0ForecastData);
     d0HourlyForecastSeries.setData(d0HourlyForecastData);
     d0HourlyActualSeries.setData(d0HourlyActualData);
-    d0HourlyErrorSeries.setData(d0HourlyErrorData);
     d0ActualMaxSeries.setData(d0ActualMaxData);
     d0CurrentTempSeries.setData(d0CurrentTempData);
     const legend = [];
@@ -1369,11 +1863,15 @@ async function loadAll() {
 
   document.getElementById("last-update").textContent =
     "updated " + new Date().toLocaleTimeString();
+  if (activeDrilldown) {
+    showTradeDrilldown(activeDrilldown);
+  }
 }
 
 document.getElementById("refresh-btn").addEventListener("click", () => {
   loadAll();
 });
+document.getElementById("close-drilldown").addEventListener("click", closeTradeDrilldown);
 document.getElementById("token-side").addEventListener("change", (event) => {
   tokenSide = event.target.value === "NO" ? "NO" : "YES";
   fittedCharts.clear();
@@ -1402,6 +1900,75 @@ def _resolve_target_date(db: sqlite3.Connection, requested: str | None) -> str:
     if today in dates:
         return today
     return dates[-1] if dates else today
+
+
+LIVE_HTML = r"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>whenitrains live dashboard</title>
+<style>
+  body { margin: 0; background: #0f1419; color: #d7dde5; font: 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { padding: 18px 24px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: baseline; }
+  h1 { font-size: 18px; margin: 0; font-weight: 650; }
+  main { padding: 20px 24px; max-width: 1200px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .card { border: 1px solid #30363d; border-radius: 6px; padding: 12px; background: #151b23; }
+  .label { color: #8b949e; font-size: 12px; }
+  .value { font-size: 22px; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; background: #151b23; border: 1px solid #30363d; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid #30363d; text-align: left; white-space: nowrap; }
+  th { color: #8b949e; font-weight: 600; font-size: 12px; }
+  a { color: #7cc7ff; text-decoration: none; }
+  .on { color: #ffb86b; }
+  .off { color: #7ee787; }
+</style>
+</head>
+<body>
+<header>
+  <h1>whenitrains · live desk</h1>
+  <a href="/">paper dashboard</a>
+</header>
+<main>
+  <section class="grid" id="stats"></section>
+  <h2>Recent live orders</h2>
+  <table>
+    <thead><tr><th>Time</th><th>Label</th><th>Side</th><th>Status</th><th>Limit</th><th>Fill</th><th>Size</th><th>Reason</th></tr></thead>
+    <tbody id="orders"></tbody>
+  </table>
+</main>
+<script>
+function money(v) { return v == null ? "n/a" : "$" + Number(v).toFixed(2); }
+function num(v) { return v == null ? "n/a" : Number(v).toFixed(4); }
+async function refresh() {
+  const res = await fetch("/api/live/stats", { cache: "no-store" });
+  const data = await res.json();
+  const stats = [
+    ["Open positions", data.open_positions],
+    ["Open exposure", money(data.open_exposure_usd)],
+    ["Realized PnL", money(data.realized_pnl)],
+    ["Orders", data.counts.orders],
+    ["Filled", data.counts.filled],
+    ["Submitted", data.counts.submitted],
+    ["Rejected", data.counts.rejected],
+    ["Blocked", data.counts.blocked],
+    ["Errors", data.counts.error],
+    ["Block entries", data.block_new_entries ? "ON" : "OFF"],
+    ["Exit on kill", data.cancel_open_orders_and_exit_positions ? "ON" : "OFF"],
+  ];
+  document.getElementById("stats").innerHTML = stats.map(([label, value]) =>
+    `<div class="card"><div class="label">${label}</div><div class="value ${value === "ON" ? "on" : value === "OFF" ? "off" : ""}">${value}</div></div>`
+  ).join("");
+  document.getElementById("orders").innerHTML = data.recent_orders.map(o =>
+    `<tr><td>${o.created_at_utc || ""}</td><td>${o.label || o.outcome_id}</td><td>${o.side}</td><td>${o.status}</td><td>${num(o.limit_price)}</td><td>${num(o.fill_price)}</td><td>${money(o.fill_size_usd || o.requested_size_usd)}</td><td>${o.reason || o.error || ""}</td></tr>`
+  ).join("");
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>"""
 
 
 def _build_handler(db_path: Path):
@@ -1435,6 +2002,9 @@ def _build_handler(db_path: Path):
                 if path == "/" or path == "/index.html":
                     self._send_html(INDEX_HTML)
                     return
+                if path == "/live":
+                    self._send_html(LIVE_HTML)
+                    return
                 db = connect(db_path)
                 try:
                     if path == "/api/stats":
@@ -1461,6 +2031,13 @@ def _build_handler(db_path: Path):
                         return
                     if path == "/api/pnl":
                         self._send_json(pnl_series(db))
+                        return
+                    if path == "/api/paper-trades":
+                        view = query.get("view", ["open"])[0]
+                        self._send_json(paper_trade_rows(db, view))
+                        return
+                    if path == "/api/live/stats":
+                        self._send_json(live_dashboard_stats(db))
                         return
                     self.send_error(404, "not found")
                 finally:

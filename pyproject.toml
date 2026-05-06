@@ -3,6 +3,9 @@ name = "whenitrains"
 version = "0.1.0"
 description = "Latency-first HK temperature paper trading bot"
 requires-python = ">=3.11"
+dependencies = [
+    "py-clob-client",
+]
 
 [project.scripts]
 whenitrains = "whenitrains.cli:main"

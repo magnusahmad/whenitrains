@@ -5,10 +5,13 @@ from pathlib import Path
 
 from whenitrains.dashboard_server import (
     INDEX_HTML,
+    dashboard_stats,
     forecast_panels,
     hourly_actual_series,
     hourly_error_series,
     hourly_forecast_series,
+    paper_trade_rows,
+    pnl_series,
     top_token_price_series,
     top_yes_price_series,
 )
@@ -198,7 +201,7 @@ class DashboardServerTests(unittest.TestCase):
                 0.6,
             )
 
-    def test_hourly_actual_falls_back_to_since_midnight_max(self):
+    def test_hourly_actual_ignores_since_midnight_max_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_dashboard_db(Path(tmp) / "test.db")
             snapshot = store_raw_snapshot(db, "hko", "obs", "{}")
@@ -216,7 +219,7 @@ class DashboardServerTests(unittest.TestCase):
 
             actual = hourly_actual_series(db, "2026-05-06")
 
-            self.assertEqual(actual[0]["value"], 24.6)
+            self.assertEqual(actual, [])
 
     def test_forecast_panels_limit_tradeable_tokens_but_force_include_trades(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -275,6 +278,205 @@ class DashboardServerTests(unittest.TestCase):
             self.assertNotIn("29°C", [item["label"] for item in panel["top_tokens"]])
             self.assertNotIn("30°C", [item["label"] for item in panel["top_tokens"]])
 
+    def test_paper_trade_rows_returns_open_position_buy_sell_activity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_paper_order_result(
+                db,
+                "yes25",
+                "BUY_YES",
+                limit_price=0.30,
+                size_usd=100,
+                fill_price=0.30,
+                fill_size_usd=100,
+                status="filled",
+                reason="forecast value",
+            )
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.42, 10)],
+                    asks=[(0.44, 10)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            db.execute(
+                """
+                insert into paper_positions
+                (outcome_id, net_shares, avg_price, realized_pnl, updated_at_utc)
+                values ('yes25', 333.3333, 0.30, 0, '2026-05-06T10:00:00+00:00')
+                """
+            )
+            db.commit()
+
+            payload = paper_trade_rows(db, "open")
+
+            self.assertEqual(payload["title"], "Open Position Trades")
+            self.assertEqual(len(payload["rows"]), 1)
+            row = payload["rows"][0]
+            self.assertEqual(row["label"], "25°C")
+            self.assertEqual(row["token_side"], "YES")
+            self.assertEqual(row["action"], "BUY_YES")
+            self.assertRegex(row["created_at_hkt"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+            self.assertAlmostEqual(row["latest_bid"], 0.42)
+            self.assertGreater(row["unrealized_pnl"], 0)
+
+    def test_paper_trade_rows_returns_realized_sell_tokens(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_paper_order_result(
+                db,
+                "no25",
+                "BUY_NO",
+                limit_price=0.40,
+                size_usd=50,
+                fill_price=0.40,
+                fill_size_usd=50,
+                status="filled",
+                reason="entry",
+            )
+            store_paper_order_result(
+                db,
+                "no25",
+                "SELL",
+                limit_price=0.60,
+                size_usd=75,
+                fill_price=0.60,
+                fill_size_usd=75,
+                status="filled",
+                reason="exit",
+            )
+            db.execute(
+                """
+                insert into paper_positions
+                (outcome_id, net_shares, avg_price, realized_pnl, updated_at_utc)
+                values ('no25', 0, 0, 25, '2026-05-06T11:00:00+00:00')
+                """
+            )
+            db.commit()
+
+            payload = paper_trade_rows(db, "realized")
+
+            self.assertEqual(payload["title"], "Realized PnL Trades")
+            self.assertEqual([row["action"] for row in payload["rows"]], ["SELL"])
+            self.assertEqual(payload["rows"][0]["token_side"], "NO")
+            self.assertAlmostEqual(payload["rows"][0]["realized_pnl"], 25)
+
+    def test_paper_trade_rows_realized_pnl_is_per_sell_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_paper_order_result(
+                db,
+                "no25",
+                "BUY_NO",
+                limit_price=0.40,
+                size_usd=80,
+                fill_price=0.40,
+                fill_size_usd=80,
+                status="filled",
+                reason="entry",
+            )
+            store_paper_order_result(
+                db,
+                "no25",
+                "SELL",
+                limit_price=0.50,
+                size_usd=50,
+                fill_price=0.50,
+                fill_size_usd=50,
+                status="filled",
+                reason="first exit",
+            )
+            store_paper_order_result(
+                db,
+                "no25",
+                "SELL",
+                limit_price=0.60,
+                size_usd=60,
+                fill_price=0.60,
+                fill_size_usd=60,
+                status="filled",
+                reason="second exit",
+            )
+            db.execute(
+                """
+                insert into paper_positions
+                (outcome_id, net_shares, avg_price, realized_pnl, updated_at_utc)
+                values ('no25', 0, 0, 30, '2026-05-06T11:00:00+00:00')
+                """
+            )
+            db.commit()
+
+            payload = paper_trade_rows(db, "realized")
+
+            self.assertEqual([row["action"] for row in payload["rows"]], ["SELL", "SELL"])
+            self.assertAlmostEqual(payload["rows"][0]["realized_pnl"], 20)
+            self.assertAlmostEqual(payload["rows"][1]["realized_pnl"], 10)
+
+    def test_dashboard_filters_excluded_paper_orders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_paper_order_result(
+                db,
+                "yes25",
+                "BUY_YES",
+                limit_price=0.30,
+                size_usd=100,
+                fill_price=0.30,
+                fill_size_usd=100,
+                status="filled",
+                reason="valid entry",
+            )
+            valid_id = db.execute(
+                "select max(id) from paper_orders where outcome_id = 'yes25'"
+            ).fetchone()[0]
+            store_paper_order_result(
+                db,
+                "yes25",
+                "BUY_YES",
+                limit_price=0.70,
+                size_usd=100,
+                fill_price=0.70,
+                fill_size_usd=100,
+                status="filled",
+                reason="bug entry",
+            )
+            excluded_id = db.execute(
+                "select max(id) from paper_orders where outcome_id = 'yes25'"
+            ).fetchone()[0]
+            db.execute(
+                """
+                insert into paper_order_exclusions (order_id, tag, reason, created_at_utc)
+                values (?, 'bug_order', 'test exclusion', '2026-05-06T00:00:00+00:00')
+                """,
+                (excluded_id,),
+            )
+            db.commit()
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.40, 1000)],
+                    asks=[(0.42, 1000)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+
+            stats = dashboard_stats(db)
+            trades = paper_trade_rows(db, "open")
+            pnl = pnl_series(db)
+
+            self.assertEqual(stats["counts"]["buy_filled"], 1)
+            self.assertEqual(stats["open_positions"], 1)
+            self.assertAlmostEqual(stats["worst_case_open_loss"], 100)
+            self.assertEqual([row["id"] for row in trades["rows"]], [valid_id])
+            self.assertAlmostEqual(pnl["unrealized"][-1]["value"], 100 / 0.30 * 0.10)
+
     def test_dashboard_html_has_delayed_crosshair_tooltip(self):
         self.assertIn('id="chart-tooltip"', INDEX_HTML)
         self.assertIn("setTimeout(() => showTooltip(tooltipState), 1000)", INDEX_HTML)
@@ -296,9 +498,16 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn('/api/forecast-panels?side=${encodeURIComponent(tokenSide)}', INDEX_HTML)
         self.assertIn('"#ffb74d", "#4dd0e1"', INDEX_HTML)
         self.assertIn("Hourly forecast", INDEX_HTML)
-        self.assertIn("Actual - forecast", INDEX_HTML)
+        self.assertIn('name: "Actual - forecast"', INDEX_HTML)
+        self.assertNotIn('data-series-key="hourlyError"', INDEX_HTML)
+        self.assertIn("pointMarkersVisible: true", INDEX_HTML)
+        self.assertIn("pointMarkersRadius: 6", INDEX_HTML)
+        self.assertIn("function lineDataForDisplay(points, spanSeconds = 600)", INDEX_HTML)
+        self.assertIn("d0HourlyActualData = lineDataForDisplay(panel.hourly_actual || [], 600)", INDEX_HTML)
+        self.assertIn("d0HourlyErrorData = panel.hourly_error || []", INDEX_HTML)
+        self.assertIn("d0CurrentTempData = lineDataForDisplay(panel.current_temp || [], 600)", INDEX_HTML)
         self.assertIn("d0HourlyForecastSeries.setData", INDEX_HTML)
-        self.assertIn("d0HourlyErrorSeries.setData", INDEX_HTML)
+        self.assertNotIn("d0HourlyErrorSeries.setData", INDEX_HTML)
         self.assertIn('data-series-key="hourlyActual"', INDEX_HTML)
         self.assertIn("legendButton(key, color", INDEX_HTML)
         self.assertIn("d0-token-${item.token_id}", INDEX_HTML)
@@ -319,6 +528,13 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("pressedMouseMove: true", INDEX_HTML)
         self.assertIn("charts[lead].chart.removeSeries(s.series)", INDEX_HTML)
         self.assertIn("if (s.markerSeries) charts[lead].chart.removeSeries(s.markerSeries)", INDEX_HTML)
+        self.assertIn('data-drilldown="${c.drilldown}"', INDEX_HTML)
+        self.assertIn('id="trade-drilldown"', INDEX_HTML)
+        self.assertIn("function showTradeDrilldown(view)", INDEX_HTML)
+        self.assertIn('/api/paper-trades?view=${encodeURIComponent(view)}', INDEX_HTML)
+        self.assertIn('document.querySelectorAll(".chart-section")', INDEX_HTML)
+        self.assertIn("Back to charts", INDEX_HTML)
+        self.assertIn("<th>Time HKT</th>", INDEX_HTML)
 
 
 def _seed_dashboard_db(path: Path):

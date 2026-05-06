@@ -67,7 +67,7 @@ def scheduler_actions(
     learned_forecast_times: list[day_time] | tuple[day_time, ...] = (),
     orderbook_interval_seconds: int = 15,
     market_discovery_interval_seconds: int = 300,
-    current_temperature_interval_seconds: int = 3600,
+    current_temperature_interval_seconds: int = 600,
 ) -> SchedulerActions:
     sources = {
         plan.source for plan in due_hko_sources(now_hkt, state, learned_forecast_times)
@@ -85,8 +85,7 @@ def scheduler_actions(
             >= timedelta(seconds=orderbook_interval_seconds)
         )
     )
-    critical_due = bool(sources) or market_due or orderbooks_due
-    current_temperature_due = not critical_due and (
+    current_temperature_due = not bool(sources) and (
         state.last_current_temperature_fetch_at is None
         or now_hkt - state.last_current_temperature_fetch_at
         >= timedelta(seconds=current_temperature_interval_seconds)
@@ -147,6 +146,7 @@ def run_scheduled_paper_loop(
     max_ticks: int | None = None,
     now_fn=None,
     quiet: bool = True,
+    run_tick_fn=None,
 ) -> None:
     state = SchedulerState()
     tick = 0
@@ -180,7 +180,8 @@ def run_scheduled_paper_loop(
             if _try_run_action("orderbooks", lambda: fetch_orderbooks(now.date()), notes):
                 mark_orderbooks_fetched(state, now)
                 notes.append("fetched orderbooks")
-        result = run_paper_tick(db, today_hkt=now.date())
+        tick_fn = run_tick_fn or run_paper_tick
+        result = tick_fn(db, today_hkt=now.date())
         if should_print_scheduled_tick(notes, result, quiet):
             print(
                 "scheduled-paper "

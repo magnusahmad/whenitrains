@@ -5,6 +5,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from math import floor
 
 from .config import Settings
 from .engine import TradeCandidate
@@ -13,15 +14,18 @@ from .markets import PredicateType, parse_outcome_label, predicate_matches
 from .paper_db import execute_paper_buy, execute_paper_sell
 from .polymarket import Outcome
 from .signals import DirectionalImpact, PriceResponse
+from .live import LiveClobClient, execute_live_buy, execute_live_sell
 from .storage import (
     dashboard_stats,
     find_outcome_by_token,
+    get_live_position,
     has_processed_event,
     latest_orderbook,
     latest_forecast_high,
     latest_observed_max_for_date,
     latest_two_forecast_highs,
     latest_two_orderbook_prices,
+    list_open_live_positions,
     list_open_paper_positions,
     list_outcomes_for_date,
     list_tradeable_forecast_dates,
@@ -29,6 +33,10 @@ from .storage import (
     store_paper_decision,
     store_signal,
 )
+
+
+_LIVE_CLIENT: LiveClobClient | None = None
+_LIVE_ORDER_CAP_USD: float | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,24 @@ def run_paper_tick(db: sqlite3.Connection, today_hkt: date | None = None) -> Run
         signals=forecast_result.signals + actual_result.signals,
         notes=forecast_result.notes + actual_result.notes + exit_result.notes,
     )
+
+
+def run_live_tick(
+    db: sqlite3.Connection,
+    client: LiveClobClient,
+    today_hkt: date | None = None,
+    order_cap_usd: float = Settings.live_scheduler_order_cap_usd,
+) -> RunnerResult:
+    global _LIVE_CLIENT, _LIVE_ORDER_CAP_USD
+    previous_client = _LIVE_CLIENT
+    previous_cap = _LIVE_ORDER_CAP_USD
+    _LIVE_CLIENT = client
+    _LIVE_ORDER_CAP_USD = order_cap_usd
+    try:
+        return run_paper_tick(db, today_hkt=today_hkt)
+    finally:
+        _LIVE_CLIENT = previous_client
+        _LIVE_ORDER_CAP_USD = previous_cap
 
 
 def process_all_forecast_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerResult:
@@ -88,11 +114,11 @@ def process_forecast_entries(
     db: sqlite3.Connection, target_date: date, today_hkt: date | None = None
 ) -> RunnerResult:
     today = today_hkt or datetime.now(HKT).date()
-    latest = latest_two_forecast_highs(db, target_date.isoformat())
     value_result = process_forecast_value_entry(db, target_date, today)
+    latest = _latest_two_effective_forecast_highs(db, target_date.isoformat())
     if len(latest) < 2:
         return _merge_runner_results(
-            value_result, RunnerResult(notes=("need two forecast highs",))
+            value_result, RunnerResult(notes=("need two decimal forecast highs",))
         )
     new, old = latest[0], latest[1]
     if new["forecast_date_hkt"] != target_date.isoformat():
@@ -179,12 +205,13 @@ def process_forecast_entries(
 
     buys_filled = 0
     buys_missed = 0
+    max_entry_price = _forecast_change_max_entry_price(target_date, today)
     for candidate in candidates:
         filled = _execute_candidate_buy(
             db,
             candidate,
             event_key=event_key,
-            max_buy_price=Settings.forecast_change_max_entry_price,
+            max_buy_price=max_entry_price,
         )
         if filled is True:
             buys_filled += 1
@@ -219,10 +246,13 @@ def process_forecast_value_entry(
                 f"> max={Settings.forecast_value_max_lead_days}",
             )
         )
-    latest = latest_forecast_high(db, target_date.isoformat())
+    latest = _latest_effective_forecast_high(db, target_date.isoformat())
     if latest is None:
         return RunnerResult(
-            notes=(f"forecast value skipped: {target_date.isoformat()} missing latest forecast",)
+            notes=(
+                "forecast value skipped: "
+                f"{target_date.isoformat()} missing decimal forecast",
+            )
         )
     forecast_high = float(latest["forecast_max_c"])
     rows = list_outcomes_for_date(db, target_date.isoformat())
@@ -237,6 +267,31 @@ def process_forecast_value_entry(
             notes=(
                 "forecast value skipped: "
                 f"{target_date.isoformat()} forecast_high={forecast_high:g} missing matching bucket",
+            )
+        )
+    guard_reason = _forecast_value_guard_reason(
+        db, target_date.isoformat(), forecast_row["label"], "YES"
+    )
+    if guard_reason is not None:
+        store_paper_decision(
+            db,
+            "forecast_value",
+            forecast_row["yes_token_id"],
+            forecast_row["label"],
+            "YES",
+            "BUY",
+            "ignored",
+            guard_reason,
+            {
+                "forecast_high": forecast_high,
+                "forecast_label": forecast_row["label"],
+            },
+        )
+        return RunnerResult(
+            notes=(
+                "forecast value skipped: "
+                f"{target_date.isoformat()} {forecast_row['label']} "
+                f"{guard_reason}",
             )
         )
     forecast_book = books.get(forecast_row["polymarket_market_id"])
@@ -370,13 +425,17 @@ def process_forecast_position_exits(
     sells_filled = 0
     sells_missed = 0
     notes: list[str] = []
-    for pos in list_open_paper_positions(db):
+    positions = list_open_live_positions(db) if _LIVE_CLIENT is not None else list_open_paper_positions(db)
+    for pos in positions:
         token_id = pos["outcome_id"]
         outcome = find_outcome_by_token(db, token_id)
         if outcome is None or outcome["target_date_hkt"] != target_date.isoformat():
             continue
         side = "YES" if token_id == outcome["yes_token_id"] else "NO"
-        if not _position_invalidated_by_forecast(outcome, side, new_forecast_max_c):
+        reason = _hourly_forecast_invalidation_reason(db, outcome, side)
+        if reason is None and _position_invalidated_by_forecast(outcome, side, new_forecast_max_c):
+            reason = "position invalidated by forecast change"
+        if reason is None:
             continue
         try:
             book = latest_orderbook(db, token_id)
@@ -395,9 +454,19 @@ def process_forecast_position_exits(
             )
             sells_missed += 1
             continue
-        result = execute_paper_sell(
-            db, token_id, book.bids, "position invalidated by forecast change"
-        )
+        if _LIVE_CLIENT is not None:
+            result = execute_live_sell(
+                db,
+                _LIVE_CLIENT,
+                token_id=token_id,
+                bids=book.bids,
+                reason=reason,
+                label=outcome["label"],
+                event_type="forecast_exit",
+                event_key=event_key,
+            )
+        else:
+            result = execute_paper_sell(db, token_id, book.bids, reason)
         if result.status == "filled":
             store_paper_decision(
                 db,
@@ -407,7 +476,7 @@ def process_forecast_position_exits(
                 side,
                 "SELL",
                 "filled",
-                "position invalidated by forecast change",
+                reason,
                 {"forecast_max": new_forecast_max_c, "bid": book.best_bid},
                 event_key=event_key,
             )
@@ -466,9 +535,9 @@ def _process_actual_transition(
 ) -> RunnerResult:
     old_max = float(old["since_midnight_max_c"])
     new_max = float(new["since_midnight_max_c"])
-    latest_forecast = latest_forecast_high(db, today_hkt.isoformat())
+    latest_forecast = _latest_effective_forecast_high(db, today_hkt.isoformat())
     if latest_forecast is None:
-        return RunnerResult(notes=("missing current forecast for actual check",))
+        return RunnerResult(notes=("missing current decimal forecast for actual check",))
     forecast_max = float(latest_forecast["forecast_max_c"])
     if not (old_max <= forecast_max < new_max):
         return RunnerResult(notes=("actual max has not crossed above forecast max",))
@@ -591,7 +660,8 @@ def process_open_position_exits(
     sells_filled = 0
     sells_missed = 0
     notes: list[str] = []
-    for pos in list_open_paper_positions(db):
+    positions = list_open_live_positions(db) if _LIVE_CLIENT is not None else list_open_paper_positions(db)
+    for pos in positions:
         token_id = pos["outcome_id"]
         outcome = find_outcome_by_token(db, token_id)
         if outcome is None:
@@ -611,9 +681,7 @@ def process_open_position_exits(
             float(latest_actual["since_midnight_max_c"]) if latest_actual else None
         )
         invalidated = _position_invalidated(outcome, side, actual_max_for_outcome)
-        late_day_guard = _late_day_forecast_guard_applies(
-            db, outcome["target_date_hkt"], outcome["label"], side
-        )
+        hourly_reason = _hourly_forecast_invalidation_reason(db, outcome, side)
         hold_to_maturity = _position_can_hold_to_maturity(
             outcome, side, actual_max_for_outcome
         )
@@ -649,14 +717,21 @@ def process_open_position_exits(
             )
             sells_missed += 1
             continue
-        if not invalidated and not late_day_guard:
+        if not invalidated and hourly_reason is None:
             continue
-        reason = (
-            "late-day forecast peak guard"
-            if late_day_guard
-            else "position invalidated by observed max"
-        )
-        result = execute_paper_sell(db, token_id, book.bids, reason)
+        reason = hourly_reason or "position invalidated by observed max"
+        if _LIVE_CLIENT is not None:
+            result = execute_live_sell(
+                db,
+                _LIVE_CLIENT,
+                token_id=token_id,
+                bids=book.bids,
+                reason=reason,
+                label=outcome["label"],
+                event_type="exit_check",
+            )
+        else:
+            result = execute_paper_sell(db, token_id, book.bids, reason)
         if result.status == "filled":
             store_paper_decision(
                 db,
@@ -670,7 +745,7 @@ def process_open_position_exits(
                 {
                     "current_max": actual_max_for_outcome,
                     "bid": book.best_bid,
-                    "late_day_forecast_guard": late_day_guard,
+                    "hourly_forecast_reason": hourly_reason,
                 },
             )
             sells_filled += 1
@@ -687,7 +762,7 @@ def process_open_position_exits(
                 {
                     "current_max": actual_max_for_outcome,
                     "bid": book.best_bid,
-                    "late_day_forecast_guard": late_day_guard,
+                    "hourly_forecast_reason": hourly_reason,
                 },
             )
             sells_missed += 1
@@ -705,13 +780,15 @@ def build_forecast_move_candidates(
     candidates: list[TradeCandidate] = []
     if old_forecast_max_c == new_forecast_max_c:
         return candidates
+    if floor(old_forecast_max_c) == floor(new_forecast_max_c):
+        return candidates
     moved_up = new_forecast_max_c > old_forecast_max_c
     for outcome in outcomes:
         prior = prior_yes_asks.get(outcome.market_id)
         current = current_yes_asks.get(outcome.market_id)
         if prior is None or current is None:
             continue
-        side = _forecast_move_side(outcome, new_forecast_max_c, moved_up)
+        side = _forecast_move_side(outcome, old_forecast_max_c, new_forecast_max_c, moved_up)
         if side is None:
             continue
         impact = (
@@ -740,10 +817,15 @@ def build_forecast_move_candidates(
 
 
 def _forecast_move_side(
-    outcome: Outcome, new_forecast_max_c: float, moved_up: bool
+    outcome: Outcome,
+    old_forecast_max_c: float,
+    new_forecast_max_c: float,
+    moved_up: bool,
 ) -> str | None:
     predicate = outcome.predicate
-    if predicate_matches(predicate, new_forecast_max_c):
+    old_matches = predicate_matches(predicate, old_forecast_max_c)
+    new_matches = predicate_matches(predicate, new_forecast_max_c)
+    if new_matches and not old_matches:
         return "BUY_YES"
     if predicate.value_c is None:
         return None
@@ -803,6 +885,76 @@ def _implied_yes_price(book) -> float | None:
     return book.best_ask
 
 
+def _latest_effective_forecast_high(
+    db: sqlite3.Connection, forecast_date_hkt: str
+) -> dict | None:
+    rows = _effective_forecast_rows(db, forecast_date_hkt)
+    return rows[0] if rows else None
+
+
+def _latest_two_effective_forecast_highs(
+    db: sqlite3.Connection, forecast_date_hkt: str
+) -> list[dict]:
+    return _effective_forecast_rows(db, forecast_date_hkt, limit=2)
+
+
+def _effective_forecast_rows(
+    db: sqlite3.Connection, forecast_date_hkt: str, limit: int = 1
+) -> list[dict]:
+    rows = db.execute(
+        """
+        select id, forecast_date_hkt, fetched_at_utc, forecast_max_c, raw_max_c,
+               hourly_temperatures_json, raw_daily_forecast
+        from ocf_forecast_samples
+        where forecast_date_hkt = ?
+        order by fetched_at_utc desc, id desc
+        """,
+        (forecast_date_hkt,),
+    )
+    result: list[dict] = []
+    seen_update_times: set[str] = set()
+    for row in rows:
+        effective_high = _effective_forecast_max_from_sample(row)
+        if effective_high is None:
+            continue
+        update_time = _forecast_sample_update_time(row)
+        if update_time in seen_update_times:
+            continue
+        seen_update_times.add(update_time)
+        result.append(
+            {
+                "id": row["id"],
+                "forecast_date_hkt": row["forecast_date_hkt"],
+                "forecast_max_c": effective_high,
+                "update_time": update_time,
+            }
+        )
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _effective_forecast_max_from_sample(row: sqlite3.Row) -> float | None:
+    hourly_values = [
+        value
+        for _, value in _hourly_values_from_json(
+            row["forecast_date_hkt"], row["hourly_temperatures_json"]
+        )
+    ]
+    if hourly_values:
+        return max(hourly_values)
+    return _as_float(row["raw_max_c"])
+
+
+def _forecast_sample_update_time(row: sqlite3.Row) -> str:
+    try:
+        raw = json.loads(row["raw_daily_forecast"] or "{}")
+    except json.JSONDecodeError:
+        raw = {}
+    last_modified = raw.get("LastModified") if isinstance(raw, dict) else None
+    return str(last_modified or row["fetched_at_utc"] or row["id"])
+
+
 def _merge_runner_results(first: RunnerResult, second: RunnerResult) -> RunnerResult:
     return RunnerResult(
         buys_filled=first.buys_filled + second.buys_filled,
@@ -812,6 +964,13 @@ def _merge_runner_results(first: RunnerResult, second: RunnerResult) -> RunnerRe
         signals=first.signals + second.signals,
         notes=first.notes + second.notes,
     )
+
+
+def _forecast_change_max_entry_price(target_date: date, today_hkt: date) -> float:
+    lead_days = (target_date - today_hkt).days
+    if lead_days >= 2:
+        return Settings.forecast_change_d2_max_entry_price
+    return Settings.forecast_change_max_entry_price
 
 
 def run_paper_loop(
@@ -872,12 +1031,14 @@ def _execute_candidate_buy(
     side = "YES" if candidate.side == "BUY_YES" else "NO"
     token_id = candidate.outcome.yes_token_id if side == "YES" else candidate.outcome.no_token_id
     outcome_row = find_outcome_by_token(db, token_id)
-    if (
-        outcome_row is not None
-        and _late_day_forecast_guard_applies(
+    forecast_guard_reason = (
+        _forecast_value_guard_reason(
             db, outcome_row["target_date_hkt"], outcome_row["label"], side
         )
-    ):
+        if outcome_row is not None and event_type in {"forecast_change", "forecast_value"}
+        else None
+    )
+    if forecast_guard_reason is not None:
         store_paper_decision(
             db,
             event_type,
@@ -886,14 +1047,19 @@ def _execute_candidate_buy(
             side,
             "BUY",
             "ignored",
-            "late-day forecast peak guard",
+            forecast_guard_reason,
             event_key=event_key,
         )
         return None
-    existing = db.execute(
-        "select net_shares from paper_positions where outcome_id = ? and net_shares > 0",
-        (token_id,),
-    ).fetchone()
+    if _LIVE_CLIENT is not None:
+        existing = get_live_position(db, token_id)
+        if existing is not None and float(existing["net_shares"]) <= 0:
+            existing = None
+    else:
+        existing = db.execute(
+            "select net_shares from paper_positions where outcome_id = ? and net_shares > 0",
+            (token_id,),
+        ).fetchone()
     if existing and not allow_existing_position:
         store_paper_decision(
             db,
@@ -907,7 +1073,8 @@ def _execute_candidate_buy(
             event_key=event_key,
         )
         return None
-    requested_size = Settings.max_order_usd if size_usd is None else size_usd
+    base_order_cap = _LIVE_ORDER_CAP_USD if _LIVE_ORDER_CAP_USD is not None else Settings.max_order_usd
+    requested_size = base_order_cap if size_usd is None else min(size_usd, base_order_cap)
     if requested_size <= Settings.dust_order_epsilon_usd:
         store_paper_decision(
             db,
@@ -964,17 +1131,34 @@ def _execute_candidate_buy(
             if dynamic_max_buy_price is None
             else min(dynamic_max_buy_price, slippage_cap)
         )
-    result = execute_paper_buy(
-        db,
-        token_id=token_id,
-        side=side,
-        size_usd=requested_size,
-        asks=book.asks,
-        max_order_usd=Settings.max_order_usd,
-        reason=candidate.reason,
-        max_price=dynamic_max_buy_price,
-        min_fill_usd=min(requested_size, Settings.min_entry_fill_usd),
-    )
+    if _LIVE_CLIENT is not None:
+        result = execute_live_buy(
+            db,
+            _LIVE_CLIENT,
+            token_id=token_id,
+            side=side,
+            size_usd=requested_size,
+            asks=book.asks,
+            reason=candidate.reason,
+            max_price=dynamic_max_buy_price,
+            min_fill_usd=min(requested_size, Settings.min_entry_fill_usd),
+            order_cap_usd=base_order_cap,
+            label=candidate.outcome.label,
+            event_type=event_type,
+            event_key=event_key,
+        )
+    else:
+        result = execute_paper_buy(
+            db,
+            token_id=token_id,
+            side=side,
+            size_usd=requested_size,
+            asks=book.asks,
+            max_order_usd=Settings.max_order_usd,
+            reason=candidate.reason,
+            max_price=dynamic_max_buy_price,
+            min_fill_usd=min(requested_size, Settings.min_entry_fill_usd),
+        )
     status = "filled" if result.status == "filled" else "missed"
     store_paper_decision(
         db,
@@ -996,33 +1180,106 @@ def _execute_candidate_buy(
 
 
 def _remaining_position_budget(db: sqlite3.Connection, token_id: str) -> float:
-    position = db.execute(
-        "select net_shares, avg_price from paper_positions where outcome_id = ?",
-        (token_id,),
-    ).fetchone()
+    if _LIVE_CLIENT is not None:
+        position = get_live_position(db, token_id)
+        cap = _LIVE_ORDER_CAP_USD if _LIVE_ORDER_CAP_USD is not None else Settings.live_scheduler_order_cap_usd
+    else:
+        position = db.execute(
+            "select net_shares, avg_price from paper_positions where outcome_id = ?",
+            (token_id,),
+        ).fetchone()
+        cap = Settings.max_order_usd
     if position is None:
-        return Settings.max_order_usd
+        return cap
     invested = float(position["net_shares"]) * float(position["avg_price"])
-    return max(Settings.max_order_usd - invested, 0.0)
+    return max(cap - invested, 0.0)
 
 
-def _late_day_forecast_guard_applies(
+def _forecast_value_guard_reason(
     db: sqlite3.Connection,
     target_date_hkt: str,
     label: str,
     side: str,
-    late_start_hour: int = 21,
-) -> bool:
+) -> str | None:
     if side != "YES":
-        return False
+        return None
     predicate = parse_outcome_label(label)
     if predicate.value_c is None:
-        return False
+        return None
     bucket_floor = float(predicate.value_c)
     rows = _latest_hourly_forecast_for_date(db, target_date_hkt)
-    if not rows:
-        return False
+    relevant = _hourly_values_from_items(target_date_hkt, rows)
+    if not relevant:
+        return None
 
+    if max(value for _, value in relevant) < bucket_floor:
+        return "hourly forecast below bucket guard"
+
+    if _late_day_forecast_guard_applies(relevant, bucket_floor):
+        return "late-day forecast peak guard"
+
+    return None
+
+
+def _hourly_forecast_invalidation_reason(
+    db: sqlite3.Connection,
+    outcome: sqlite3.Row,
+    side: str,
+) -> str | None:
+    predicate = parse_outcome_label(outcome["label"])
+    if predicate.value_c is None:
+        return None
+    relevant = _latest_hourly_forecast_values(db, outcome["target_date_hkt"])
+    latest = None if relevant else _latest_effective_forecast_high(db, outcome["target_date_hkt"])
+    if not relevant and latest is None:
+        return None
+    forecast_max = (
+        max(value for _, value in relevant)
+        if relevant
+        else float(latest["forecast_max_c"])
+    )
+    matches_forecast = predicate_matches(predicate, forecast_max)
+    if side == "YES":
+        if not matches_forecast:
+            return (
+                "position invalidated by hourly forecast"
+                if relevant
+                else "position invalidated by decimal forecast"
+            )
+        if _late_day_forecast_guard_applies(relevant, float(predicate.value_c)):
+            return "late-day forecast peak guard"
+        return None
+    if side == "NO" and matches_forecast:
+        return (
+            "position invalidated by hourly forecast"
+            if relevant
+            else "position invalidated by decimal forecast"
+        )
+    return None
+
+
+def _latest_hourly_forecast_values(
+    db: sqlite3.Connection, target_date_hkt: str
+) -> list[tuple[int, float]]:
+    rows = _latest_hourly_forecast_for_date(db, target_date_hkt)
+    return _hourly_values_from_items(target_date_hkt, rows)
+
+
+def _hourly_values_from_json(
+    target_date_hkt: str, hourly_temperatures_json: str | None
+) -> list[tuple[int, float]]:
+    try:
+        rows = json.loads(hourly_temperatures_json or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(rows, list):
+        return []
+    return _hourly_values_from_items(target_date_hkt, rows)
+
+
+def _hourly_values_from_items(
+    target_date_hkt: str, rows: list[dict]
+) -> list[tuple[int, float]]:
     relevant: list[tuple[int, float]] = []
     for item in rows:
         hour_text = str(item.get("forecast_hour_hkt") or "")
@@ -1036,19 +1293,24 @@ def _late_day_forecast_guard_applies(
         except ValueError:
             continue
         relevant.append((hour, value))
+    return relevant
+
+
+def _late_day_forecast_guard_applies(
+    relevant: list[tuple[int, float]],
+    bucket_floor: float,
+    late_start_hour: int = 21,
+) -> bool:
     if not relevant:
         return False
 
-    late_values = [value for hour, value in relevant if hour >= late_start_hour]
-    early_values = [value for hour, value in relevant if hour < late_start_hour]
-    if not late_values or not early_values:
+    breach_hours = [
+        hour for hour, value in sorted(relevant, key=lambda item: item[0])
+        if value >= bucket_floor
+    ]
+    if not breach_hours:
         return False
-
-    if max(late_values) < bucket_floor:
-        return False
-    if max(value for _, value in relevant) != max(late_values):
-        return False
-    return max(early_values) < bucket_floor
+    return breach_hours[0] >= late_start_hour
 
 
 def _latest_hourly_forecast_for_date(

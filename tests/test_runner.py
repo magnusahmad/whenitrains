@@ -10,7 +10,9 @@ from whenitrains.runner import (
     process_actual_entries,
     process_all_forecast_entries,
     process_forecast_entries,
+    process_forecast_value_entry,
     process_open_position_exits,
+    process_forecast_position_exits,
     render_dashboard,
     run_paper_tick,
 )
@@ -77,6 +79,71 @@ class RunnerTests(unittest.TestCase):
                 "select simulated_fill_price from paper_orders where status = 'filled' order by id desc limit 1"
             ).fetchone()
             self.assertEqual(order["simulated_fill_price"], 0.60)
+
+    def test_forecast_change_d2_skips_when_entry_price_is_above_twenty_cents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target_date = date(2026, 5, 6)
+            db = _seed_market(Path(tmp) / "test.db", target_date=target_date)
+            _store_forecast(
+                db,
+                28,
+                "2026-05-04T00:45:00+08:00",
+                forecast_date=target_date,
+            )
+            _store_forecast(
+                db,
+                29,
+                "2026-05-04T01:45:00+08:00",
+                forecast_date=target_date,
+            )
+            _store_book_pair(db, "yes29", old_ask=0.19, new_ask=0.21)
+            _store_book_pair(db, "no29", old_ask=0.81, new_ask=0.81)
+
+            result = process_forecast_entries(
+                db, target_date, today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(result.buys_missed, 1)
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "missed")
+            self.assertEqual(decision["reason"], "no ask depth at or below max price")
+
+    def test_forecast_change_d2_buys_when_entry_price_is_at_twenty_cents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target_date = date(2026, 5, 6)
+            db = _seed_market(Path(tmp) / "test.db", target_date=target_date)
+            _store_forecast(
+                db,
+                28,
+                "2026-05-04T00:45:00+08:00",
+                forecast_date=target_date,
+            )
+            _store_forecast(
+                db,
+                29,
+                "2026-05-04T01:45:00+08:00",
+                forecast_date=target_date,
+            )
+            _store_book_pair(db, "yes29", old_ask=0.19, new_ask=0.20)
+            _store_book_pair(db, "no29", old_ask=0.81, new_ask=0.81)
+
+            result = process_forecast_entries(
+                db, target_date, today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 1)
+            order = db.execute(
+                "select simulated_fill_price from paper_orders where status = 'filled' order by id desc limit 1"
+            ).fetchone()
+            self.assertEqual(order["simulated_fill_price"], 0.20)
 
     def test_forecast_change_does_not_sweep_far_above_top_ask(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -663,7 +730,7 @@ class RunnerTests(unittest.TestCase):
                 order by id desc limit 1
                 """
             ).fetchone()
-            self.assertEqual(decision["reason"], "position invalidated by forecast change")
+            self.assertEqual(decision["reason"], "position invalidated by hourly forecast")
 
     def test_forecast_value_buys_cheap_forecast_bucket_when_favorite_is_lower(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -725,7 +792,107 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(decision["status"], "ignored")
             self.assertEqual(decision["reason"], "late-day forecast peak guard")
 
-    def test_exit_loop_sells_late_day_peak_bucket_position(self):
+    def test_forecast_value_blocks_when_hourly_forecast_never_reaches_bucket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_threshold_risk_outcomes(),
+            )
+            _store_forecast(db, 29, "2026-05-04T15:11:53+08:00")
+            _store_below_bucket_hourly_forecast(db, date(2026, 5, 4), 29.0)
+            _store_book_pair(db, "yes28", old_ask=0.60, new_ask=0.60)
+            _store_book_pair(db, "yes29", old_ask=0.20, new_ask=0.20)
+            _store_book_pair(db, "yes30", old_ask=0.10, new_ask=0.10)
+
+            result = process_forecast_value_entry(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 0)
+            order_count = db.execute("select count(*) from paper_orders").fetchone()[0]
+            self.assertEqual(order_count, 0)
+            decision_count = db.execute(
+                """
+                select count(*)
+                from paper_decisions
+                where event_type = 'forecast_value'
+                  and action = 'BUY'
+                  and label = '29°C'
+                """
+            ).fetchone()[0]
+            self.assertEqual(decision_count, 0)
+
+    def test_late_day_peak_guard_preempts_cheap_threshold_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_threshold_risk_outcomes(),
+            )
+            _store_forecast(db, 29, "2026-05-04T15:11:53+08:00")
+            _store_late_peak_hourly_forecast(db, date(2026, 5, 4), 29.0)
+            _store_book_pair(db, "yes28", old_ask=0.60, new_ask=0.60)
+            _store_book_pair(db, "yes29", old_ask=0.31, new_ask=0.31)
+            _store_book_pair(db, "yes30", old_ask=0.10, new_ask=0.10)
+
+            result = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertIn(
+                "forecast value skipped: 2026-05-04 29°C late-day forecast peak guard",
+                result.notes,
+            )
+            self.assertNotIn(
+                "forecast value skipped: 2026-05-04 29°C ask=0.310 > cheap_threshold=0.300",
+                result.notes,
+            )
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'forecast_value'
+                  and action = 'BUY'
+                  and label = '29°C'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "ignored")
+            self.assertEqual(decision["reason"], "late-day forecast peak guard")
+
+    def test_forecast_value_allows_bucket_when_hourly_forecast_breaches_before_21(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_threshold_risk_outcomes(),
+            )
+            _store_forecast(db, 29, "2026-05-04T15:11:53+08:00")
+            _store_early_breach_hourly_forecast(db, date(2026, 5, 4), 29.0)
+            _store_book_pair(db, "yes28", old_ask=0.60, new_ask=0.60)
+            _store_book_pair(db, "yes29", old_ask=0.20, new_ask=0.20)
+            _store_book_pair(db, "yes30", old_ask=0.10, new_ask=0.10)
+
+            result = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 1)
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'forecast_value'
+                  and action = 'BUY'
+                  and label = '29°C'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "filled")
+            self.assertEqual(
+                decision["reason"],
+                "forecast bucket priced unrealistically low vs HKO forecast",
+            )
+
+    def test_exit_loop_sells_for_late_day_peak_hourly_invalidation(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
                 Path(tmp) / "test.db",
@@ -771,6 +938,65 @@ class RunnerTests(unittest.TestCase):
                 """
             ).fetchone()
             self.assertEqual(decision["reason"], "late-day forecast peak guard")
+
+    def test_forecast_exit_prefers_decimal_hourly_forecast_over_rounded_daily_max(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m25",
+                        label="25°C",
+                        predicate=parse_outcome_label("25°C"),
+                        yes_token_id="yes25",
+                        no_token_id="no25",
+                    )
+                ],
+            )
+            from whenitrains.paper_db import execute_paper_buy
+
+            execute_paper_buy(
+                db,
+                token_id="yes25",
+                side="YES",
+                size_usd=100,
+                asks=[(0.20, 1000)],
+                max_order_usd=250,
+                reason="test",
+            )
+            _store_below_bucket_hourly_forecast(db, date(2026, 5, 4), 25.0)
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.18, 1000)],
+                    asks=[(0.20, 1000)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+
+            result = process_forecast_position_exits(
+                db,
+                target_date=date(2026, 5, 4),
+                new_forecast_max_c=25.0,
+            )
+
+            self.assertEqual(result.sells_filled, 1)
+            position = db.execute(
+                "select net_shares from paper_positions where outcome_id = 'yes25'"
+            ).fetchone()
+            self.assertEqual(position["net_shares"], 0)
+            decision = db.execute(
+                """
+                select reason
+                from paper_decisions
+                where event_type = 'forecast_exit' and action = 'SELL'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["reason"], "position invalidated by hourly forecast")
 
     def test_forecast_value_skips_when_favorite_is_above_non_top_forecast_bucket(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1036,7 +1262,7 @@ class RunnerTests(unittest.TestCase):
             result = process_forecast_entries(db, date(2026, 5, 4))
 
             self.assertEqual(result.buys_filled, 0)
-            self.assertIn("need two forecast highs", result.notes)
+            self.assertIn("need two decimal forecast highs", result.notes)
 
     def test_dashboard_reports_key_stats(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1160,6 +1386,27 @@ def _store_forecast(
             )
         ],
     )
+    if source_type == "ocf_station":
+        store_ocf_forecast_samples(
+            db,
+            snapshot.id,
+            [
+                OcfForecastSample(
+                    forecast_date_hkt=forecast_date,
+                    forecast_min_c=None,
+                    forecast_max_c=int(high),
+                    raw_min_c=None,
+                    raw_max_c=high,
+                    hourly_temperatures=[
+                        {
+                            "forecast_hour_hkt": f"{forecast_date.isoformat()}T14:00:00+08:00",
+                            "temperature_c": high,
+                        }
+                    ],
+                    raw={"LastModified": update_time},
+                )
+            ],
+        )
 
 
 def _store_observation(db, high: float, observed_date=date(2026, 5, 4)):
@@ -1220,6 +1467,82 @@ def _store_late_peak_hourly_forecast(db, forecast_date: date, peak: float):
                     {
                         "forecast_hour_hkt": f"{forecast_date.isoformat()}T23:00:00+08:00",
                         "temperature_c": peak,
+                    },
+                ],
+                raw={"LastModified": int(f"{forecast_date:%Y%m%d}151153")},
+            )
+        ],
+    )
+
+
+def _store_below_bucket_hourly_forecast(db, forecast_date: date, bucket: float):
+    snapshot = store_raw_snapshot(
+        db, "hko", f"ocf-hourly-below-{forecast_date}", str(bucket)
+    )
+    store_ocf_forecast_samples(
+        db,
+        snapshot.id,
+        [
+            OcfForecastSample(
+                forecast_date_hkt=forecast_date,
+                forecast_min_c=None,
+                forecast_max_c=int(bucket),
+                raw_min_c=None,
+                raw_max_c=bucket,
+                hourly_temperatures=[
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T18:00:00+08:00",
+                        "temperature_c": bucket - 0.6,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T20:00:00+08:00",
+                        "temperature_c": bucket - 1.0,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T21:00:00+08:00",
+                        "temperature_c": bucket - 0.5,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T23:00:00+08:00",
+                        "temperature_c": bucket - 0.3,
+                    },
+                ],
+                raw={"LastModified": int(f"{forecast_date:%Y%m%d}151153")},
+            )
+        ],
+    )
+
+
+def _store_early_breach_hourly_forecast(db, forecast_date: date, bucket: float):
+    snapshot = store_raw_snapshot(
+        db, "hko", f"ocf-hourly-early-{forecast_date}", str(bucket)
+    )
+    store_ocf_forecast_samples(
+        db,
+        snapshot.id,
+        [
+            OcfForecastSample(
+                forecast_date_hkt=forecast_date,
+                forecast_min_c=None,
+                forecast_max_c=int(bucket),
+                raw_min_c=None,
+                raw_max_c=bucket,
+                hourly_temperatures=[
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T18:00:00+08:00",
+                        "temperature_c": bucket - 0.6,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T20:00:00+08:00",
+                        "temperature_c": bucket,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T21:00:00+08:00",
+                        "temperature_c": bucket,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T23:00:00+08:00",
+                        "temperature_c": bucket,
                     },
                 ],
                 raw={"LastModified": int(f"{forecast_date:%Y%m%d}151153")},

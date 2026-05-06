@@ -92,12 +92,12 @@ class SchedulerTests(unittest.TestCase):
         )
 
     def test_orderbooks_and_market_discovery_have_separate_cadence(self):
-        now = datetime(2026, 5, 4, 12, 0, tzinfo=HKT)
+        now = datetime(2026, 5, 4, 12, 5, tzinfo=HKT)
         state = SchedulerState()
         actions = scheduler_actions(now, state)
         self.assertTrue(actions.discover_market)
         self.assertTrue(actions.fetch_orderbooks)
-        self.assertFalse(actions.fetch_current_temperature)
+        self.assertTrue(actions.fetch_current_temperature)
 
         state.last_market_discovery_at = now
         state.last_orderbook_fetch_at = now
@@ -107,19 +107,44 @@ class SchedulerTests(unittest.TestCase):
         self.assertFalse(actions.fetch_orderbooks)
         self.assertFalse(actions.fetch_current_temperature)
 
-    def test_current_temperature_collection_is_idle_only(self):
+    def test_current_temperature_collection_can_run_with_orderbook_work(self):
         now = datetime(2026, 5, 4, 12, 5, 0, tzinfo=HKT)
         state = SchedulerState(
             last_market_discovery_at=now,
-            last_orderbook_fetch_at=now,
-            last_current_temperature_fetch_at=now - timedelta(seconds=3600),
+            last_orderbook_fetch_at=now - timedelta(seconds=15),
+            last_current_temperature_fetch_at=now - timedelta(seconds=600),
         )
 
         actions = scheduler_actions(now, state)
 
         self.assertFalse(actions.discover_market)
-        self.assertFalse(actions.fetch_orderbooks)
+        self.assertTrue(actions.fetch_orderbooks)
         self.assertTrue(actions.fetch_current_temperature)
+
+    def test_current_temperature_waits_during_hko_source_window(self):
+        now = datetime(2026, 5, 4, 12, 9, 0, tzinfo=HKT)
+        state = SchedulerState(
+            last_market_discovery_at=now,
+            last_orderbook_fetch_at=now,
+            last_current_temperature_fetch_at=now - timedelta(seconds=600),
+        )
+
+        actions = scheduler_actions(now, state)
+
+        self.assertTrue(actions.fetch_since_midnight)
+        self.assertFalse(actions.fetch_current_temperature)
+
+    def test_current_temperature_not_due_before_ten_minutes(self):
+        now = datetime(2026, 5, 4, 12, 5, 0, tzinfo=HKT)
+        state = SchedulerState(
+            last_market_discovery_at=now,
+            last_orderbook_fetch_at=now,
+            last_current_temperature_fetch_at=now - timedelta(seconds=599),
+        )
+
+        actions = scheduler_actions(now, state)
+
+        self.assertFalse(actions.fetch_current_temperature)
 
     def test_quiet_scheduler_suppresses_orderbook_only_noop_tick(self):
         result = RunnerResult(notes=("forecast high unchanged", "observed max unchanged"))

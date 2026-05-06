@@ -66,7 +66,7 @@ Use direct HKO sources that publish quickly enough for latency trading.
 Parsing rules:
 
 - Since-midnight actuals: use the Hong Kong Observatory automatic weather station row. This is the station that resolves the target markets.
-- OCF station forecast: fetch the HKO station feed and parse `DailyForecast[].ForecastDate`, `ForecastMaximumTemperature`, `ForecastMinimumTemperature`, and `HourlyWeatherForecast[]`. The visual page labels this as `Max & Min Temperature Forecast (°C)` and `Temperature Forecast (°C)`. For trading signals, use the displayed integer max from the max/min table, reproduced from `ForecastMaximumTemperature` using nearest-integer display rounding; keep the raw decimal in sampler/audit storage.
+- OCF station forecast: fetch the HKO station feed and parse `DailyForecast[].ForecastDate`, `ForecastMaximumTemperature`, `ForecastMinimumTemperature`, and `HourlyWeatherForecast[]`. The visual page labels this as `Max & Min Temperature Forecast (°C)` and `Temperature Forecast (°C)`. Store the displayed integer max from the max/min table, reproduced from `ForecastMaximumTemperature` using nearest-integer display rounding, but keep the raw decimal daily max and decimal hourly path in sampler/audit storage. Trading decisions use a decimal effective max: latest hourly-path max first, raw decimal daily max second. Rounded/display max is not a trading authority.
 - The Open Data API `flw` and `fnd` feeds are removed as trading inputs for this POC because historical evidence shows they can lag the actual bulletin/webpage update or have unclear update timing.
 - The old local weather forecast bulletin and 9-day forecast are removed from the trading signal path for this POC.
 - The OCF station feed provides multiple days, but the current paper latency strategy still focuses on the current-day HK highest-temperature market first.
@@ -112,12 +112,15 @@ Default and only mode for v1.
 
 ### Live Mode
 
-Later mode behind explicit config.
+Guarded mode behind explicit config. The live scaffold now exists, but paper remains the default and the live scheduler must still fail closed unless all live gates pass.
 
 Required safeguards before enabling:
 
-- `TRADING_MODE=live`
+- `WHENITRAINS_TRADING_MODE=live`
+- explicit `--live` flag on live commands
 - configured wallet/funder/signature type
+- pre-derived CLOB API key/secret/passphrase
+- hot private key loaded from macOS Keychain
 - max position and loss limits
 - order-size caps
 - kill switch
@@ -139,11 +142,11 @@ Polling strategy:
   - if no change by the end of the window, log a warning and wait for the next expected publication time
   - outside 10:00-20:00 HKT: do not poll
 - HKO OCF station forecast feed:
-  - update cadence is not yet confirmed
-  - interim trading scheduler cadence: poll every 10 minutes with a narrow 10-second window
+  - observed payload `LastModified` cadence is irregular but roughly hourly; recent stored gaps have a median near 60 minutes, with common gaps around 40, 60, and 80 minutes
+  - the hourly forecast table is a 24-hour path republished with each OCF payload version, not a source fetched only once per forecast hour
+  - current scheduler cadence: poll learned OCF update windows plus a coarse discovery probe so newly observed update minutes can be learned
   - separate discovery sampler: run `sample-ocf --interval-minutes 10 --hours 24` to persist raw snapshots, normalized max/min forecast rows, and hourly temperature forecast rows for cadence analysis
   - automatic cadence discovery: when payload `LastModified` or HTTP `Last-Modified` reveals a new HKT minute-of-day, store that minute in `hko_source_update_minutes`; the scheduler adds those learned minutes as daily forecast polling windows
-  - once the cadence is established, replace the interim 10-minute polling with precise update windows
 - Polymarket markets/orderbooks: monitor active target-day markets until the Hong Kong day ends.
 - Future market discovery: after OCF forecast ingestion, discover HK highest-temperature markets for every OCF forecast date at or after the current HKT date. Fetch orderbooks for all discovered active HK high-temperature outcomes.
 - Forecast-change trading can operate on future target-date markets when the OCF forecast high for that date changes and the corresponding market price is stale.
@@ -303,7 +306,7 @@ The core thesis is:
 2. For each market outcome, classify whether the update should increase, decrease, or not materially change the outcome's chance of resolving YES.
 3. Compare that directional impact with the outcome price change from the last pre-update market snapshot.
 4. The bot buys the stale side.
-5. For forecast-latency trades, the bot exits when the market reprices, when the trade is invalidated, or when a timeout/risk rule triggers.
+5. Current scheduler-managed forecast trades are held until a later forecast change or same-day actual max update invalidates them; manual paper exit commands still support take-profit and max-hold checks.
 6. For market-settling observation events, such as a temperature threshold already being reached, the bot may hold to maturity if resolution risk is low and the predicate mapping is confirmed.
 
 Inputs:
@@ -347,21 +350,56 @@ Required output:
 
 Initial deterministic rules should be deliberately simple and auditable:
 
-- If HKO forecast max changes by at least 1 C, mark outcomes whose target values are near the old reading or new reading.
-- Treat exact outcomes and greater-than/less-than outcomes equally; the filter is proximity to the new information, not predicate type.
+- If the decimal effective OCF max crosses into a different integer market bucket, mark outcomes whose target values are near the old reading or new reading. Decimal moves inside the same bucket are recorded but do not create forecast-change entries.
+- Forecast-change selection is directional and narrow:
+  - forecast down: buy the new forecast bucket YES and buy NO on exact/GTE values above the new forecast;
+  - forecast up: buy the new forecast bucket YES and buy NO on exact/bottom values below the new forecast.
 - Exclude far-away long shots whose likelihood only changes trivially. Example: if HKO raises target-day forecast max from `28 C` to `29 C`, do not buy `35 C`.
 - For every affected outcome, classify the update's directional impact before looking at the post-update price.
 - If current/official observed max has already exceeded an exact outcome, mark existing positions in that outcome for immediate exit.
-- If current/official observed max has crossed a greater-than/less-than target value, mark that outcome's YES side as repricing-critical.
+- If current/official observed max has crossed a greater-than/less-than target value on the same target date and crossed above the current same-day OCF forecast max, mark that outcome's YES side as repricing-critical.
 - If the update increases YES likelihood and YES has not moved up materially since the prior HKO reading, create a buy-YES candidate.
 - If the update decreases YES likelihood and NO has not moved up materially since the prior HKO reading, create a buy-NO candidate.
 - Treat unchanged prices, prices that moved too little, and prices that moved against the event as `PRICE_NOT_MOVED_WITH_EVENT`.
-- If the market reprices by the configured take-profit amount, create a paper exit candidate.
+- Forecast-change entries require the event-implied YES ask move to be no more than `0.20`; entry ask must be no more than `0.70` for D+0/D+1 and no more than `0.20` for D+2 or later.
+- Generic entry protection rejects asks above `0.98`, caps the marketable limit to the latest best ask plus `0.05`, and requires at least `$25` of fill unless the requested size is smaller.
+- Forecast-value entries can run even without a forecast change: for today and next-day markets, buy the forecast bucket YES when the YES ask is at or below `0.30` and the market favorite is below the forecast bucket. Skip if the favorite is above a non-top forecast bucket, if the latest hourly forecast never reaches the bucket floor, or if the first hourly forecast breach of the bucket floor occurs from `21:00` through `23:00` HKT.
+- Forecast-value buys only consume ask depth at or below `0.30` and may add to the same token until that token's position budget is reached.
 - If the event is market-settling and the held token's predicate is already satisfied, allow hold-to-maturity instead of forcing take-profit exit.
-- If the stale-price window expires before repricing, exit or cancel according to strategy config.
 - If spread or depth makes the apparent stale price non-executable, log a missed opportunity rather than a trade.
+- Forecast invalidation exits use the decimal effective OCF max. Sell YES when the decimal max no longer matches that bucket, sell NO when the decimal max now matches that bucket, and sell YES when the hourly path only first breaches the bucket floor from `21:00` through `23:00` HKT. If no decimal OCF max is available, skip the trading decision rather than falling back to the rounded/display daily max.
+- Actual invalidation exits are scoped to the same market target date; previous-day actual max values cannot invalidate future/current-day positions.
 
-## 8. Trade Candidate And Repricing Logic
+## 8. Backtesting Harness
+
+The reusable backtest harness replays stored HKO forecasts, OCF hourly samples, current observations, and Polymarket orderbook snapshots into a scratch SQLite DB.
+
+CLI:
+
+```bash
+PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backtest-day YYYY-MM-DD
+```
+
+Backtest behavior:
+
+- Copies the source DB using SQLite's online backup API, then writes only to the replay DB.
+- Default replay DB path: `/private/tmp/whenitrains-backtest-YYYY-MM-DD.sqlite3`.
+- Clears paper/replay tables in the scratch DB only: HKO forecast/sample rows, observations, orderbooks, paper decisions, paper orders, positions, signals, and paper order exclusions.
+- Re-ingests source rows as-of each replay tick, then runs the same paper tick code path as the scheduler.
+- Stamps generated paper decisions/orders/signals back to the historical tick timestamp so dashboard/PnL inspection is chronological.
+- Builds replay-local indexes for orderbooks, forecasts, observations, decision event keys, and positions.
+- Outputs orders, positions, active ticks, and optional JSON.
+
+Tick sources:
+
+- `--tick-source scheduler`: use historical paper decision timestamps. This is the default and best for replaying what the scheduler would have evaluated.
+- `--tick-source data`: use stored data fetch timestamps from HKO forecasts, OCF samples, observations, and optionally orderbooks.
+- `--tick-source both`: combine scheduler and data timestamps.
+- `--include-orderbook-ticks`: include orderbook snapshot timestamps for data-driven replays.
+- `--max-ticks`: cap replay length for smoke tests.
+- `--json`: emit machine-readable output for analysis.
+
+## 9. Trade Candidate And Repricing Logic
 
 No probability or fair-value estimate is required for v1.
 
@@ -387,7 +425,7 @@ Stale-price window definition:
 - If no executable depth exists, log a missed buy with reason `no_executable_depth`.
 - If visible depth is not economically meaningful after expected transaction fees, log a missed buy with reason `below_fee_threshold`.
 - If the window expires without a fill, log a missed buy with reason `stale_window_expired`.
-- The window is for opening a new latency trade only. Once a paper position is opened, exit is governed by take-profit, invalidation, hold-to-maturity, or risk rules.
+- The window is for opening a new latency trade only. Once a scheduler-managed paper position is opened, exit is governed by forecast invalidation, same-date actual invalidation, hold-to-maturity, or risk rules. Manual paper commands still support take-profit and max-hold checks.
 - Initial POC default: 90 seconds after event detection, configurable.
 
 Directional impact examples:
@@ -410,7 +448,7 @@ Example entry:
 - HKO raises forecast high from `28 C` to `29 C`.
 - `29 C` YES or `>=29 C` YES is still offered near its pre-update ask.
 - The bot paper-buys YES.
-- The bot watches for repricing and paper-sells after price moves by the configured take-profit amount.
+- The scheduler holds the position until a later forecast change, same-date actual max update, hold-to-maturity condition, or risk rule resolves the trade.
 
 Example NO entry:
 
@@ -434,8 +472,9 @@ Trade candidate requirements:
 Default stale-price thresholds:
 
 - Entry: affected outcome has moved less than 1-2 cents after a material HKO event while neighboring/related outcomes or market context imply repricing should occur.
-- Take profit: exit after 2-5 cents favorable movement, configurable per market liquidity.
-- Stop/timeout: after a buy fills, exit if the executable bid has not moved favorably within 10 minutes. This is separate from the stale-price entry window.
+- Forecast-change repricing guard: directional ask movement must be no more than `0.20`; entry ask must be no more than `0.70` for D+0/D+1 and no more than `0.20` for D+2 or later.
+- Forecast-value cheap-bucket guard: current or next-day forecast bucket YES ask must be no more than `0.30`.
+- Manual paper commands still expose take-profit and max-hold calculations, but scheduler-managed positions no longer auto-exit on take-profit or 10-minute timeout.
 - Hold to maturity: allowed when an official/current HKO observation has already satisfied the market predicate, the parser is high-confidence, and remaining resolution risk is mainly operational rather than meteorological.
 - Live thresholds should start more conservative until paper data proves fill behavior.
 
@@ -444,7 +483,7 @@ Missed trade definitions:
 - `buy_missed`: signal generated, but no executable depth, expected edge below transaction fee, spread/depth guard failed, risk cap rejected, duplicate signal rejected, stale data guard fired, or price already moved with the event.
 - `sell_missed`: exit condition met, but no executable bid/depth, expected proceeds below transaction fee, stale orderbook, or risk/safety guard blocked execution.
 
-## 9. Trading Scenarios
+## 10. Trading Scenarios
 
 ### Scenario A: Forecast Upgrade Mispricing
 
@@ -560,7 +599,7 @@ Expected behavior:
 - Hold market-settling positions to maturity when the predicate is already satisfied and the expected gain from waiting is worth the remaining operational/resolution risk.
 - Stop opening new positions after configured cutoff unless the outcome is already determined by observed max.
 
-## 10. Risk Controls
+## 11. Risk Controls
 
 Bankroll assumption:
 
@@ -591,7 +630,7 @@ Kill switches:
 - Automatic kill switch on unexpected schema parse failure.
 - Automatic kill switch on daily drawdown breach.
 
-## 11. Execution Design
+## 12. Execution Design
 
 Paper order simulation should support:
 
@@ -601,6 +640,9 @@ Paper order simulation should support:
 - partial fills
 - rejected orders when depth is insufficient
 - explicit slippage assumptions
+- max-price and slippage-cap enforcement
+- minimum-fill enforcement
+- per-token position-budget enforcement for add-on buys
 
 Paper trading realism limits:
 
@@ -621,7 +663,7 @@ Live execution later should support:
 - account/open-order reconciliation every loop
 - separate `risk_check_before_order` and `risk_check_after_fill`
 
-## 12. API Credentials Plan
+## 13. API Credentials Plan
 
 Paper mode:
 
@@ -630,26 +672,30 @@ Paper mode:
 
 Live mode:
 
-- Use official Polymarket CLOB SDK.
-- Derive L2 API credentials from wallet signing.
-- If using the existing MetaMask/browser-wallet Polymarket account, use signature type `GNOSIS_SAFE` (`2`) and the Polymarket proxy wallet address as `POLY_FUNDER_ADDRESS`.
-- Planned live setup: continue using the same Polymarket wallet/account even if account equity grows materially.
-- Because the same wallet may hold a large balance, the bot must treat signing key exposure as the highest operational risk.
-- Required env vars will likely include:
-  - `POLY_PRIVATE_KEY`
-  - `POLY_FUNDER_ADDRESS`
-  - `POLY_SIGNATURE_TYPE`
-  - `POLY_API_KEY`
-  - `POLY_API_SECRET`
-  - `POLY_API_PASSPHRASE`
-  - `TRADING_MODE`
+- Use the official Polymarket Python CLOB client.
+- Use a dedicated bot hot key stored in macOS Keychain, not SQLite or `.env`.
+- Require pre-derived L2 credentials at runtime. Normal startup must not create or derive API credentials.
+- Required env vars:
+  - `WHENITRAINS_TRADING_MODE=live`
+  - `POLYMARKET_FUNDER_ADDRESS`
+  - `POLYMARKET_SIGNATURE_TYPE`
+  - `POLYMARKET_API_KEY`
+  - `POLYMARKET_API_SECRET`
+  - `POLYMARKET_API_PASSPHRASE`
+- Optional env vars:
+  - `POLYMARKET_HOST`
+  - `POLYMARKET_CHAIN_ID`
+  - `WHENITRAINS_KEYCHAIN_SERVICE`
+  - `WHENITRAINS_KEYCHAIN_ACCOUNT`
+- Default Keychain service/account: `whenitrains-polymarket` / `bot-private-key`.
+- Start with `POLYMARKET_SIGNATURE_TYPE=1` for the dedicated Polymarket proxy-wallet path unless real-auth smoke proves the account requires another type.
 
 Never log secrets. Never store private keys in SQLite.
 
 Large-wallet security requirements:
 
 - Keep paper trading and read-only monitoring usable without any private key present.
-- Load trading secrets only in live mode and fail closed if `TRADING_MODE` is not explicitly `live`.
+- Load trading secrets only in live mode and fail closed if `WHENITRAINS_TRADING_MODE` is not explicitly `live`.
 - Prefer a dedicated machine or hardened VPS user for live trading; do not run unrelated services in the same environment.
 - Store secrets in an OS keychain, encrypted secret file, or managed secret store rather than plain `.env` once real funds are used.
 - Do not print signed payloads, auth headers, API secrets, private keys, or raw environment dumps.
@@ -663,7 +709,7 @@ Large-wallet security requirements:
 - Maintain an incident runbook covering key compromise, bad parser behavior, runaway order placement, CLOB outage, and HKO data failure.
 - Before scaling size, add a second human-controlled withdrawal path or custody plan outside the bot process.
 
-## 13. Deployment Shape
+## 14. Deployment Shape
 
 Local v1:
 
@@ -682,7 +728,7 @@ VPS-ready later:
 - log rotation
 - alert channel
 
-## 14. Alerts And Dashboard
+## 15. Alerts And Dashboard
 
 Alerting is terminal/log-only for the POC.
 
@@ -699,30 +745,35 @@ Alerting requirements:
 - Repeated identical warnings should be throttled to avoid terminal spam.
 - External alert channels are deferred until after the POC.
 
-Minimal dashboard:
+Dashboard commands:
 
-- local terminal summary first, optionally generated static HTML later
-- unique HKO forecast snapshots ingested
-- latest HKO since-midnight max
-- current-day OCF station forecast max
-- latest OCF station forecast high and feed update time
-- discovered markets/outcomes
-- latest YES/NO bid/ask per outcome
-- buy orders placed
-- buy orders missed
-- sell orders placed
-- sell orders missed
-- open paper positions
-- realized PnL
-- executable mark-to-market estimate using current bid for longs
-- theoretical midpoint mark for reference only
-- total profit = realized PnL + executable unrealized PnL estimate
-- worst-case open loss if all open tokens go to zero
-- last successful poll per source: HKO CSV, HKO OCF station feed, Gamma, CLOB
-- decision counters: signals generated, ignored, risk-blocked, stale-price-blocked, liquidity-blocked
-- last scheduler run time and recent errors
+- `dashboard`: terminal paper summary backed by SQLite.
+- `dashboard-serve`: local HTTP web UI, defaulting to `http://127.0.0.1:8765/`.
 
-## 15. Milestones
+Paper web dashboard:
+
+- Route: `/`.
+- APIs: `/api/stats`, `/api/forecast-panels?side=YES|NO`, `/api/pnl`, and legacy `/api/forecast-vs-actual`.
+- Auto-refreshes every 15 seconds.
+- Shows D+0, D+1, and D+2 forecast panels.
+- D+0 includes raw OCF forecast high, hourly forecast, hourly actual temperature, hourly actual-minus-forecast error, since-midnight max, and current HKO temperature.
+- D+1/D+2 show OCF forecast high and selected Polymarket token price series.
+- Token-side selector switches between YES and NO token charts.
+- Price series include trade markers for filled paper buys and sells.
+- Legend items can be toggled on/off.
+- Tooltips are delayed to reduce accidental hover noise and include nearby trade details.
+- Modifier-wheel zoom and touch/pinch chart scaling are supported.
+- Paper PnL chart replays filled paper orders against later executable bids to show realized, unrealized, and total estimates.
+
+Live web dashboard:
+
+- Route: `/live`.
+- API: `/api/live/stats`.
+- Shows live open positions, confirmed open exposure, realized PnL, live order counts by status, kill-switch settings, and recent live orders.
+- Refreshes every 5 seconds.
+- Reads only live tables and live settings; it must not mix paper positions with live positions.
+
+## 16. Milestones
 
 ### Milestone 1: Project Skeleton
 
@@ -759,7 +810,8 @@ Minimal dashboard:
 - Polling-window scheduler for HKO actuals and OCF forecast updates.
 - Forecast-change paper entries.
 - Market-settling actual-cross entries for `or higher` outcomes.
-- Invalidation, take-profit, and 10-minute timeout exits.
+- Forecast and same-date actual invalidation exits.
+- Manual take-profit and max-hold exit calculations remain available for operator-triggered paper commands.
 
 ### Milestone 5: Paper Trader
 
@@ -774,18 +826,19 @@ Minimal dashboard:
 - Paper-trading performance report.
 - Parser audit.
 - Risk-control test suite.
-- Wallet/API credential setup.
-- Live mode remains disabled until explicitly enabled.
+- Keychain hot-key setup.
+- Pre-derived CLOB API credential setup.
+- Live mode remains fail-closed until explicitly enabled by command flags, env gate, credentials, preflight, risk caps, and kill-switch state.
 
-## 16. Open Questions
+## 17. Open Questions
 
 - HKO since-midnight max/min endpoint is confirmed: `https://data.weather.gov.hk/weatherAPI/hko_data/csdi/dataset/latest_since_midnight_maxmin_csdi_4.csv`.
 - HKO OCF station feed is confirmed as the current forecast source: `https://maps.weather.gov.hk/ocf/dat/HKO.xml`; parse displayed max/min forecast rows from `DailyForecast` and retain raw hourly forecast rows from `HourlyWeatherForecast`.
 - Polymarket market semantics are confirmed from sampled May 4 and May 5, 2026 HK highest-temperature markets: final HKO Daily Extract `Absolute Daily Max (deg. C)`, one-decimal precision, no rounding for integer buckets, finalized data only, and no later revisions considered.
 - Paper-mode daily drawdown is intentionally set to USD 4,000 / 80% for stress testing. Live-mode drawdown needs a safer value before enablement.
-- Wallet plan for live mode: continue using the same Polymarket wallet/account even at larger account sizes. Existing MetaMask/browser-wallet Polymarket accounts generally use `GNOSIS_SAFE` signature type `2` with the Polymarket proxy wallet as funder. Security plan must assume the funder may hold materially more than the bot's daily trading risk.
+- Wallet plan for live mode: use a dedicated bot hot key and Polymarket proxy wallet funded only with the current live risk budget plus a small operational buffer. Real-auth smoke must confirm the account-specific signature type and funder value before any real order.
 
-## 17. References
+## 18. References
 
 - HKO Open Data API documentation: https://data.weather.gov.hk/weatherAPI/doc/HKO_Open_Data_API_Documentation.pdf
 - HKO Weather API endpoint: https://data.weather.gov.hk/weatherAPI/opendata/weather.php

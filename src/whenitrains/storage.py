@@ -19,8 +19,10 @@ class RawSnapshotRecord:
 
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path)
+    db = sqlite3.connect(path, timeout=30.0)
     db.row_factory = sqlite3.Row
+    db.execute("pragma busy_timeout = 30000")
+    db.execute("pragma journal_mode = WAL")
     return db
 
 
@@ -198,6 +200,55 @@ def migrate(db: sqlite3.Connection) -> None:
             avg_price real,
             realized_pnl real,
             updated_at_utc text
+        );
+
+        create table if not exists paper_order_exclusions (
+            order_id integer primary key,
+            tag text not null,
+            reason text not null,
+            created_at_utc text not null
+        );
+
+        create table if not exists live_orders (
+            id integer primary key autoincrement,
+            created_at_utc text not null,
+            submitted_at_utc text,
+            reconciled_at_utc text,
+            event_type text,
+            event_key text,
+            outcome_id text not null,
+            label text,
+            side text not null,
+            action text not null,
+            clob_order_id text,
+            order_type text,
+            status text not null,
+            requested_size_usd real,
+            requested_shares real,
+            limit_price real,
+            fill_price real,
+            fill_size_usd real,
+            fill_shares real,
+            reason text,
+            error text,
+            raw_request_json text,
+            raw_response_json text,
+            raw_reconcile_json text
+        );
+
+        create table if not exists live_positions (
+            outcome_id text primary key,
+            net_shares real not null,
+            avg_price real not null,
+            realized_pnl real not null,
+            updated_at_utc text not null,
+            last_reconciled_at_utc text
+        );
+
+        create table if not exists live_settings (
+            name text primary key,
+            value text not null,
+            updated_at_utc text not null
         );
 
         create table if not exists risk_events (
@@ -811,6 +862,220 @@ def upsert_paper_position(
     db.commit()
 
 
+def store_live_order(
+    db: sqlite3.Connection,
+    *,
+    outcome_id: str,
+    side: str,
+    action: str,
+    status: str,
+    label: str | None = None,
+    event_type: str | None = None,
+    event_key: str | None = None,
+    clob_order_id: str | None = None,
+    order_type: str | None = None,
+    requested_size_usd: float | None = None,
+    requested_shares: float | None = None,
+    limit_price: float | None = None,
+    fill_price: float | None = None,
+    fill_size_usd: float | None = None,
+    fill_shares: float | None = None,
+    reason: str | None = None,
+    error: str | None = None,
+    raw_request: dict | None = None,
+    raw_response: dict | None = None,
+    raw_reconcile: dict | None = None,
+) -> int:
+    now = datetime.now(timezone.utc).isoformat()
+    cursor = db.execute(
+        """
+        insert into live_orders
+        (created_at_utc, submitted_at_utc, reconciled_at_utc, event_type, event_key,
+         outcome_id, label, side, action, clob_order_id, order_type, status,
+         requested_size_usd, requested_shares, limit_price, fill_price,
+         fill_size_usd, fill_shares, reason, error, raw_request_json,
+         raw_response_json, raw_reconcile_json)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            now,
+            now if status not in ("rejected", "blocked") else None,
+            now if raw_reconcile is not None else None,
+            event_type,
+            event_key,
+            outcome_id,
+            label,
+            side,
+            action,
+            clob_order_id,
+            order_type,
+            status,
+            requested_size_usd,
+            requested_shares,
+            limit_price,
+            fill_price,
+            fill_size_usd,
+            fill_shares,
+            reason,
+            error,
+            json.dumps(raw_request or {}),
+            json.dumps(raw_response or {}),
+            json.dumps(raw_reconcile or {}),
+        ),
+    )
+    db.commit()
+    return int(cursor.lastrowid)
+
+
+def update_live_order_reconcile(
+    db: sqlite3.Connection,
+    order_id: int,
+    *,
+    status: str,
+    fill_price: float | None,
+    fill_size_usd: float,
+    fill_shares: float,
+    raw_reconcile: dict | None = None,
+    error: str | None = None,
+) -> None:
+    db.execute(
+        """
+        update live_orders
+        set reconciled_at_utc = ?,
+            status = ?,
+            fill_price = ?,
+            fill_size_usd = ?,
+            fill_shares = ?,
+            raw_reconcile_json = ?,
+            error = coalesce(?, error)
+        where id = ?
+        """,
+        (
+            datetime.now(timezone.utc).isoformat(),
+            status,
+            fill_price,
+            fill_size_usd,
+            fill_shares,
+            json.dumps(raw_reconcile or {}),
+            error,
+            order_id,
+        ),
+    )
+    db.commit()
+
+
+def list_live_orders_by_status(
+    db: sqlite3.Connection, statuses: tuple[str, ...]
+) -> list[sqlite3.Row]:
+    placeholders = ",".join("?" for _ in statuses)
+    return list(
+        db.execute(
+            f"""
+            select *
+            from live_orders
+            where status in ({placeholders})
+            order by id asc
+            """,
+            statuses,
+        )
+    )
+
+
+def get_live_position(db: sqlite3.Connection, token_id: str) -> sqlite3.Row | None:
+    return db.execute(
+        "select * from live_positions where outcome_id = ?", (token_id,)
+    ).fetchone()
+
+
+def list_open_live_positions(db: sqlite3.Connection) -> list[sqlite3.Row]:
+    return list(
+        db.execute(
+            """
+            select * from live_positions
+            where net_shares > 0
+            order by updated_at_utc
+            """
+        )
+    )
+
+
+def upsert_live_position(
+    db: sqlite3.Connection,
+    token_id: str,
+    shares: float,
+    avg_price: float,
+    realized_pnl: float,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    db.execute(
+        """
+        insert into live_positions
+        (outcome_id, net_shares, avg_price, realized_pnl, updated_at_utc, last_reconciled_at_utc)
+        values (?, ?, ?, ?, ?, ?)
+        on conflict(outcome_id) do update set
+            net_shares = excluded.net_shares,
+            avg_price = excluded.avg_price,
+            realized_pnl = excluded.realized_pnl,
+            updated_at_utc = excluded.updated_at_utc,
+            last_reconciled_at_utc = excluded.last_reconciled_at_utc
+        """,
+        (token_id, shares, avg_price, realized_pnl, now, now),
+    )
+    db.commit()
+
+
+def live_total_open_exposure(db: sqlite3.Connection) -> float:
+    value = db.execute(
+        """
+        select coalesce(sum(net_shares * avg_price), 0)
+        from live_positions
+        where net_shares > 0
+        """
+    ).fetchone()[0]
+    return float(value or 0.0)
+
+
+def live_realized_pnl_since(db: sqlite3.Connection, start_utc: str) -> float:
+    value = db.execute(
+        """
+        select coalesce(sum(realized_pnl), 0)
+        from live_positions
+        where updated_at_utc >= ?
+        """,
+        (start_utc,),
+    ).fetchone()[0]
+    return float(value or 0.0)
+
+
+def set_live_setting(db: sqlite3.Connection, name: str, value: str | bool) -> None:
+    db.execute(
+        """
+        insert into live_settings (name, value, updated_at_utc)
+        values (?, ?, ?)
+        on conflict(name) do update set
+            value = excluded.value,
+            updated_at_utc = excluded.updated_at_utc
+        """,
+        (
+            name,
+            "1" if value is True else "0" if value is False else str(value),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    db.commit()
+
+
+def get_live_setting(db: sqlite3.Connection, name: str, default: str = "0") -> str:
+    row = db.execute(
+        "select value from live_settings where name = ?", (name,)
+    ).fetchone()
+    return str(row["value"]) if row else default
+
+
+def live_setting_enabled(db: sqlite3.Connection, name: str) -> bool:
+    return get_live_setting(db, name).lower() in ("1", "true", "yes", "on")
+
+
 def store_signal(
     db: sqlite3.Connection,
     market_id: str,
@@ -1093,6 +1358,58 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
         "executable_unrealized_pnl": executable_unrealized,
         "total_profit": realized + executable_unrealized,
         "worst_case_open_loss": worst_case_open_loss,
+    }
+
+
+def live_dashboard_stats(db: sqlite3.Connection) -> dict:
+    open_positions = list_open_live_positions(db)
+    open_exposure = live_total_open_exposure(db)
+    realized_pnl = db.execute(
+        "select coalesce(sum(realized_pnl), 0) from live_positions"
+    ).fetchone()[0]
+    counts = {
+        "orders": db.execute("select count(*) from live_orders").fetchone()[0],
+        "filled": db.execute(
+            "select count(*) from live_orders where status = 'filled'"
+        ).fetchone()[0],
+        "submitted": db.execute(
+            "select count(*) from live_orders where status = 'submitted'"
+        ).fetchone()[0],
+        "rejected": db.execute(
+            "select count(*) from live_orders where status = 'rejected'"
+        ).fetchone()[0],
+        "blocked": db.execute(
+            "select count(*) from live_orders where status = 'blocked'"
+        ).fetchone()[0],
+        "error": db.execute(
+            "select count(*) from live_orders where status = 'error'"
+        ).fetchone()[0],
+    }
+    recent_orders = [
+        dict(row)
+        for row in db.execute(
+            """
+            select created_at_utc, outcome_id, label, side, action, clob_order_id,
+                   order_type, status, requested_size_usd, requested_shares,
+                   limit_price, fill_price, fill_size_usd, fill_shares, reason, error
+            from live_orders
+            order by id desc
+            limit 25
+            """
+        )
+    ]
+    return {
+        "mode": "live",
+        "counts": counts,
+        "open_positions": len(open_positions),
+        "open_exposure_usd": open_exposure,
+        "realized_pnl": float(realized_pnl or 0.0),
+        "block_new_entries": live_setting_enabled(db, "block_new_entries"),
+        "cancel_open_orders_and_exit_positions": live_setting_enabled(
+            db, "cancel_open_orders_and_exit_positions"
+        ),
+        "positions": [dict(row) for row in open_positions],
+        "recent_orders": recent_orders,
     }
 
 

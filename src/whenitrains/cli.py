@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from .backtest import dumps_result_json, render_backtest_result, run_backtest_day
 from .config import Settings
 from .forecast_accuracy import build_forecast_accuracy_report, render_accuracy_report
 from .hko import (
@@ -31,15 +33,25 @@ from .polymarket import (
 )
 from .polymarket import fetch_orderbook
 from .dashboard_server import serve as serve_dashboard
-from .runner import render_dashboard, run_paper_loop, run_paper_tick
+from .runner import render_dashboard, run_live_tick, run_paper_loop, run_paper_tick
 from .scheduler import run_scheduled_paper_loop
 from .paper_db import calculate_entry, calculate_exit, execute_paper_buy, execute_paper_sell
+from .live import (
+    LiveTradingError,
+    PolymarketClobClient,
+    execute_live_buy,
+    execute_live_sell,
+    load_live_config,
+    preflight_live,
+    store_keychain_secret,
+)
 from .storage import (
     backup_sqlite_database,
     connect,
     find_outcome_by_label,
     latest_orderbook,
     list_hko_update_times,
+    list_live_orders_by_status,
     list_hko_forecast_dates,
     list_outcomes,
     list_outcomes_from_date,
@@ -55,6 +67,9 @@ from .storage import (
     store_polymarket_event,
     store_raw_snapshot,
     store_risk_event,
+    set_live_setting,
+    live_setting_enabled,
+    update_live_order_reconcile,
 )
 
 
@@ -116,6 +131,59 @@ def main(argv: list[str] | None = None) -> int:
     dashboard_serve = sub.add_parser("dashboard-serve")
     dashboard_serve.add_argument("--host", default="127.0.0.1")
     dashboard_serve.add_argument("--port", type=int, default=8765)
+    backtest = sub.add_parser("backtest-day")
+    backtest.add_argument("date")
+    backtest.add_argument("--replay-db")
+    backtest.add_argument(
+        "--tick-source",
+        choices=["scheduler", "data", "both"],
+        default="scheduler",
+        help="scheduler uses historical paper decision timestamps; data uses stored data fetch timestamps",
+    )
+    backtest.add_argument("--include-orderbook-ticks", action="store_true")
+    backtest.add_argument("--max-ticks", type=int)
+    backtest.add_argument("--json", action="store_true")
+    live_store_key = sub.add_parser("live-store-hot-key")
+    live_store_key.add_argument("--service", default=Settings.live_keychain_service)
+    live_store_key.add_argument("--account", default=Settings.live_keychain_account)
+    live_preflight = sub.add_parser("live-preflight")
+    live_preflight.add_argument("--live", action="store_true")
+    live_auth_smoke = sub.add_parser("live-auth-smoke")
+    live_auth_smoke.add_argument("--live", action="store_true")
+    live_buy = sub.add_parser("live-buy")
+    live_buy.add_argument("label")
+    live_buy.add_argument("side", choices=["YES", "NO"])
+    live_buy.add_argument("size_usd", type=float)
+    live_buy.add_argument("--live", action="store_true")
+    live_buy.add_argument("--yes-i-understand", action="store_true")
+    live_sell = sub.add_parser("live-sell")
+    live_sell.add_argument("label")
+    live_sell.add_argument("side", choices=["YES", "NO"])
+    live_sell.add_argument("--live", action="store_true")
+    live_sell.add_argument("--yes-i-understand", action="store_true")
+    live_reconcile = sub.add_parser("live-reconcile")
+    live_reconcile.add_argument("--live", action="store_true")
+    live_cancel_order = sub.add_parser("live-cancel-order")
+    live_cancel_order.add_argument("order_id")
+    live_cancel_order.add_argument("--live", action="store_true")
+    live_cancel_order.add_argument("--yes-i-understand", action="store_true")
+    live_cancel_all = sub.add_parser("live-cancel-all")
+    live_cancel_all.add_argument("--live", action="store_true")
+    live_cancel_all.add_argument("--yes-i-understand", action="store_true")
+    live_tick = sub.add_parser("live-tick")
+    live_tick.add_argument("--live", action="store_true")
+    live_tick.add_argument("--no-fetch", action="store_true")
+    live_scheduled = sub.add_parser("live-scheduler")
+    live_scheduled.add_argument("--live", action="store_true")
+    live_scheduled.add_argument("--sleep", type=float, default=1.0)
+    live_scheduled.add_argument("--ticks", type=int)
+    live_scheduled.add_argument("--verbose", action="store_true")
+    live_scheduled.add_argument("--no-startup-backup", action="store_true")
+    live_kill = sub.add_parser("live-kill-switch")
+    live_kill.add_argument("--block-new-entries", action="store_true")
+    live_kill.add_argument("--allow-new-entries", action="store_true")
+    live_kill.add_argument("--exit-on-kill-switch", action="store_true")
+    live_kill.add_argument("--no-exit-on-kill-switch", action="store_true")
     args = parser.parse_args(argv)
 
     db_path = Path(args.db)
@@ -264,6 +332,292 @@ def main(argv: list[str] | None = None) -> int:
         migrate(db)
         db.close()
         serve_dashboard(db_path, host=args.host, port=args.port)
+        return 0
+    if args.command == "backtest-day":
+        db.close()
+        target = date.fromisoformat(args.date)
+        replay_db = Path(args.replay_db) if args.replay_db else None
+        result = run_backtest_day(
+            db_path,
+            target,
+            replay_db=replay_db,
+            tick_source=args.tick_source,
+            include_orderbook_ticks=args.include_orderbook_ticks,
+            max_ticks=args.max_ticks,
+        )
+        print(dumps_result_json(result) if args.json else render_backtest_result(result))
+        return 0
+    if args.command == "live-store-hot-key":
+        private_key = getpass.getpass("Polymarket bot private key: ")
+        if not private_key.startswith("0x"):
+            print("refusing to store key: expected 0x-prefixed private key")
+            return 2
+        store_keychain_secret(args.service, args.account, private_key)
+        print(f"stored hot key in Keychain service={args.service} account={args.account}")
+        return 0
+    if args.command == "live-preflight":
+        migrate(db)
+        if not args.live:
+            print("refusing live preflight without --live")
+            return 2
+        print("LIVE TRADING preflight")
+        try:
+            config = load_live_config()
+            client = PolymarketClobClient(config)
+            result = preflight_live(db, client, config)
+        except LiveTradingError as exc:
+            print(f"live preflight failed: {exc}")
+            return 2
+        print(
+            f"preflight ok={result.ok} signer={result.signer_address or 'n/a'} "
+            f"funder={result.funder_address or 'n/a'} "
+            f"balance={_fmt(result.balance_usd)} allowance_ok={result.allowance_ok} "
+            f"reason={result.reason}"
+        )
+        return 0 if result.ok else 2
+    if args.command == "live-auth-smoke":
+        migrate(db)
+        if not args.live:
+            print("refusing live auth smoke without --live")
+            return 2
+        print("LIVE TRADING auth smoke")
+        try:
+            config = load_live_config()
+            client = PolymarketClobClient(config)
+            result = preflight_live(db, client, config)
+        except LiveTradingError as exc:
+            print(f"live auth smoke failed: {exc}")
+            return 2
+        print(
+            f"auth ok={result.ok} signer={result.signer_address or 'n/a'} "
+            f"funder={result.funder_address or 'n/a'} "
+            f"balance={_fmt(result.balance_usd)} allowance_ok={result.allowance_ok} "
+            f"reason={result.reason}"
+        )
+        return 0 if result.ok else 2
+    if args.command == "live-buy":
+        migrate(db)
+        if not args.live or not args.yes_i_understand:
+            print("refusing live buy without --live and --yes-i-understand")
+            return 2
+        if args.size_usd > Settings.live_manual_order_cap_usd:
+            print(f"refusing live buy above manual cap ${Settings.live_manual_order_cap_usd:.2f}")
+            return 2
+        print("LIVE TRADING manual buy")
+        try:
+            config = load_live_config()
+            client = PolymarketClobClient(config)
+            outcome = find_outcome_by_label(db, args.label)
+            token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
+            book = latest_orderbook(db, token_id)
+            max_price = book.best_ask + Settings.max_entry_limit_slippage if book.best_ask is not None else None
+            result = execute_live_buy(
+                db,
+                client,
+                token_id=token_id,
+                side=args.side,
+                size_usd=args.size_usd,
+                asks=book.asks,
+                reason=f"manual live buy {args.label} {args.side}",
+                max_price=max_price,
+                min_fill_usd=min(args.size_usd, Settings.min_entry_fill_usd),
+                order_cap_usd=Settings.live_manual_order_cap_usd,
+                label=args.label,
+                event_type="manual_live",
+            )
+        except (LiveTradingError, ValueError) as exc:
+            print(f"live buy failed: {exc}")
+            return 2
+        print(
+            f"{result.status} {result.side} {args.label} "
+            f"avg={_fmt(result.fill_price)} cost=${result.fill_size_usd:.2f} "
+            f"shares={result.shares:.4f} order={result.clob_order_id or 'n/a'} "
+            f"reason={result.reason}"
+        )
+        return 0 if result.status in ("filled", "submitted") else 2
+    if args.command == "live-sell":
+        migrate(db)
+        if not args.live or not args.yes_i_understand:
+            print("refusing live sell without --live and --yes-i-understand")
+            return 2
+        print("LIVE TRADING manual sell")
+        try:
+            config = load_live_config()
+            client = PolymarketClobClient(config)
+            outcome = find_outcome_by_label(db, args.label)
+            token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
+            book = latest_orderbook(db, token_id)
+            result = execute_live_sell(
+                db,
+                client,
+                token_id=token_id,
+                bids=book.bids,
+                reason=f"manual live sell {args.label} {args.side}",
+                label=args.label,
+                event_type="manual_live",
+            )
+        except (LiveTradingError, ValueError) as exc:
+            print(f"live sell failed: {exc}")
+            return 2
+        print(
+            f"{result.status} SELL {args.label} {args.side} "
+            f"avg={_fmt(result.fill_price)} proceeds=${result.fill_size_usd:.2f} "
+            f"shares={result.shares:.4f} order={result.clob_order_id or 'n/a'} "
+            f"reason={result.reason}"
+        )
+        return 0 if result.status in ("filled", "submitted") else 2
+    if args.command == "live-reconcile":
+        migrate(db)
+        if not args.live:
+            print("refusing live reconcile without --live")
+            return 2
+        print("LIVE TRADING reconcile")
+        try:
+            config = load_live_config()
+            client = PolymarketClobClient(config)
+            rows = list_live_orders_by_status(db, ("submitted",))
+            for row in rows:
+                payload = client.reconcile_order(row["clob_order_id"], row["outcome_id"])
+                fill_price = payload.get("fill_price") or payload.get("avg_price") or payload.get("price")
+                fill_size = payload.get("fill_size_usd") or payload.get("filled_amount") or payload.get("amount_matched") or 0
+                fill_shares = payload.get("fill_shares") or payload.get("filled_shares") or payload.get("size_matched") or 0
+                update_live_order_reconcile(
+                    db,
+                    row["id"],
+                    status=str(payload.get("status") or row["status"]),
+                    fill_price=float(fill_price) if fill_price not in (None, "") else None,
+                    fill_size_usd=float(fill_size or 0),
+                    fill_shares=float(fill_shares or 0),
+                    raw_reconcile=payload,
+                )
+        except LiveTradingError as exc:
+            print(f"live reconcile failed: {exc}")
+            return 2
+        print(f"reconciled {len(rows)} submitted live orders")
+        return 0
+    if args.command == "live-cancel-order":
+        migrate(db)
+        if not args.live or not args.yes_i_understand:
+            print("refusing live cancel without --live and --yes-i-understand")
+            return 2
+        print("LIVE TRADING cancel order")
+        try:
+            config = load_live_config()
+            client = PolymarketClobClient(config)
+            payload = client.cancel_order(args.order_id)
+        except LiveTradingError as exc:
+            print(f"live cancel failed: {exc}")
+            return 2
+        print(f"cancelled order {args.order_id}: {payload}")
+        return 0
+    if args.command == "live-cancel-all":
+        migrate(db)
+        if not args.live or not args.yes_i_understand:
+            print("refusing live cancel-all without --live and --yes-i-understand")
+            return 2
+        print("LIVE TRADING cancel all")
+        try:
+            config = load_live_config()
+            client = PolymarketClobClient(config)
+            payload = client.cancel_all()
+        except LiveTradingError as exc:
+            print(f"live cancel-all failed: {exc}")
+            return 2
+        print(f"cancel-all result: {payload}")
+        return 0
+    if args.command == "live-tick":
+        migrate(db)
+        if not args.live:
+            print("refusing live tick without --live")
+            return 2
+        print("LIVE TRADING tick")
+        try:
+            config = load_live_config()
+            client = PolymarketClobClient(config)
+            today = datetime.now(HKT).date()
+            if not args.no_fetch:
+                _fetch_hko(db)
+                _discover_markets_for_forecast_dates(db, today)
+                _fetch_orderbooks(db)
+            preflight = preflight_live(db, client, config)
+            if not preflight.ok:
+                print(f"live preflight failed: {preflight.reason}")
+                return 2
+            result = run_live_tick(
+                db,
+                client,
+                today_hkt=today,
+                order_cap_usd=Settings.live_scheduler_order_cap_usd,
+            )
+        except (LiveTradingError, ValueError) as exc:
+            print(f"live tick failed: {exc}")
+            return 2
+        print(
+            f"live-tick buys={result.buys_filled}/{result.buys_missed} "
+            f"sells={result.sells_filled}/{result.sells_missed} "
+            f"signals={result.signals} notes={'; '.join(result.notes)}"
+        )
+        return 0
+    if args.command == "live-scheduler":
+        migrate(db)
+        if not args.live:
+            print("refusing live scheduler without --live")
+            return 2
+        if not args.no_startup_backup:
+            backup_path = backup_sqlite_database(db_path)
+            print(f"created startup backup {backup_path}")
+        print("LIVE TRADING scheduler")
+        try:
+            config = load_live_config()
+            client = PolymarketClobClient(config)
+            preflight = preflight_live(db, client, config)
+            if not preflight.ok:
+                print(f"live preflight failed: {preflight.reason}")
+                return 2
+        except LiveTradingError as exc:
+            print(f"live scheduler failed: {exc}")
+            return 2
+        run_scheduled_paper_loop(
+            db,
+            fetch_since_midnight=lambda: _fetch_since_midnight(db),
+            fetch_bulletin=lambda: _fetch_bulletin(db),
+            fetch_current_temperature=lambda: _fetch_current_temperature(db),
+            learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
+            discover_market=lambda target: _discover_markets_for_forecast_dates(db, target),
+            fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
+            base_sleep_seconds=args.sleep,
+            max_ticks=args.ticks,
+            quiet=not args.verbose,
+            run_tick_fn=lambda tick_db, today_hkt: run_live_tick(
+                tick_db,
+                client,
+                today_hkt=today_hkt,
+                order_cap_usd=Settings.live_scheduler_order_cap_usd,
+            ),
+        )
+        return 0
+    if args.command == "live-kill-switch":
+        migrate(db)
+        if args.block_new_entries and args.allow_new_entries:
+            print("choose only one of --block-new-entries or --allow-new-entries")
+            return 2
+        if args.exit_on_kill_switch and args.no_exit_on_kill_switch:
+            print("choose only one of --exit-on-kill-switch or --no-exit-on-kill-switch")
+            return 2
+        if args.block_new_entries:
+            set_live_setting(db, "block_new_entries", True)
+        if args.allow_new_entries:
+            set_live_setting(db, "block_new_entries", False)
+        if args.exit_on_kill_switch:
+            set_live_setting(db, "cancel_open_orders_and_exit_positions", True)
+        if args.no_exit_on_kill_switch:
+            set_live_setting(db, "cancel_open_orders_and_exit_positions", False)
+        print(
+            "live kill switch "
+            f"block_new_entries={live_setting_enabled(db, 'block_new_entries')} "
+            "cancel_open_orders_and_exit_positions="
+            f"{live_setting_enabled(db, 'cancel_open_orders_and_exit_positions')}"
+        )
         return 0
     if args.command == "paper-scheduler":
         migrate(db)
