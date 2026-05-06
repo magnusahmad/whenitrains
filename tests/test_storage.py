@@ -16,6 +16,7 @@ from whenitrains.storage import (
     connect,
     list_hko_update_times,
     list_outcomes_from_date,
+    list_tradeable_forecast_dates,
     migrate,
     record_hko_update_minute,
     store_hko_current_temperature,
@@ -282,6 +283,45 @@ class StorageTests(unittest.TestCase):
             rows = list_outcomes_from_date(db, "2026-05-05")
 
             self.assertEqual([row["yes_token_id"] for row in rows], ["yes-today", "yes-future"])
+
+    def test_list_tradeable_forecast_dates_allows_min_only_forecast(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            target = date(2026, 5, 5)
+            store_polymarket_event(
+                db,
+                TemperatureMarket(
+                    event_id="event-low",
+                    event_slug="lowest-temperature-in-hong-kong-on-may-5-2026",
+                    title="Lowest temperature",
+                    target_date=target,
+                    outcomes=[
+                        Outcome(
+                            market_id="m-low",
+                            label="25°C",
+                            predicate=parse_outcome_label("25°C"),
+                            yes_token_id="yes-low",
+                            no_token_id="no-low",
+                        )
+                    ],
+                ),
+            )
+            snapshot = store_raw_snapshot(db, "hko", "forecast-min-only", "{}")
+            store_hko_forecasts(
+                db,
+                snapshot.id,
+                [
+                    HkoForecast(
+                        source_type="ocf_station",
+                        forecast_date_hkt=target,
+                        forecast_min_c=25,
+                        forecast_max_c=None,
+                    )
+                ],
+            )
+
+            self.assertEqual(list_tradeable_forecast_dates(db, "2026-05-05"), ["2026-05-05"])
 
 
 if __name__ == "__main__":

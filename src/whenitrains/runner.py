@@ -22,6 +22,7 @@ from .storage import (
     has_processed_event,
     latest_orderbook,
     latest_forecast_high,
+    latest_observed_min_for_date,
     latest_observed_max_for_date,
     latest_two_forecast_highs,
     latest_two_orderbook_prices,
@@ -29,6 +30,7 @@ from .storage import (
     list_open_paper_positions,
     list_outcomes_for_date,
     list_tradeable_forecast_dates,
+    observed_min_decreases,
     observed_max_increases,
     store_paper_decision,
     store_signal,
@@ -115,42 +117,55 @@ def process_forecast_entries(
 ) -> RunnerResult:
     today = today_hkt or datetime.now(HKT).date()
     value_result = process_forecast_value_entry(db, target_date, today)
-    latest = _latest_two_effective_forecast_highs(db, target_date.isoformat())
+    high_result = _process_forecast_change_entries_kind(db, target_date, today, "highest")
+    low_rows = _lowest_temperature_rows(list_outcomes_for_date(db, target_date.isoformat()))
+    if not low_rows:
+        return _merge_runner_results(value_result, high_result)
+    low_result = _process_forecast_change_entries_kind(
+        db, target_date, today, "lowest", rows=low_rows
+    )
+    return _merge_runner_results(_merge_runner_results(value_result, high_result), low_result)
+
+
+def _process_forecast_change_entries_kind(
+    db: sqlite3.Connection,
+    target_date: date,
+    today: date,
+    market_kind: str,
+    rows: list[sqlite3.Row] | None = None,
+) -> RunnerResult:
+    noun = "forecast high" if market_kind == "highest" else "forecast low"
+    event_type = "forecast_change" if market_kind == "highest" else "lowest_forecast_change"
+    latest = _effective_forecast_rows(
+        db, target_date.isoformat(), limit=2, market_kind=market_kind
+    )
     if len(latest) < 2:
-        return _merge_runner_results(
-            value_result, RunnerResult(notes=("need two decimal forecast highs",))
-        )
+        return RunnerResult(notes=(f"need two decimal {noun}s",))
     new, old = latest[0], latest[1]
     if new["forecast_date_hkt"] != target_date.isoformat():
-        return _merge_runner_results(
-            value_result, RunnerResult(notes=("latest forecast is not for target day",))
-        )
-    old_high = float(old["forecast_max_c"])
-    new_high = float(new["forecast_max_c"])
-    if old_high == new_high:
-        return _merge_runner_results(
-            value_result, RunnerResult(notes=("forecast high unchanged",))
-        )
+        return RunnerResult(notes=("latest forecast is not for target day",))
+    old_value = float(old["forecast_value_c"])
+    new_value = float(new["forecast_value_c"])
+    if old_value == new_value:
+        return RunnerResult(notes=(f"{noun} unchanged",))
     event_key = (
-        f"forecast_change:{target_date.isoformat()}:"
-        f"{old['update_time']}:{old_high}->{new['update_time']}:{new_high}"
+        f"{event_type}:{target_date.isoformat()}:"
+        f"{old['update_time']}:{old_value}->{new['update_time']}:{new_value}"
     )
     if has_processed_event(db, event_key):
-        return _merge_runner_results(
-            value_result, RunnerResult(notes=("forecast change already processed",))
-        )
+        return RunnerResult(notes=(f"{noun} change already processed",))
     _mark_event_processed(
         db,
-        event_type="forecast_change",
+        event_type=event_type,
         event_key=event_key,
-        reason=f"forecast high changed {old_high} -> {new_high}",
-        details={"old_high": old_high, "new_high": new_high},
+        reason=f"{noun} changed {old_value} -> {new_value}",
+        details={f"old_{market_kind}": old_value, f"new_{market_kind}": new_value},
     )
     exit_result = process_forecast_position_exits(
-        db, target_date, new_high, event_key=event_key
+        db, target_date, new_value, event_key=event_key, market_kind=market_kind
     )
 
-    rows = list_outcomes_for_date(db, target_date.isoformat())
+    rows = rows or _highest_temperature_rows(list_outcomes_for_date(db, target_date.isoformat()))
     outcomes = [_outcome_from_row(row) for row in rows]
     prior_yes_asks: dict[str, float] = {}
     current_yes_asks: dict[str, float] = {}
@@ -159,14 +174,14 @@ def process_forecast_entries(
         if len(prices) < 2 or prices[0]["best_ask"] is None or prices[1]["best_ask"] is None:
             store_paper_decision(
                 db,
-                "forecast_change",
+                event_type,
                 row["yes_token_id"],
                 row["label"],
                 "YES",
                 "BUY",
                 "missed",
                 "missing prior/current yes ask",
-                {"old_high": old_high, "new_high": new_high},
+                {f"old_{market_kind}": old_value, f"new_{market_kind}": new_value},
                 event_key=event_key,
             )
             continue
@@ -175,32 +190,34 @@ def process_forecast_entries(
 
     candidates = build_forecast_move_candidates(
         outcomes=outcomes,
-        old_forecast_max_c=old_high,
-        new_forecast_max_c=new_high,
+        old_forecast_max_c=old_value,
+        new_forecast_max_c=new_value,
         prior_yes_asks=prior_yes_asks,
         current_yes_asks=current_yes_asks,
         max_move=Settings.forecast_change_max_price_move,
     )
     if not candidates:
-        return _merge_runner_results(
-            value_result,
-            RunnerResult(
-                buys_missed=1,
-                sells_filled=exit_result.sells_filled,
-                sells_missed=exit_result.sells_missed,
-                notes=("no stale forecast candidates",) + exit_result.notes,
-            ),
+        no_candidates_note = (
+            "no stale forecast candidates"
+            if market_kind == "highest"
+            else "no stale forecast low candidates"
+        )
+        return RunnerResult(
+            buys_missed=1,
+            sells_filled=exit_result.sells_filled,
+            sells_missed=exit_result.sells_missed,
+            notes=(no_candidates_note,) + exit_result.notes,
         )
 
     store_signal(
         db,
         market_id=target_date.isoformat(),
-        trigger_type="forecast_change",
+        trigger_type=event_type,
         current_max_c=None,
-        forecast_max_c=new_high,
+        forecast_max_c=new_value,
         affected_outcomes={candidate.outcome.label: candidate.impact.value for candidate in candidates},
         price_response={candidate.outcome.label: candidate.price_response.value for candidate in candidates},
-        notes=f"forecast high changed {old_high} -> {new_high}",
+        notes=f"{noun} changed {old_value} -> {new_value}",
     )
 
     buys_filled = 0
@@ -210,6 +227,7 @@ def process_forecast_entries(
         filled = _execute_candidate_buy(
             db,
             candidate,
+            event_type=event_type,
             event_key=event_key,
             max_buy_price=max_entry_price,
         )
@@ -217,65 +235,79 @@ def process_forecast_entries(
             buys_filled += 1
         elif filled is False:
             buys_missed += 1
-    return _merge_runner_results(
-        value_result,
-        RunnerResult(
+    return RunnerResult(
         buys_filled=buys_filled,
         buys_missed=buys_missed,
         sells_filled=exit_result.sells_filled,
         sells_missed=exit_result.sells_missed,
         signals=1,
-        notes=(f"forecast high changed {old_high} -> {new_high}",) + exit_result.notes,
-        ),
+        notes=(f"{noun} changed {old_value} -> {new_value}",) + exit_result.notes,
     )
 
 
 def process_forecast_value_entry(
     db: sqlite3.Connection, target_date: date, today_hkt: date
 ) -> RunnerResult:
+    high_result = _process_forecast_value_entry_kind(db, target_date, today_hkt, "highest")
+    low_rows = _lowest_temperature_rows(list_outcomes_for_date(db, target_date.isoformat()))
+    if not low_rows:
+        return high_result
+    low_result = _process_forecast_value_entry_kind(
+        db, target_date, today_hkt, "lowest", rows=low_rows
+    )
+    return _merge_runner_results(high_result, low_result)
+
+
+def _process_forecast_value_entry_kind(
+    db: sqlite3.Connection,
+    target_date: date,
+    today_hkt: date,
+    market_kind: str,
+    rows: list[sqlite3.Row] | None = None,
+) -> RunnerResult:
     lead_days = (target_date - today_hkt).days
+    label = "forecast value" if market_kind == "highest" else "low forecast value"
     if lead_days < 0:
         return RunnerResult(
-            notes=(f"forecast value skipped: {target_date.isoformat()} is before today",)
+            notes=(f"{label} skipped: {target_date.isoformat()} is before today",)
         )
     if lead_days > Settings.forecast_value_max_lead_days:
         return RunnerResult(
             notes=(
-                "forecast value skipped: "
+                f"{label} skipped: "
                 f"{target_date.isoformat()} lead_days={lead_days} "
                 f"> max={Settings.forecast_value_max_lead_days}",
             )
         )
-    latest = _latest_effective_forecast_high(db, target_date.isoformat())
+    latest = _latest_effective_forecast_value(db, target_date.isoformat(), market_kind)
     if latest is None:
         return RunnerResult(
             notes=(
-                "forecast value skipped: "
+                f"{label} skipped: "
                 f"{target_date.isoformat()} missing decimal forecast",
             )
         )
-    forecast_high = float(latest["forecast_max_c"])
-    rows = list_outcomes_for_date(db, target_date.isoformat())
+    forecast_value = float(latest["forecast_value_c"])
+    event_type = "forecast_value" if market_kind == "highest" else "lowest_forecast_value"
+    rows = rows or _highest_temperature_rows(list_outcomes_for_date(db, target_date.isoformat()))
     if not rows:
         return RunnerResult(
-            notes=(f"forecast value skipped: {target_date.isoformat()} missing outcomes",)
+            notes=(f"{label} skipped: {target_date.isoformat()} missing outcomes",)
         )
     books = _latest_yes_books_by_market(db, rows)
-    forecast_row = _forecast_matching_row(rows, forecast_high)
+    forecast_row = _forecast_matching_row(rows, forecast_value)
     if forecast_row is None:
         return RunnerResult(
             notes=(
-                "forecast value skipped: "
-                f"{target_date.isoformat()} forecast_high={forecast_high:g} missing matching bucket",
+                f"{label} skipped: "
+                f"{target_date.isoformat()} forecast_{market_kind}={forecast_value:g} missing matching bucket",
             )
         )
-    guard_reason = _forecast_value_guard_reason(
-        db, target_date.isoformat(), forecast_row["label"], "YES"
-    )
+    guard_reason = _forecast_value_guard_reason(db, target_date.isoformat(), forecast_row, "YES")
     if guard_reason is not None:
         store_paper_decision(
             db,
-            "forecast_value",
+            event_type,
             forecast_row["yes_token_id"],
             forecast_row["label"],
             "YES",
@@ -283,13 +315,13 @@ def process_forecast_value_entry(
             "ignored",
             guard_reason,
             {
-                "forecast_high": forecast_high,
+                f"forecast_{market_kind}": forecast_value,
                 "forecast_label": forecast_row["label"],
             },
         )
         return RunnerResult(
             notes=(
-                "forecast value skipped: "
+                f"{label} skipped: "
                 f"{target_date.isoformat()} {forecast_row['label']} "
                 f"{guard_reason}",
             )
@@ -298,14 +330,14 @@ def process_forecast_value_entry(
     if forecast_book is None or forecast_book.best_ask is None:
         return RunnerResult(
             notes=(
-                "forecast value skipped: "
+                f"{label} skipped: "
                 f"{target_date.isoformat()} {forecast_row['label']} missing YES ask",
             )
         )
     if forecast_book.best_ask > Settings.forecast_value_max_yes_ask:
         return RunnerResult(
             notes=(
-                "forecast value skipped: "
+                f"{label} skipped: "
                 f"{target_date.isoformat()} {forecast_row['label']} "
                 f"ask={forecast_book.best_ask:.3f} "
                 f"> cheap_threshold={Settings.forecast_value_max_yes_ask:.3f}",
@@ -314,14 +346,14 @@ def process_forecast_value_entry(
     favorite = _favorite_yes_row(rows, books)
     if favorite is None:
         return RunnerResult(
-            notes=(f"forecast value skipped: {target_date.isoformat()} missing market favorite",)
+            notes=(f"{label} skipped: {target_date.isoformat()} missing market favorite",)
         )
     favorite_predicate = parse_outcome_label(favorite["label"])
     forecast_predicate = parse_outcome_label(forecast_row["label"])
     if favorite_predicate.value_c is None or forecast_predicate.value_c is None:
         return RunnerResult(
             notes=(
-                "forecast value skipped: "
+                f"{label} skipped: "
                 f"{target_date.isoformat()} unparseable favorite={favorite['label']} "
                 f"or forecast_bucket={forecast_row['label']}",
             )
@@ -329,52 +361,60 @@ def process_forecast_value_entry(
     if favorite["polymarket_market_id"] == forecast_row["polymarket_market_id"]:
         return RunnerResult(
             notes=(
-                "forecast value skipped: "
+                f"{label} skipped: "
                 f"{target_date.isoformat()} {forecast_row['label']} already market favorite",
             )
         )
-    if (
+    if market_kind == "highest" and (
         favorite_predicate.value_c > forecast_predicate.value_c
         and forecast_predicate.type != PredicateType.GTE_C
     ):
         return RunnerResult(
             notes=(
-                "forecast value skipped: "
+                f"{label} skipped: "
                 f"{target_date.isoformat()} favorite {favorite['label']} is above "
                 f"forecast bucket {forecast_row['label']}; threshold risk",
             )
         )
-    if favorite_predicate.value_c >= forecast_predicate.value_c:
+    if market_kind == "highest" and favorite_predicate.value_c >= forecast_predicate.value_c:
         return RunnerResult(
             notes=(
-                "forecast value skipped: "
+                f"{label} skipped: "
                 f"{target_date.isoformat()} favorite {favorite['label']} is not below "
                 f"forecast bucket {forecast_row['label']}",
             )
         )
+    if market_kind == "lowest" and favorite_predicate.value_c <= forecast_predicate.value_c:
+        return RunnerResult(
+            notes=(
+                f"{label} skipped: "
+                f"{target_date.isoformat()} favorite {favorite['label']} is not above "
+                f"forecast bucket {forecast_row['label']}",
+            )
+        )
     event_key = (
-        f"forecast_value:{target_date.isoformat()}:"
+        f"{event_type}:{target_date.isoformat()}:"
         f"{latest['id']}:{forecast_row['polymarket_market_id']}:"
         f"{favorite['polymarket_market_id']}:{forecast_book.best_ask}"
     )
     if has_processed_event(db, event_key):
         return RunnerResult(
             notes=(
-                "forecast value skipped: "
+                f"{label} skipped: "
                 f"{target_date.isoformat()} {forecast_row['label']} already processed "
                 f"at ask={forecast_book.best_ask:.3f}",
             )
         )
     _mark_event_processed(
         db,
-        event_type="forecast_value",
+        event_type=event_type,
         event_key=event_key,
         reason=(
             f"forecast bucket {forecast_row['label']} cheap at "
             f"{forecast_book.best_ask:.3f}; favorite is {favorite['label']}"
         ),
         details={
-            "forecast_high": forecast_high,
+            f"forecast_{market_kind}": forecast_value,
             "forecast_label": forecast_row["label"],
             "forecast_yes_ask": forecast_book.best_ask,
             "favorite_label": favorite["label"],
@@ -387,12 +427,16 @@ def process_forecast_value_entry(
         price_response=PriceResponse.PRICE_NOT_MOVED_WITH_EVENT,
         prior_yes_ask=forecast_book.best_ask,
         current_yes_ask=forecast_book.best_ask,
-        reason="forecast bucket priced unrealistically low vs HKO forecast",
+        reason=(
+            "forecast bucket priced unrealistically low vs HKO forecast"
+            if market_kind == "highest"
+            else "lowest forecast bucket priced unrealistically low vs HKO forecast"
+        ),
     )
     filled = _execute_candidate_buy(
         db,
         candidate,
-        event_type="forecast_value",
+        event_type=event_type,
         event_key=event_key,
         max_buy_price=Settings.forecast_value_max_yes_ask,
         allow_existing_position=True,
@@ -401,9 +445,9 @@ def process_forecast_value_entry(
     store_signal(
         db,
         market_id=target_date.isoformat(),
-        trigger_type="forecast_value",
+        trigger_type=event_type,
         current_max_c=None,
-        forecast_max_c=forecast_high,
+        forecast_max_c=forecast_value,
         affected_outcomes={forecast_row["label"]: "INCREASES_YES_PROBABILITY"},
         price_response={forecast_row["label"]: "PRICE_NOT_MOVED_WITH_EVENT"},
         notes=f"forecast bucket {forecast_row['label']} cheap vs lower favorite {favorite['label']}",
@@ -412,7 +456,7 @@ def process_forecast_value_entry(
         buys_filled=1 if filled is True else 0,
         buys_missed=1 if filled is False else 0,
         signals=1,
-        notes=(f"forecast value entry {forecast_row['label']} YES",),
+        notes=(f"{label} entry {forecast_row['label']} YES",),
     )
 
 
@@ -421,6 +465,7 @@ def process_forecast_position_exits(
     target_date: date,
     new_forecast_max_c: float,
     event_key: str | None = None,
+    market_kind: str = "highest",
 ) -> RunnerResult:
     sells_filled = 0
     sells_missed = 0
@@ -431,9 +476,13 @@ def process_forecast_position_exits(
         outcome = find_outcome_by_token(db, token_id)
         if outcome is None or outcome["target_date_hkt"] != target_date.isoformat():
             continue
+        if _temperature_market_kind_for_row(outcome) != market_kind:
+            continue
         side = "YES" if token_id == outcome["yes_token_id"] else "NO"
         reason = _hourly_forecast_invalidation_reason(db, outcome, side)
-        if reason is None and _position_invalidated_by_forecast(outcome, side, new_forecast_max_c):
+        if reason is None and _position_invalidated_by_forecast(
+            outcome, side, new_forecast_max_c
+        ):
             reason = "position invalidated by forecast change"
         if reason is None:
             continue
@@ -505,12 +554,24 @@ def process_forecast_position_exits(
 
 def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerResult:
     transitions = observed_max_increases(db, today_hkt.isoformat())
-    if not transitions:
-        return RunnerResult(notes=("need two observed maxes",))
+    min_transitions = observed_min_decreases(db, today_hkt.isoformat())
+    if not transitions and not min_transitions:
+        return RunnerResult(notes=("need two observed maxes/mins",))
     aggregate = RunnerResult()
     notes: list[str] = []
     for old, new in transitions:
         result = _process_actual_transition(db, today_hkt, old, new)
+        aggregate = RunnerResult(
+            buys_filled=aggregate.buys_filled + result.buys_filled,
+            buys_missed=aggregate.buys_missed + result.buys_missed,
+            sells_filled=aggregate.sells_filled,
+            sells_missed=aggregate.sells_missed,
+            signals=aggregate.signals + result.signals,
+            notes=(),
+        )
+        notes.extend(result.notes)
+    for old, new in min_transitions:
+        result = _process_actual_min_transition(db, today_hkt, old, new)
         aggregate = RunnerResult(
             buys_filled=aggregate.buys_filled + result.buys_filled,
             buys_missed=aggregate.buys_missed + result.buys_missed,
@@ -527,6 +588,108 @@ def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerRes
         buys_missed=aggregate.buys_missed,
         signals=aggregate.signals,
         notes=tuple(notes),
+    )
+
+
+def _process_actual_min_transition(
+    db: sqlite3.Connection, today_hkt: date, old: sqlite3.Row, new: sqlite3.Row
+) -> RunnerResult:
+    old_min = float(old["since_midnight_min_c"])
+    new_min = float(new["since_midnight_min_c"])
+    latest_forecast = _latest_effective_forecast_value(db, today_hkt.isoformat(), "lowest")
+    if latest_forecast is None:
+        return RunnerResult(notes=("missing current decimal low forecast for actual check",))
+    forecast_min = float(latest_forecast["forecast_value_c"])
+    if old_min <= new_min:
+        return RunnerResult(notes=("actual min has not decreased",))
+    event_key = (
+        f"actual_low_cross:{today_hkt.isoformat()}:"
+        f"forecast:{forecast_min}:"
+        f"{old['id']}:{old_min}->{new['id']}:{new_min}"
+    )
+    if has_processed_event(db, event_key):
+        return RunnerResult(notes=("actual min event already processed",))
+
+    buys_filled = 0
+    buys_missed = 0
+    signals = 0
+    for row in _lowest_temperature_rows(list_outcomes_for_date(db, today_hkt.isoformat())):
+        predicate = parse_outcome_label(row["label"])
+        side = _actual_low_cross_side(predicate, old_min, new_min)
+        if side is None:
+            continue
+        token_id = row["yes_token_id"] if side == "YES" else row["no_token_id"]
+        if signals == 0:
+            _mark_event_processed(
+                db,
+                event_type="actual_low_cross",
+                event_key=event_key,
+                reason=f"observed min changed {old_min} -> {new_min}",
+                details={"old_min": old_min, "new_min": new_min, "forecast_min": forecast_min},
+            )
+        signals += 1
+        prices = latest_two_orderbook_prices(db, token_id)
+        if len(prices) < 2 or prices[0]["best_ask"] is None or prices[1]["best_ask"] is None:
+            store_paper_decision(
+                db,
+                "actual_low_cross",
+                token_id,
+                row["label"],
+                side,
+                "BUY",
+                "missed",
+                f"missing prior/current {side.lower()} ask",
+                {"old_min": old_min, "new_min": new_min, "forecast_min": forecast_min},
+                event_key=event_key,
+            )
+            buys_missed += 1
+            continue
+        prior = float(prices[1]["best_ask"])
+        current = float(prices[0]["best_ask"])
+        if current - prior >= Settings.stale_price_min_move:
+            store_paper_decision(
+                db,
+                "actual_low_cross",
+                token_id,
+                row["label"],
+                side,
+                "BUY",
+                "missed",
+                "price moved with actual low cross",
+                {"old_min": old_min, "new_min": new_min, "forecast_min": forecast_min},
+                event_key=event_key,
+            )
+            buys_missed += 1
+            continue
+        candidate = TradeCandidate(
+            outcome=_outcome_from_row(row),
+            side=f"BUY_{side}",
+            impact=(
+                DirectionalImpact.INCREASES_YES_PROBABILITY
+                if side == "YES"
+                else DirectionalImpact.DECREASES_YES_PROBABILITY
+            ),
+            price_response=PriceResponse.PRICE_NOT_MOVED_WITH_EVENT,
+            prior_yes_ask=prior,
+            current_yes_ask=current,
+            reason=(
+                "actual min crossed settling threshold before price moved"
+                if side == "YES"
+                else "actual min invalidated warmer bucket before price moved"
+            ),
+        )
+        filled = _execute_candidate_buy(
+            db, candidate, event_type="actual_low_cross", event_key=event_key
+        )
+        if filled is True:
+            buys_filled += 1
+        elif filled is False:
+            buys_missed += 1
+    return RunnerResult(
+        buys_filled=buys_filled,
+        buys_missed=buys_missed,
+        signals=signals,
+        notes=(f"observed min changed {old_min} -> {new_min}",) if signals else ("no actual low cross candidates",),
     )
 
 
@@ -552,7 +715,7 @@ def _process_actual_transition(
     buys_filled = 0
     buys_missed = 0
     signals = 0
-    for row in list_outcomes_for_date(db, today_hkt.isoformat()):
+    for row in _highest_temperature_rows(list_outcomes_for_date(db, today_hkt.isoformat())):
         predicate = parse_outcome_label(row["label"])
         side = _actual_cross_side(predicate, old_max, new_max)
         if side is None:
@@ -653,6 +816,28 @@ def _actual_cross_side(predicate, old_max: float, new_max: float) -> str | None:
     return None
 
 
+def _actual_low_cross_side(predicate, old_min: float, new_min: float) -> str | None:
+    if predicate.value_c is None:
+        return None
+    lower = predicate.value_c
+    upper = predicate.value_c + 1
+    if predicate.type == PredicateType.GTE_C:
+        if old_min >= lower > new_min:
+            return "NO"
+        return None
+    if predicate.type == PredicateType.BOTTOM_BUCKET_LTE_C:
+        if old_min >= upper > new_min:
+            return "YES"
+        return None
+    if predicate.type == PredicateType.EXACT_C:
+        if old_min >= upper and lower <= new_min < upper:
+            return "YES"
+        if old_min >= lower > new_min:
+            return "NO"
+    return None
+
+
+
 def process_open_position_exits(
     db: sqlite3.Connection, today_hkt: date | None = None
 ) -> RunnerResult:
@@ -672,18 +857,23 @@ def process_open_position_exits(
             continue
         side = "YES" if token_id == outcome["yes_token_id"] else "NO"
         actual_applies = outcome["target_date_hkt"] == today.isoformat()
-        latest_actual = (
-            latest_observed_max_for_date(db, outcome["target_date_hkt"])
-            if actual_applies
-            else None
-        )
-        actual_max_for_outcome = (
-            float(latest_actual["since_midnight_max_c"]) if latest_actual else None
-        )
-        invalidated = _position_invalidated(outcome, side, actual_max_for_outcome)
+        market_kind = _temperature_market_kind_for_row(outcome)
+        latest_actual = None
+        actual_value_for_outcome = None
+        if actual_applies and market_kind == "lowest":
+            latest_actual = latest_observed_min_for_date(db, outcome["target_date_hkt"])
+            actual_value_for_outcome = (
+                float(latest_actual["since_midnight_min_c"]) if latest_actual else None
+            )
+        elif actual_applies:
+            latest_actual = latest_observed_max_for_date(db, outcome["target_date_hkt"])
+            actual_value_for_outcome = (
+                float(latest_actual["since_midnight_max_c"]) if latest_actual else None
+            )
+        invalidated = _position_invalidated(outcome, side, actual_value_for_outcome)
         hourly_reason = _hourly_forecast_invalidation_reason(db, outcome, side)
         hold_to_maturity = _position_can_hold_to_maturity(
-            outcome, side, actual_max_for_outcome
+            outcome, side, actual_value_for_outcome
         )
         if hold_to_maturity:
             notes.append(f"holding settled {outcome['label']} {side}")
@@ -719,7 +909,11 @@ def process_open_position_exits(
             continue
         if not invalidated and hourly_reason is None:
             continue
-        reason = hourly_reason or "position invalidated by observed max"
+        reason = hourly_reason or (
+            "position invalidated by observed min"
+            if market_kind == "lowest"
+            else "position invalidated by observed max"
+        )
         if _LIVE_CLIENT is not None:
             result = execute_live_sell(
                 db,
@@ -743,7 +937,7 @@ def process_open_position_exits(
                 "filled",
                 reason,
                 {
-                    "current_max": actual_max_for_outcome,
+                    "current_value": actual_value_for_outcome,
                     "bid": book.best_bid,
                     "hourly_forecast_reason": hourly_reason,
                 },
@@ -760,7 +954,7 @@ def process_open_position_exits(
                 "missed",
                 result.reason,
                 {
-                    "current_max": actual_max_for_outcome,
+                    "current_value": actual_value_for_outcome,
                     "bid": book.best_bid,
                     "hourly_forecast_reason": hourly_reason,
                 },
@@ -892,6 +1086,13 @@ def _latest_effective_forecast_high(
     return rows[0] if rows else None
 
 
+def _latest_effective_forecast_value(
+    db: sqlite3.Connection, forecast_date_hkt: str, market_kind: str
+) -> dict | None:
+    rows = _effective_forecast_rows(db, forecast_date_hkt, market_kind=market_kind)
+    return rows[0] if rows else None
+
+
 def _latest_two_effective_forecast_highs(
     db: sqlite3.Connection, forecast_date_hkt: str
 ) -> list[dict]:
@@ -899,11 +1100,15 @@ def _latest_two_effective_forecast_highs(
 
 
 def _effective_forecast_rows(
-    db: sqlite3.Connection, forecast_date_hkt: str, limit: int = 1
+    db: sqlite3.Connection,
+    forecast_date_hkt: str,
+    limit: int = 1,
+    market_kind: str = "highest",
 ) -> list[dict]:
     rows = db.execute(
         """
-        select id, forecast_date_hkt, fetched_at_utc, forecast_max_c, raw_max_c,
+        select id, forecast_date_hkt, fetched_at_utc, forecast_min_c, forecast_max_c,
+               raw_min_c, raw_max_c,
                hourly_temperatures_json, raw_daily_forecast
         from ocf_forecast_samples
         where forecast_date_hkt = ?
@@ -914,8 +1119,8 @@ def _effective_forecast_rows(
     result: list[dict] = []
     seen_update_times: set[str] = set()
     for row in rows:
-        effective_high = _effective_forecast_max_from_sample(row)
-        if effective_high is None:
+        effective_value = _effective_forecast_value_from_sample(row, market_kind)
+        if effective_value is None:
             continue
         update_time = _forecast_sample_update_time(row)
         if update_time in seen_update_times:
@@ -925,13 +1130,53 @@ def _effective_forecast_rows(
             {
                 "id": row["id"],
                 "forecast_date_hkt": row["forecast_date_hkt"],
-                "forecast_max_c": effective_high,
+                "forecast_max_c": effective_value,
+                "forecast_value_c": effective_value,
                 "update_time": update_time,
             }
         )
         if len(result) >= limit:
             break
     return result
+
+
+def _highest_temperature_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    return [
+        row
+        for row in rows
+        if str(row["slug"]).startswith("highest-temperature-in-hong-kong-on-")
+    ]
+
+
+def _lowest_temperature_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    return [
+        row
+        for row in rows
+        if str(row["slug"]).startswith("lowest-temperature-in-hong-kong-on-")
+    ]
+
+
+def _temperature_market_kind_for_row(row: sqlite3.Row) -> str:
+    slug = str(row["slug"])
+    if slug.startswith("lowest-temperature-in-hong-kong-on-"):
+        return "lowest"
+    return "highest"
+
+
+def _effective_forecast_value_from_sample(
+    row: sqlite3.Row, market_kind: str
+) -> float | None:
+    hourly_values = [
+        value
+        for _, value in _hourly_values_from_json(
+            row["forecast_date_hkt"], row["hourly_temperatures_json"]
+        )
+    ]
+    if hourly_values:
+        return min(hourly_values) if market_kind == "lowest" else max(hourly_values)
+    if market_kind == "lowest":
+        return _as_float(row["raw_min_c"])
+    return _as_float(row["raw_max_c"])
 
 
 def _effective_forecast_max_from_sample(row: sqlite3.Row) -> float | None:
@@ -1032,10 +1277,15 @@ def _execute_candidate_buy(
     token_id = candidate.outcome.yes_token_id if side == "YES" else candidate.outcome.no_token_id
     outcome_row = find_outcome_by_token(db, token_id)
     forecast_guard_reason = (
-        _forecast_value_guard_reason(
-            db, outcome_row["target_date_hkt"], outcome_row["label"], side
-        )
-        if outcome_row is not None and event_type in {"forecast_change", "forecast_value"}
+        _forecast_value_guard_reason(db, outcome_row["target_date_hkt"], outcome_row, side)
+        if outcome_row is not None
+        and event_type in {
+            "forecast_change",
+            "lowest_forecast_change",
+            "forecast_value",
+            "highest_forecast_value",
+            "lowest_forecast_value",
+        }
         else None
     )
     if forecast_guard_reason is not None:
@@ -1198,14 +1448,17 @@ def _remaining_position_budget(db: sqlite3.Connection, token_id: str) -> float:
 def _forecast_value_guard_reason(
     db: sqlite3.Connection,
     target_date_hkt: str,
-    label: str,
+    outcome: sqlite3.Row,
     side: str,
 ) -> str | None:
     if side != "YES":
         return None
-    predicate = parse_outcome_label(label)
+    predicate = parse_outcome_label(outcome["label"])
     if predicate.value_c is None:
         return None
+    market_kind = _temperature_market_kind_for_row(outcome)
+    if market_kind == "lowest":
+        return _lowest_forecast_value_guard_reason(db, target_date_hkt, predicate)
     bucket_floor = float(predicate.value_c)
     rows = _latest_hourly_forecast_for_date(db, target_date_hkt)
     relevant = _hourly_values_from_items(target_date_hkt, rows)
@@ -1221,6 +1474,21 @@ def _forecast_value_guard_reason(
     return None
 
 
+def _lowest_forecast_value_guard_reason(
+    db: sqlite3.Connection,
+    target_date_hkt: str,
+    predicate,
+) -> str | None:
+    rows = _latest_hourly_forecast_for_date(db, target_date_hkt)
+    relevant = _hourly_values_from_items(target_date_hkt, rows)
+    if not relevant:
+        return None
+    forecast_min = min(value for _, value in relevant)
+    if not predicate_matches(predicate, forecast_min):
+        return "hourly forecast does not reach low bucket guard"
+    return None
+
+
 def _hourly_forecast_invalidation_reason(
     db: sqlite3.Connection,
     outcome: sqlite3.Row,
@@ -1229,16 +1497,23 @@ def _hourly_forecast_invalidation_reason(
     predicate = parse_outcome_label(outcome["label"])
     if predicate.value_c is None:
         return None
+    market_kind = _temperature_market_kind_for_row(outcome)
     relevant = _latest_hourly_forecast_values(db, outcome["target_date_hkt"])
-    latest = None if relevant else _latest_effective_forecast_high(db, outcome["target_date_hkt"])
+    latest = (
+        None
+        if relevant
+        else _latest_effective_forecast_value(
+            db, outcome["target_date_hkt"], market_kind
+        )
+    )
     if not relevant and latest is None:
         return None
-    forecast_max = (
-        max(value for _, value in relevant)
+    forecast_value = (
+        (min(value for _, value in relevant) if market_kind == "lowest" else max(value for _, value in relevant))
         if relevant
-        else float(latest["forecast_max_c"])
+        else float(latest["forecast_value_c"])
     )
-    matches_forecast = predicate_matches(predicate, forecast_max)
+    matches_forecast = predicate_matches(predicate, forecast_value)
     if side == "YES":
         if not matches_forecast:
             return (
@@ -1246,7 +1521,9 @@ def _hourly_forecast_invalidation_reason(
                 if relevant
                 else "position invalidated by decimal forecast"
             )
-        if _late_day_forecast_guard_applies(relevant, float(predicate.value_c)):
+        if market_kind == "highest" and _late_day_forecast_guard_applies(
+            relevant, float(predicate.value_c)
+        ):
             return "late-day forecast peak guard"
         return None
     if side == "NO" and matches_forecast:
@@ -1375,26 +1652,36 @@ def _outcome_from_row(row: sqlite3.Row) -> Outcome:
     )
 
 
-def _position_invalidated(outcome: sqlite3.Row, side: str, current_max: float | None) -> bool:
-    if current_max is None:
+def _position_invalidated(outcome: sqlite3.Row, side: str, current_value: float | None) -> bool:
+    if current_value is None:
         return False
     predicate = parse_outcome_label(outcome["label"])
+    if _temperature_market_kind_for_row(outcome) == "lowest":
+        if side == "NO":
+            return predicate_matches(predicate, current_value)
+        if predicate.value_c is None:
+            return False
+        if predicate.type.value == "GTE_C":
+            return current_value < predicate.value_c
+        if predicate.type.value == "EXACT_C":
+            return current_value < predicate.value_c
+        return False
     if side == "NO":
-        return predicate_matches(predicate, current_max)
+        return predicate_matches(predicate, current_value)
     if predicate.value_c is None:
         return False
     if predicate.type.value == "EXACT_C":
-        return current_max >= predicate.value_c + 1
+        return current_value >= predicate.value_c + 1
     if predicate.type.value == "BOTTOM_BUCKET_LTE_C":
-        return current_max >= predicate.value_c + 1
+        return current_value >= predicate.value_c + 1
     return False
 
 
 def _position_invalidated_by_forecast(
-    outcome: sqlite3.Row, side: str, forecast_max: float
+    outcome: sqlite3.Row, side: str, forecast_value: float
 ) -> bool:
     predicate = parse_outcome_label(outcome["label"])
-    matches_forecast = predicate_matches(predicate, forecast_max)
+    matches_forecast = predicate_matches(predicate, forecast_value)
     if side == "YES":
         return not matches_forecast
     if side == "NO":
@@ -1403,9 +1690,13 @@ def _position_invalidated_by_forecast(
 
 
 def _position_can_hold_to_maturity(
-    outcome: sqlite3.Row, side: str, current_max: float | None
+    outcome: sqlite3.Row, side: str, current_value: float | None
 ) -> bool:
-    if side != "YES" or current_max is None:
+    if side != "YES" or current_value is None:
         return False
     predicate = parse_outcome_label(outcome["label"])
-    return predicate.type.value == "GTE_C" and predicate_matches(predicate, current_max)
+    if _temperature_market_kind_for_row(outcome) == "lowest":
+        return predicate.type.value == "BOTTOM_BUCKET_LTE_C" and predicate_matches(
+            predicate, current_value
+        )
+    return predicate.type.value == "GTE_C" and predicate_matches(predicate, current_value)

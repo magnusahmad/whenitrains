@@ -220,13 +220,11 @@ def _try_run_action(action: str, action_fn, notes: list[str]) -> bool:
 
 def _since_midnight_plans(target: date) -> list[SourcePollPlan]:
     plans: list[SourcePollPlan] = []
-    day_start = datetime.combine(target, day_time(10, 0), tzinfo=HKT)
-    day_end = datetime.combine(target, day_time(20, 0), tzinfo=HKT)
-    for hour in range(10, 21):
+    day_start = datetime.combine(target, day_time(0, 0), tzinfo=HKT)
+    day_end = datetime.combine(target, day_time(23, 59, 59), tzinfo=HKT)
+    for hour in range(24):
         for minute in SINCE_MIDNIGHT_MINUTES:
             scheduled = datetime.combine(target, day_time(hour, minute), tzinfo=HKT)
-            if scheduled.hour >= 20 and scheduled.minute > 0:
-                continue
             window_start = max(scheduled - timedelta(minutes=1), day_start)
             window_end = min(scheduled + timedelta(minutes=2), day_end)
             plans.append(

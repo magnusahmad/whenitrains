@@ -739,7 +739,7 @@ def list_tradeable_forecast_dates(
             from markets m
             join hko_forecasts f on f.forecast_date_hkt = m.target_date_hkt
             where m.target_date_hkt is not null
-              and f.forecast_max_c is not null
+              and (f.forecast_min_c is not null or f.forecast_max_c is not null)
               and coalesce(f.parse_warning, 0) = 0
               and f.source_type = 'ocf_station'
               {date_filter}
@@ -1243,6 +1243,34 @@ def observed_max_increases(
     return transitions
 
 
+def observed_min_decreases(
+    db: sqlite3.Connection, target_date_hkt: str | None = None
+) -> list[tuple[sqlite3.Row, sqlite3.Row]]:
+    params: tuple[str, ...] = ()
+    date_filter = ""
+    if target_date_hkt is not None:
+        date_filter = "and substr(observed_at_hkt, 1, 10) = ?"
+        params = (target_date_hkt,)
+    rows = list(
+        db.execute(
+            f"""
+            select observed_at_hkt, since_midnight_min_c, max(id) as id
+            from hko_current_observations
+            where since_midnight_min_c is not null
+              {date_filter}
+            group by observed_at_hkt, since_midnight_min_c
+            order by id asc
+            """,
+            params,
+        )
+    )
+    transitions = []
+    for old, new in zip(rows, rows[1:]):
+        if float(new["since_midnight_min_c"]) < float(old["since_midnight_min_c"]):
+            transitions.append((old, new))
+    return transitions
+
+
 def latest_observed_max_for_date(
     db: sqlite3.Connection, target_date_hkt: str
 ) -> sqlite3.Row | None:
@@ -1253,6 +1281,23 @@ def latest_observed_max_for_date(
         where since_midnight_max_c is not null
           and substr(observed_at_hkt, 1, 10) = ?
         group by observed_at_hkt, since_midnight_max_c
+        order by id desc
+        limit 1
+        """,
+        (target_date_hkt,),
+    ).fetchone()
+
+
+def latest_observed_min_for_date(
+    db: sqlite3.Connection, target_date_hkt: str
+) -> sqlite3.Row | None:
+    return db.execute(
+        """
+        select observed_at_hkt, since_midnight_min_c, max(id) as id
+        from hko_current_observations
+        where since_midnight_min_c is not null
+          and substr(observed_at_hkt, 1, 10) = ?
+        group by observed_at_hkt, since_midnight_min_c
         order by id desc
         limit 1
         """,

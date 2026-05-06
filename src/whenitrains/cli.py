@@ -26,7 +26,7 @@ from .hko import (
 )
 from .hourly_accuracy import build_hourly_accuracy_report, render_hourly_accuracy_report
 from .polymarket import (
-    event_slug_for_date,
+    event_slugs_for_date,
     fetch_hk_temperature_event,
     parse_event_markets,
     resolution_rules_warning,
@@ -212,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         if not _discover_market(db, target_date):
             print("no market event found")
             return 2
-        print(f"stored {event_slug_for_date(target_date)}")
+        print(f"stored temperature markets for {target_date.isoformat()}")
         return 0
     if args.command == "fetch-orderbooks":
         migrate(db)
@@ -788,26 +788,29 @@ def _fetch_flw_bulletin(db) -> str:
 
 
 def _discover_market(db, target_date) -> bool:
-    event = fetch_hk_temperature_event(event_slug_for_date(target_date))
-    if not event:
-        return False
-    markets = parse_event_markets(event)
-    for market in markets:
-        store_polymarket_event(db, market)
-        warning = resolution_rules_warning(market)
-        if warning is not None:
-            print(f"🚨🚨🚨 RESOLUTION RULES WARNING: {warning} 🚨🚨🚨")
-            store_risk_event(
-                db,
-                "resolution_rules_mismatch",
-                "critical",
-                {
-                    "slug": market.event_slug,
-                    "warning": warning,
-                    "resolution_rules_text": market.resolution_rules_text,
-                },
-            )
-    return True
+    discovered = False
+    for slug in event_slugs_for_date(target_date):
+        event = fetch_hk_temperature_event(slug)
+        if not event:
+            continue
+        markets = parse_event_markets(event)
+        for market in markets:
+            store_polymarket_event(db, market)
+            warning = resolution_rules_warning(market)
+            if warning is not None:
+                print(f"🚨🚨🚨 RESOLUTION RULES WARNING: {warning} 🚨🚨🚨")
+                store_risk_event(
+                    db,
+                    "resolution_rules_mismatch",
+                    "critical",
+                    {
+                        "slug": market.event_slug,
+                        "warning": warning,
+                        "resolution_rules_text": market.resolution_rules_text,
+                    },
+                )
+        discovered = True
+    return discovered
 
 
 def _discover_markets_for_forecast_dates(db, today_hkt) -> int:

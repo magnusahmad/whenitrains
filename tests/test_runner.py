@@ -50,6 +50,40 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(decision["status"], "filled")
 
+    def test_lowest_forecast_change_buys_stale_new_minimum_bucket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_lowest_market(
+                db,
+                [
+                    Outcome(
+                        market_id="low29",
+                        label="29°C",
+                        predicate=parse_outcome_label("29°C"),
+                        yes_token_id="yes-low29",
+                        no_token_id="no-low29",
+                    )
+                ],
+            )
+            _store_forecast_range(db, low=30, high=33, update_time="2026-05-04T00:45:00+08:00")
+            _store_forecast_range(db, low=29, high=33, update_time="2026-05-04T01:45:00+08:00")
+            _store_book_pair(db, "yes-low29", old_ask=0.40, new_ask=0.405)
+
+            result = process_forecast_entries(db, date(2026, 5, 4), today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 1)
+            decision = db.execute(
+                """
+                select event_type, label, side, status
+                from paper_decisions
+                where action = 'BUY' and status = 'filled'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["event_type"], "lowest_forecast_change")
+            self.assertEqual(decision["label"], "29°C")
+            self.assertEqual(decision["side"], "YES")
+
     def test_forecast_change_skips_when_market_moved_more_than_twenty_cents(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(Path(tmp) / "test.db")
@@ -760,6 +794,35 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(decision["label"], "29°C")
             self.assertEqual(decision["side"], "YES")
 
+    def test_low_forecast_value_buys_cheap_bucket_when_favorite_is_higher(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_threshold_risk_outcomes(),
+            )
+            _store_lowest_market(db, _threshold_risk_outcomes())
+            _store_forecast_range(db, low=29, high=33, update_time="2026-05-05T09:11:53+08:00")
+            _store_book_pair(db, "yes28", old_ask=0.10, new_ask=0.10)
+            _store_book_pair(db, "yes29", old_ask=0.30, new_ask=0.30)
+            _store_book_pair(db, "yes30", old_ask=0.60, new_ask=0.60)
+
+            result = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 1)
+            decision = db.execute(
+                """
+                select event_type, label, side
+                from paper_decisions
+                where action = 'BUY' and status = 'filled'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["event_type"], "lowest_forecast_value")
+            self.assertEqual(decision["label"], "29°C")
+            self.assertEqual(decision["side"], "YES")
+
     def test_forecast_value_blocks_late_day_peak_bucket_buy(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
@@ -1039,6 +1102,24 @@ class RunnerTests(unittest.TestCase):
                 result.notes,
             )
 
+    def test_forecast_value_ignores_lowest_temperature_markets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            _store_lowest_market(db, _threshold_risk_outcomes())
+            _store_forecast(db, 29, "2026-05-05T09:11:53+08:00")
+            _store_book_pair(db, "yes29", old_ask=0.10, new_ask=0.10)
+
+            result = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertIn(
+                "forecast value skipped: 2026-05-04 missing outcomes",
+                result.notes,
+            )
+
     def test_forecast_value_lead_time_note_explains_skip(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
@@ -1103,6 +1184,40 @@ class RunnerTests(unittest.TestCase):
                 """
             ).fetchone()
             self.assertEqual(decision["label"], "29°C or higher")
+            self.assertEqual(decision["side"], "YES")
+
+    def test_actual_low_cross_buys_stale_exact_outcome(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_lowest_market(
+                db,
+                [
+                    Outcome(
+                        market_id="low29",
+                        label="29°C",
+                        predicate=parse_outcome_label("29°C"),
+                        yes_token_id="yes-low29",
+                        no_token_id="no-low29",
+                    )
+                ],
+            )
+            _store_forecast_range(db, low=29, high=33, update_time="2026-05-04T09:00:00+08:00")
+            _store_min_observation(db, low=30.2, hour=7)
+            _store_min_observation(db, low=29.4, hour=8)
+            _store_book_pair(db, "yes-low29", old_ask=0.25, new_ask=0.25)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 1)
+            decision = db.execute(
+                """
+                select event_type, label, side
+                from paper_decisions
+                where event_type = 'actual_low_cross' and action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["label"], "29°C")
             self.assertEqual(decision["side"], "YES")
 
     def test_forecast_value_buy_only_sweeps_depth_up_to_threshold(self):
@@ -1306,6 +1421,19 @@ def _seed_market(path: Path, outcomes=None, target_date=date(2026, 5, 4)):
     return db
 
 
+def _store_lowest_market(db, outcomes=None, target_date=date(2026, 5, 4)):
+    store_polymarket_event(
+        db,
+        TemperatureMarket(
+            event_id="lowest-event",
+            event_slug=f"lowest-temperature-in-hong-kong-on-{target_date.isoformat()}",
+            title=f"Lowest temperature in Hong Kong on {target_date.isoformat()}?",
+            target_date=target_date,
+            outcomes=outcomes or _threshold_risk_outcomes(),
+        ),
+    )
+
+
 def _forecast_bucket_outcomes():
     return [
         Outcome(
@@ -1409,6 +1537,53 @@ def _store_forecast(
         )
 
 
+def _store_forecast_range(
+    db,
+    low: float,
+    high: float,
+    update_time: str,
+    forecast_date=date(2026, 5, 4),
+):
+    snapshot = store_raw_snapshot(db, "hko", f"forecast-{update_time}", f"{low}-{high}")
+    store_hko_forecasts(
+        db,
+        snapshot.id,
+        [
+            HkoForecast(
+                source_type="ocf_station",
+                forecast_date_hkt=forecast_date,
+                forecast_min_c=int(low),
+                forecast_max_c=int(high),
+                update_time=update_time,
+            )
+        ],
+    )
+    store_ocf_forecast_samples(
+        db,
+        snapshot.id,
+        [
+            OcfForecastSample(
+                forecast_date_hkt=forecast_date,
+                forecast_min_c=int(low),
+                forecast_max_c=int(high),
+                raw_min_c=low,
+                raw_max_c=high,
+                hourly_temperatures=[
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T06:00:00+08:00",
+                        "temperature_c": low,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T14:00:00+08:00",
+                        "temperature_c": high,
+                    },
+                ],
+                raw={"LastModified": update_time},
+            )
+        ],
+    )
+
+
 def _store_observation(db, high: float, observed_date=date(2026, 5, 4)):
     snapshot = store_raw_snapshot(db, "hko", f"obs-{high}", str(high))
     store_hko_observation(
@@ -1421,6 +1596,25 @@ def _store_observation(db, high: float, observed_date=date(2026, 5, 4)):
             station="HK Observatory",
             since_midnight_max_c=high,
             since_midnight_min_c=21.0,
+            raw={},
+        ),
+    )
+
+
+def _store_min_observation(
+    db, low: float, hour: int, observed_date=date(2026, 5, 4)
+):
+    snapshot = store_raw_snapshot(db, "hko", f"obs-low-{hour}-{low}", str(low))
+    store_hko_observation(
+        db,
+        snapshot.id,
+        HkoObservation(
+            observed_at_hkt=datetime(
+                observed_date.year, observed_date.month, observed_date.day, hour, 0, tzinfo=HKT
+            ),
+            station="HK Observatory",
+            since_midnight_max_c=33.0,
+            since_midnight_min_c=low,
             raw={},
         ),
     )

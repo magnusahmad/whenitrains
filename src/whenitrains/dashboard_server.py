@@ -177,15 +177,19 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
 
 
 def forecast_series(
-    db: sqlite3.Connection, target_date_hkt: str, exact_raw: bool = False
+    db: sqlite3.Connection,
+    target_date_hkt: str,
+    exact_raw: bool = False,
+    value_kind: str = "max",
 ) -> list[dict]:
+    column = "forecast_min_c" if value_kind == "min" else "forecast_max_c"
     rows = db.execute(
-        """
-        select update_time, forecast_max_c, raw_forecast
+        f"""
+        select update_time, {column} as forecast_value_c, raw_forecast
         from hko_forecasts
         where source_type = 'ocf_station'
           and forecast_date_hkt = ?
-          and forecast_max_c is not null
+          and {column} is not null
           and coalesce(parse_warning, 0) = 0
           and update_time is not null
         order by update_time asc
@@ -198,52 +202,58 @@ def forecast_series(
         ts = _to_unix(row["update_time"])
         if ts is None:
             continue
-        value = float(row["forecast_max_c"])
+        value = float(row["forecast_value_c"])
         if exact_raw:
-            value = _raw_forecast_max(row["raw_forecast"]) or value
+            raw_value = _raw_forecast_value(row["raw_forecast"], value_kind)
+            value = raw_value or value
         seen[ts] = value
     return [{"time": ts, "value": value} for ts, value in sorted(seen.items())]
 
 
-def _raw_forecast_max(raw_forecast: str | None) -> float | None:
+def _raw_forecast_value(raw_forecast: str | None, value_kind: str = "max") -> float | None:
     if not raw_forecast:
         return None
     try:
         raw = json.loads(raw_forecast)
-        value = raw.get("ForecastMaximumTemperature")
+        key = "ForecastMinimumTemperature" if value_kind == "min" else "ForecastMaximumTemperature"
+        value = raw.get(key)
         return None if value is None else float(value)
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
 
 
-def observation_series(
-    db: sqlite3.Connection, target_date_hkt: str
-) -> tuple[list[dict], list[dict]]:
+def observation_series(db: sqlite3.Connection, target_date_hkt: str) -> tuple[list[dict], list[dict], list[dict]]:
     rows = db.execute(
         """
-        select observed_at_hkt, since_midnight_max_c, temperature_c
+        select observed_at_hkt, since_midnight_min_c, since_midnight_max_c, temperature_c
         from hko_current_observations
         where substr(observed_at_hkt, 1, 10) = ?
-          and (since_midnight_max_c is not null or temperature_c is not null)
+          and (since_midnight_min_c is not null or since_midnight_max_c is not null or temperature_c is not null)
         order by observed_at_hkt asc, id asc
         """,
         (target_date_hkt,),
     ).fetchall()
+    min_seen: dict[int, float] = {}
     max_seen: dict[int, float] = {}
     cur_seen: dict[int, float] = {}
     for row in rows:
         ts = _to_unix(row["observed_at_hkt"])
         if ts is None:
             continue
+        if row["since_midnight_min_c"] is not None:
+            value = float(row["since_midnight_min_c"])
+            if ts not in min_seen or value < min_seen[ts]:
+                min_seen[ts] = value
         if row["since_midnight_max_c"] is not None:
             value = float(row["since_midnight_max_c"])
             if ts not in max_seen or value > max_seen[ts]:
                 max_seen[ts] = value
         if row["temperature_c"] is not None:
             cur_seen[ts] = float(row["temperature_c"])
+    actual_min = [{"time": t, "value": v} for t, v in sorted(min_seen.items())]
     actual_max = [{"time": t, "value": v} for t, v in sorted(max_seen.items())]
     current = [{"time": t, "value": v} for t, v in sorted(cur_seen.items())]
-    return actual_max, current
+    return actual_min, actual_max, current
 
 
 def hourly_forecast_series(db: sqlite3.Connection, target_date_hkt: str) -> list[dict]:
@@ -324,6 +334,7 @@ def top_token_price_series(
     sort_by_latest_price: bool = False,
     bucket_seconds: int = 60,
     include_trade_tokens: bool = False,
+    market_kind: str = "highest",
 ) -> list[dict]:
     side = side.upper()
     if side not in {"YES", "NO"}:
@@ -335,8 +346,15 @@ def top_token_price_series(
         if sort_by_latest_price
         else "o.predicate_value_c asc, o.label asc"
     )
-    params: tuple[str, ...] | tuple[str, int] = (
-        (target_date_hkt,) if limit is None else (target_date_hkt, limit)
+    slug_prefix = (
+        "lowest-temperature-in-hong-kong-on-"
+        if market_kind == "lowest"
+        else "highest-temperature-in-hong-kong-on-"
+    )
+    params = (
+        (target_date_hkt, f"{slug_prefix}%")
+        if limit is None
+        else (target_date_hkt, f"{slug_prefix}%", limit)
     )
     rows = db.execute(
         f"""
@@ -352,6 +370,7 @@ def top_token_price_series(
         join latest l on l.outcome_id = o.{token_col}
         join orderbook_snapshots s on s.id = l.latest_id
         where m.target_date_hkt = ?
+          and m.slug like ?
         order by {order_clause}
         {limit_clause}
         """,
@@ -499,16 +518,28 @@ def forecast_panel(
     db: sqlite3.Connection, target_date: date, lead_days: int, token_side: str = "YES"
 ) -> dict:
     target_text = target_date.isoformat()
-    actual_max, current = observation_series(db, target_text)
+    actual_min, actual_max, current = observation_series(db, target_text)
     hourly_forecast = hourly_forecast_series(db, target_text) if lead_days == 0 else []
     hourly_actual = hourly_actual_series(db, target_text) if lead_days == 0 else []
     top_tokens = top_token_price_series(
         db, target_text, token_side, limit=None, include_trade_tokens=True
     )
+    low_tokens = top_token_price_series(
+        db,
+        target_text,
+        token_side,
+        limit=None,
+        include_trade_tokens=True,
+        market_kind="lowest",
+    )
     return {
         "lead_days": lead_days,
         "target_date": target_text,
         "forecast": forecast_series(db, target_text, exact_raw=lead_days == 0),
+        "forecast_low": forecast_series(
+            db, target_text, exact_raw=lead_days == 0, value_kind="min"
+        ),
+        "actual_min": actual_min if lead_days == 0 else [],
         "actual_max": actual_max if lead_days == 0 else [],
         "current_temp": current if lead_days == 0 else [],
         "hourly_forecast": hourly_forecast,
@@ -516,6 +547,7 @@ def forecast_panel(
         "hourly_error": hourly_error_series(hourly_forecast, hourly_actual),
         "token_side": token_side.upper() if token_side.upper() in {"YES", "NO"} else "YES",
         "top_tokens": top_tokens,
+        "low_tokens": low_tokens,
         "top_yes": top_tokens if token_side.upper() == "YES" else [],
     }
 
@@ -1116,7 +1148,7 @@ INDEX_HTML = r"""<!doctype html>
 <body>
   <div class="banner">⚠ Paper Trading Mode — simulated fills only, no real orders sent</div>
   <header>
-    <h1>whenitrains · HK high-temp paper desk</h1>
+    <h1>whenitrains · HK temperature paper desk</h1>
     <span class="meta" id="last-update">loading…</span>
   </header>
 
@@ -1142,7 +1174,7 @@ INDEX_HTML = r"""<!doctype html>
 
   <section class="chart-section">
     <h2>
-      <span><span class="lead-label">D+0</span><span id="d0-date"></span></span>
+      <span><span class="lead-label">D+0 High</span><span id="d0-date"></span></span>
       <span class="legend">
         <button type="button" data-series-key="forecastHigh"><i style="background:#f0b400"></i>OCF forecast high</button>
         <button type="button" data-series-key="hourlyForecast"><i style="background:#c084fc"></i>Hourly forecast</button>
@@ -1155,11 +1187,26 @@ INDEX_HTML = r"""<!doctype html>
     <div id="d0-chart" class="chart"></div>
   </section>
 
+  <section class="chart-section">
+    <h2>
+      <span><span class="lead-label">D+0 Low</span><span id="l0-date"></span></span>
+      <span class="legend">
+        <button type="button" data-series-key="forecastLow"><i style="background:#38bdf8"></i>OCF forecast low</button>
+        <button type="button" data-series-key="lowHourlyForecast"><i style="background:#c084fc"></i>Hourly forecast</button>
+        <button type="button" data-series-key="lowHourlyActual"><i style="background:#f97316"></i>Hourly actual</button>
+        <button type="button" data-series-key="actualMin"><i style="background:#2dd4bf"></i>Since-midnight min</button>
+        <button type="button" data-series-key="lowCurrentTemp"><i style="background:#5b9bd5"></i>Current temperature</button>
+        <span id="l0-legend"></span>
+      </span>
+    </h2>
+    <div id="l0-chart" class="chart"></div>
+  </section>
+
   <div id="chart-tooltip" class="chart-tooltip"></div>
 
   <section class="chart-section">
     <h2>
-      <span><span class="lead-label">D+1</span><span id="d1-date"></span></span>
+      <span><span class="lead-label">D+1 High</span><span id="d1-date"></span></span>
       <span class="legend" id="d1-legend"></span>
     </h2>
     <div id="d1-chart" class="chart"></div>
@@ -1167,10 +1214,26 @@ INDEX_HTML = r"""<!doctype html>
 
   <section class="chart-section">
     <h2>
-      <span><span class="lead-label">D+2</span><span id="d2-date"></span></span>
+      <span><span class="lead-label">D+1 Low</span><span id="l1-date"></span></span>
+      <span class="legend" id="l1-legend"></span>
+    </h2>
+    <div id="l1-chart" class="chart"></div>
+  </section>
+
+  <section class="chart-section">
+    <h2>
+      <span><span class="lead-label">D+2 High</span><span id="d2-date"></span></span>
       <span class="legend" id="d2-legend"></span>
     </h2>
     <div id="d2-chart" class="chart"></div>
+  </section>
+
+  <section class="chart-section">
+    <h2>
+      <span><span class="lead-label">D+2 Low</span><span id="l2-date"></span></span>
+      <span class="legend" id="l2-legend"></span>
+    </h2>
+    <div id="l2-chart" class="chart"></div>
   </section>
 
   <section class="chart-section">
@@ -1246,8 +1309,17 @@ const charts = {
   1: { chart: makeChart("d1-chart", true), series: [] },
   2: { chart: makeChart("d2-chart", true), series: [] },
 };
+const lowCharts = {
+  0: { chart: makeChart("l0-chart", true), series: [] },
+  1: { chart: makeChart("l1-chart", true), series: [] },
+  2: { chart: makeChart("l2-chart", true), series: [] },
+};
 const d0ForecastSeries = charts[0].chart.addLineSeries({
   color: "#f0b400", lineWidth: 2, lineType: LightweightCharts.LineType.WithSteps,
+  priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
+});
+const l0ForecastLowSeries = lowCharts[0].chart.addLineSeries({
+  color: "#38bdf8", lineWidth: 2, lineType: LightweightCharts.LineType.WithSteps,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
 });
 const d0HourlyForecastSeries = charts[0].chart.addLineSeries({
@@ -1265,6 +1337,28 @@ const d0HourlyActualSeries = charts[0].chart.addLineSeries({
 const d0ActualMaxSeries = charts[0].chart.addLineSeries({
   color: "#26a69a", lineWidth: 2,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
+});
+const l0HourlyForecastSeries = lowCharts[0].chart.addLineSeries({
+  color: "#c084fc", lineWidth: 1, lineType: LightweightCharts.LineType.WithSteps,
+  priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
+  priceLineVisible: false,
+});
+const l0HourlyActualSeries = lowCharts[0].chart.addLineSeries({
+  color: "#f97316", lineWidth: 4, lineType: LightweightCharts.LineType.WithSteps,
+  priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
+  priceLineVisible: false,
+  pointMarkersVisible: true,
+  pointMarkersRadius: 6,
+});
+const l0ActualMinSeries = lowCharts[0].chart.addLineSeries({
+  color: "#2dd4bf", lineWidth: 2,
+  priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
+});
+const l0CurrentTempSeries = lowCharts[0].chart.addLineSeries({
+  color: "#5b9bd5", lineWidth: 3, lineStyle: LightweightCharts.LineStyle.Dotted,
+  priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
+  pointMarkersVisible: true,
+  pointMarkersRadius: 6,
 });
 const d0CurrentTempSeries = charts[0].chart.addLineSeries({
   color: "#5b9bd5", lineWidth: 3, lineStyle: LightweightCharts.LineStyle.Dotted,
@@ -1319,6 +1413,11 @@ let d0HourlyActualData = [];
 let d0HourlyErrorData = [];
 let d0ActualMaxData = [];
 let d0CurrentTempData = [];
+let l0ForecastLowData = [];
+let l0HourlyForecastData = [];
+let l0HourlyActualData = [];
+let l0ActualMinData = [];
+let l0CurrentTempData = [];
 let realizedData = [];
 let unrealizedData = [];
 let totalData = [];
@@ -1326,8 +1425,12 @@ let tokenSide = "YES";
 const fittedCharts = new Set();
 const seriesVisibility = {
   forecastHigh: true,
+  forecastLow: true,
+  lowHourlyForecast: true,
+  lowHourlyActual: true,
   hourlyForecast: true,
   hourlyActual: true,
+  actualMin: true,
   actualMax: true,
   currentTemp: true,
 };
@@ -1337,6 +1440,13 @@ const d0SeriesByKey = {
   hourlyActual: d0HourlyActualSeries,
   actualMax: d0ActualMaxSeries,
   currentTemp: d0CurrentTempSeries,
+};
+const l0SeriesByKey = {
+  forecastLow: l0ForecastLowSeries,
+  lowHourlyForecast: l0HourlyForecastSeries,
+  lowHourlyActual: l0HourlyActualSeries,
+  actualMin: l0ActualMinSeries,
+  lowCurrentTemp: l0CurrentTempSeries,
 };
 
 window.addEventListener("resize", () => {
@@ -1495,6 +1605,11 @@ function resetLeadChart(lead) {
     if (s.markerSeries) charts[lead].chart.removeSeries(s.markerSeries);
   }
   charts[lead].series = [];
+  for (const s of lowCharts[lead].series) {
+    lowCharts[lead].chart.removeSeries(s.series);
+    if (s.markerSeries) lowCharts[lead].chart.removeSeries(s.markerSeries);
+  }
+  lowCharts[lead].series = [];
 }
 
 function chartValueAt(points, time) {
@@ -1538,6 +1653,9 @@ function applySeriesVisibility() {
   Object.entries(d0SeriesByKey).forEach(([key, series]) => {
     series.applyOptions({ visible: seriesVisibility[key] });
   });
+  Object.entries(l0SeriesByKey).forEach(([key, series]) => {
+    series.applyOptions({ visible: seriesVisibility[key] });
+  });
   document.querySelectorAll("[data-series-key]").forEach((button) => {
     const key = button.dataset.seriesKey;
     const visible = seriesVisibility[key] !== false;
@@ -1545,6 +1663,13 @@ function applySeriesVisibility() {
     button.setAttribute("aria-pressed", visible ? "true" : "false");
   });
   Object.values(charts).forEach((chartState) => {
+    chartState.series.forEach((descriptor) => {
+      const visible = seriesVisibility[descriptor.key] !== false;
+      descriptor.series.applyOptions({ visible });
+      if (descriptor.markerSeries) descriptor.markerSeries.applyOptions({ visible });
+    });
+  });
+  Object.values(lowCharts).forEach((chartState) => {
     chartState.series.forEach((descriptor) => {
       const visible = seriesVisibility[descriptor.key] !== false;
       descriptor.series.applyOptions({ visible });
@@ -1637,13 +1762,18 @@ function markerOnlySeries(chart, markers) {
 }
 
 function renderTradeBubbles(lead) {
-  const container = document.getElementById(`d${lead}-chart`);
+  renderTradeBubblesForChart(charts, `d${lead}-chart`, lead);
+  renderTradeBubblesForChart(lowCharts, `l${lead}-chart`, lead);
+}
+
+function renderTradeBubblesForChart(chartMap, containerId, lead) {
+  const container = document.getElementById(containerId);
   if (!container) return;
   container.querySelectorAll(".trade-bubble").forEach(el => el.remove());
-  const chart = charts[lead].chart;
+  const chart = chartMap[lead].chart;
   const width = container.clientWidth;
   const height = container.clientHeight;
-  for (const descriptor of charts[lead].series) {
+  for (const descriptor of chartMap[lead].series) {
     for (const marker of descriptor.markers || []) {
       const coordinateSeries = descriptor.markerSeries || descriptor.series;
       if (!coordinateSeries || !coordinateSeries.priceToCoordinate) continue;
@@ -1749,11 +1879,25 @@ attachTooltip(charts[0].chart, "d0-chart", () => [
   { name: "Current temperature", color: "#5b9bd5", kind: "temp", data: visibleData("currentTemp", d0CurrentTempData) },
   ...charts[0].series.map(s => ({ name: s.name, color: s.color, kind: "odds", data: visibleData(s.key, s.data), markers: isSeriesVisible(s.key) ? s.markers : [] })),
 ]);
+attachTooltip(lowCharts[0].chart, "l0-chart", () => [
+  { name: "OCF forecast low", color: "#38bdf8", kind: "temp", data: visibleData("forecastLow", l0ForecastLowData) },
+  { name: "Hourly forecast", color: "#c084fc", kind: "temp", data: visibleData("lowHourlyForecast", l0HourlyForecastData) },
+  { name: "Hourly actual", color: "#f97316", kind: "temp", data: visibleData("lowHourlyActual", l0HourlyActualData) },
+  { name: "Since-midnight min", color: "#2dd4bf", kind: "temp", data: visibleData("actualMin", l0ActualMinData) },
+  { name: "Current temperature", color: "#5b9bd5", kind: "temp", data: visibleData("lowCurrentTemp", l0CurrentTempData) },
+  ...lowCharts[0].series.map(s => ({ name: s.name, color: s.color, kind: "odds", data: visibleData(s.key, s.data), markers: isSeriesVisible(s.key) ? s.markers : [] })),
+]);
 attachTooltip(charts[1].chart, "d1-chart", () =>
   charts[1].series.map(s => ({ name: s.name, color: s.color, kind: s.kind, data: visibleData(s.key, s.data), markers: isSeriesVisible(s.key) ? s.markers : [] }))
 );
+attachTooltip(lowCharts[1].chart, "l1-chart", () =>
+  lowCharts[1].series.map(s => ({ name: s.name, color: s.color, kind: s.kind, data: visibleData(s.key, s.data), markers: isSeriesVisible(s.key) ? s.markers : [] }))
+);
 attachTooltip(charts[2].chart, "d2-chart", () =>
   charts[2].series.map(s => ({ name: s.name, color: s.color, kind: s.kind, data: visibleData(s.key, s.data), markers: isSeriesVisible(s.key) ? s.markers : [] }))
+);
+attachTooltip(lowCharts[2].chart, "l2-chart", () =>
+  lowCharts[2].series.map(s => ({ name: s.name, color: s.color, kind: s.kind, data: visibleData(s.key, s.data), markers: isSeriesVisible(s.key) ? s.markers : [] }))
 );
 attachTooltip(pnlChart, "pnl-chart", () => [
   { name: "Realized", color: "#26a69a", kind: "money", data: realizedData },
@@ -1763,23 +1907,37 @@ attachTooltip(pnlChart, "pnl-chart", () => [
 Object.values(charts).forEach(c => {
   c.chart.timeScale().subscribeVisibleTimeRangeChange(renderAllTradeBubbles);
 });
+Object.values(lowCharts).forEach(c => {
+  c.chart.timeScale().subscribeVisibleTimeRangeChange(renderAllTradeBubbles);
+});
 
 function renderLeadPanel(panel) {
   const lead = panel.lead_days;
   document.getElementById(`d${lead}-date`).textContent = panel.target_date;
+  document.getElementById(`l${lead}-date`).textContent = panel.target_date;
   if (lead === 0) {
     resetLeadChart(0);
     d0ForecastData = panel.forecast;
+    l0ForecastLowData = panel.forecast_low || [];
     d0HourlyForecastData = panel.hourly_forecast || [];
     d0HourlyActualData = lineDataForDisplay(panel.hourly_actual || [], 600);
     d0HourlyErrorData = panel.hourly_error || [];
+    l0HourlyForecastData = panel.hourly_forecast || [];
+    l0HourlyActualData = lineDataForDisplay(panel.hourly_actual || [], 600);
+    l0ActualMinData = panel.actual_min || [];
     d0ActualMaxData = panel.actual_max;
     d0CurrentTempData = lineDataForDisplay(panel.current_temp || [], 600);
+    l0CurrentTempData = lineDataForDisplay(panel.current_temp || [], 600);
     d0ForecastSeries.setData(d0ForecastData);
+    l0ForecastLowSeries.setData(l0ForecastLowData);
     d0HourlyForecastSeries.setData(d0HourlyForecastData);
     d0HourlyActualSeries.setData(d0HourlyActualData);
+    l0HourlyForecastSeries.setData(l0HourlyForecastData);
+    l0HourlyActualSeries.setData(l0HourlyActualData);
+    l0ActualMinSeries.setData(l0ActualMinData);
     d0ActualMaxSeries.setData(d0ActualMaxData);
     d0CurrentTempSeries.setData(d0CurrentTempData);
+    l0CurrentTempSeries.setData(l0CurrentTempData);
     const legend = [];
     panel.top_tokens.forEach((item, idx) => {
       const color = oddsColors[idx % oddsColors.length];
@@ -1798,9 +1956,30 @@ function renderLeadPanel(panel) {
     });
     document.getElementById("d0-legend").innerHTML = legend.join("");
     bindSeriesToggleButtons(document.getElementById("d0-legend"));
+    const lowLegend = [];
+    (panel.low_tokens || []).forEach((item, idx) => {
+      const color = oddsColors[idx % oddsColors.length];
+      const key = `l0-token-${item.token_id}`;
+      const s = lowCharts[0].chart.addLineSeries({
+        color,
+        lineWidth: 1,
+        priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+        priceScaleId: "left",
+        priceLineVisible: false,
+      });
+      s.setData(item.points);
+      const markerSeries = markerOnlySeries(lowCharts[0].chart, item.markers || []);
+      lowCharts[0].series.push({ key, series: s, markerSeries, name: `${item.label} ${item.side}`, color, kind: "odds", data: item.points, markers: item.markers || [] });
+      lowLegend.push(legendButton(key, color, `${item.label} ${item.side} (${item.latest_price.toFixed(2)})`));
+    });
+    document.getElementById("l0-legend").innerHTML = lowLegend.join("");
+    bindSeriesToggleButtons(document.getElementById("l0-legend"));
     applySeriesVisibility();
     if (panel.forecast.length || d0HourlyForecastData.length || d0HourlyActualData.length || panel.actual_max.length || panel.current_temp.length || panel.top_tokens.some(s => s.points.length)) {
       fitChartOnce("d0", charts[0].chart);
+    }
+    if (l0ForecastLowData.length || l0HourlyForecastData.length || l0HourlyActualData.length || l0ActualMinData.length || l0CurrentTempData.length || (panel.low_tokens || []).some(s => s.points.length)) {
+      fitChartOnce("l0", lowCharts[0].chart);
     }
     return;
   }
@@ -1815,6 +1994,15 @@ function renderLeadPanel(panel) {
   });
   forecast.setData(panel.forecast);
   charts[lead].series.push({ series: forecast, name: "OCF forecast high", color: "#f0b400", kind: "temp", data: panel.forecast });
+  const forecastLow = lowCharts[lead].chart.addLineSeries({
+    color: "#38bdf8",
+    lineWidth: 2,
+    lineType: LightweightCharts.LineType.WithSteps,
+    priceFormat: { type: "price", precision: 1, minMove: 0.1 },
+    priceScaleId: "right",
+  });
+  forecastLow.setData(panel.forecast_low || []);
+  lowCharts[lead].series.push({ series: forecastLow, name: "OCF forecast low", color: "#38bdf8", kind: "temp", data: panel.forecast_low || [] });
 
   const legend = [
     `<span><i style="background:#f0b400"></i>OCF forecast high (right °C)</span>`
@@ -1836,9 +2024,32 @@ function renderLeadPanel(panel) {
   });
   document.getElementById(`d${lead}-legend`).innerHTML = legend.join("");
   bindSeriesToggleButtons(document.getElementById(`d${lead}-legend`));
+  const lowLegend = [
+    `<span><i style="background:#38bdf8"></i>OCF forecast low (right °C)</span>`
+  ];
+  (panel.low_tokens || []).forEach((item, idx) => {
+    const color = oddsColors[idx % oddsColors.length];
+    const key = `l${lead}-token-${item.token_id}`;
+    const s = lowCharts[lead].chart.addLineSeries({
+      color,
+      lineWidth: 1,
+      priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+      priceScaleId: "left",
+      priceLineVisible: false,
+    });
+    s.setData(item.points);
+    const markerSeries = markerOnlySeries(lowCharts[lead].chart, item.markers || []);
+    lowCharts[lead].series.push({ key, series: s, markerSeries, name: `${item.label} ${item.side}`, color, kind: "odds", data: item.points, markers: item.markers || [] });
+    lowLegend.push(legendButton(key, color, `${item.label} ${item.side} (${item.latest_price.toFixed(2)})`));
+  });
+  document.getElementById(`l${lead}-legend`).innerHTML = lowLegend.join("");
+  bindSeriesToggleButtons(document.getElementById(`l${lead}-legend`));
   applySeriesVisibility();
   if (panel.forecast.length || panel.top_tokens.some(s => s.points.length)) {
     fitChartOnce(`d${lead}`, charts[lead].chart);
+  }
+  if ((panel.forecast_low || []).length || (panel.low_tokens || []).some(s => s.points.length)) {
+    fitChartOnce(`l${lead}`, lowCharts[lead].chart);
   }
 }
 
@@ -1880,6 +2091,9 @@ document.getElementById("token-side").addEventListener("change", (event) => {
 bindSeriesToggleButtons();
 Object.values(charts).forEach((chartState, idx) => {
   installModifierWheelZoom(`d${idx}-chart`, chartState.chart);
+});
+Object.values(lowCharts).forEach((chartState, idx) => {
+  installModifierWheelZoom(`l${idx}-chart`, chartState.chart);
 });
 installModifierWheelZoom("pnl-chart", pnlChart);
 
@@ -2014,12 +2228,14 @@ def _build_handler(db_path: Path):
                         requested = query.get("date", [None])[0]
                         target = _resolve_target_date(db, requested)
                         forecast = forecast_series(db, target)
-                        actual_max, current = observation_series(db, target)
+                        actual_min, actual_max, current = observation_series(db, target)
                         self._send_json(
                             {
                                 "target_date": target,
                                 "available_dates": available_forecast_dates(db),
                                 "forecast": forecast,
+                                "forecast_low": forecast_series(db, target, value_kind="min"),
+                                "actual_min": actual_min,
                                 "actual_max": actual_max,
                                 "current_temp": current,
                             }

@@ -41,14 +41,18 @@ class SchedulerTests(unittest.TestCase):
         self.assertIn("since_midnight", _due_sources(end))
         self.assertNotIn("since_midnight", _due_sources(after))
 
-    def test_since_midnight_is_not_due_outside_10_to_20_hkt(self):
-        self.assertNotIn(
+    def test_since_midnight_is_due_across_full_hkt_day(self):
+        self.assertIn(
             "since_midnight",
-            _due_sources(datetime(2026, 5, 4, 9, 59, 30, tzinfo=HKT)),
+            _due_sources(datetime(2026, 5, 4, 0, 0, 30, tzinfo=HKT)),
         )
-        self.assertNotIn(
+        self.assertIn(
             "since_midnight",
             _due_sources(datetime(2026, 5, 4, 20, 8, 0, tzinfo=HKT)),
+        )
+        self.assertIn(
+            "since_midnight",
+            _due_sources(datetime(2026, 5, 4, 23, 58, 30, tzinfo=HKT)),
         )
 
     def test_learned_forecast_minute_is_reused_every_hour_with_catchup(self):
@@ -72,7 +76,10 @@ class SchedulerTests(unittest.TestCase):
         changed = mark_source_fetch(state, plan, "new payload", now, changed=True)
 
         self.assertTrue(changed)
-        self.assertEqual(due_hko_sources(now + timedelta(seconds=10), state), [])
+        self.assertNotIn(
+            "bulletin",
+            {item.source for item in due_hko_sources(now + timedelta(seconds=10), state)},
+        )
 
     def test_unchanged_source_respects_ten_second_window_cadence(self):
         now = datetime(2026, 5, 4, 0, 10, 0, tzinfo=HKT)
