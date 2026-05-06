@@ -797,11 +797,22 @@ INDEX_HTML = r"""<!doctype html>
 
 <script>
 const HKT_OFFSET_SEC = 8 * 3600;
+const chartTimeToUnixSeconds = (time) => {
+  if (typeof time === "number") return time;
+  if (typeof time === "string") return Math.floor(Date.parse(time + "T00:00:00Z") / 1000);
+  if (time && typeof time === "object") {
+    return Math.floor(Date.UTC(time.year, time.month - 1, time.day) / 1000);
+  }
+  return null;
+};
 const fmtHKT = (sec) => {
-  const d = new Date((sec + HKT_OFFSET_SEC) * 1000);
+  const unixSec = chartTimeToUnixSeconds(sec);
+  if (unixSec == null || Number.isNaN(unixSec)) return "";
+  const d = new Date((unixSec + HKT_OFFSET_SEC) * 1000);
   const iso = d.toISOString();
   return iso.slice(0, 10) + " " + iso.slice(11, 16) + " HKT";
 };
+const fmtHKTTime = (time) => fmtHKT(time).slice(11, 16);
 
 function makeChart(elementId, dualAxis=false) {
   const chart = LightweightCharts.createChart(document.getElementById(elementId), {
@@ -814,7 +825,7 @@ function makeChart(elementId, dualAxis=false) {
     timeVisible: true,
     secondsVisible: false,
     borderColor: "#30363d",
-    tickMarkFormatter: (time) => fmtHKT(time).slice(11, 16),
+    tickMarkFormatter: fmtHKTTime,
   },
   rightPriceScale: { borderColor: "#30363d", visible: true },
   leftPriceScale: { borderColor: "#30363d", visible: dualAxis },
@@ -834,6 +845,7 @@ function makeChart(elementId, dualAxis=false) {
     mouseWheel: false,
     pinch: true,
     axisPressedMouseMove: true,
+    allowShiftDragZoom: true,
   },
   });
   return chart;
@@ -883,7 +895,7 @@ const pnlChart = LightweightCharts.createChart(document.getElementById("pnl-char
     timeVisible: true,
     secondsVisible: false,
     borderColor: "#30363d",
-    tickMarkFormatter: (time) => fmtHKT(time).slice(11, 16),
+    tickMarkFormatter: fmtHKTTime,
   },
   rightPriceScale: { borderColor: "#30363d" },
   crosshair: {
@@ -923,6 +935,7 @@ let realizedData = [];
 let unrealizedData = [];
 let totalData = [];
 let tokenSide = "YES";
+const fittedCharts = new Set();
 const seriesVisibility = {
   forecastHigh: true,
   hourlyForecast: true,
@@ -941,8 +954,6 @@ const d0SeriesByKey = {
 };
 
 window.addEventListener("resize", () => {
-  Object.values(charts).forEach(c => c.chart.timeScale().fitContent());
-  pnlChart.timeScale().fitContent();
   renderAllTradeBubbles();
 });
 
@@ -1034,9 +1045,69 @@ function applySeriesVisibility() {
   });
   document.querySelectorAll("[data-series-key]").forEach((button) => {
     const key = button.dataset.seriesKey;
-    button.classList.toggle("off", !seriesVisibility[key]);
-    button.setAttribute("aria-pressed", seriesVisibility[key] ? "true" : "false");
+    const visible = seriesVisibility[key] !== false;
+    button.classList.toggle("off", !visible);
+    button.setAttribute("aria-pressed", visible ? "true" : "false");
   });
+  Object.values(charts).forEach((chartState) => {
+    chartState.series.forEach((descriptor) => {
+      const visible = seriesVisibility[descriptor.key] !== false;
+      descriptor.series.applyOptions({ visible });
+      if (descriptor.markerSeries) descriptor.markerSeries.applyOptions({ visible });
+    });
+  });
+  renderAllTradeBubbles();
+}
+
+function isSeriesVisible(key) {
+  return seriesVisibility[key] !== false;
+}
+
+function legendButton(key, color, label) {
+  if (!(key in seriesVisibility)) seriesVisibility[key] = true;
+  const off = seriesVisibility[key] ? "" : " off";
+  return `<button type="button" class="${off}" data-series-key="${key}" aria-pressed="${seriesVisibility[key] ? "true" : "false"}"><i style="background:${color}"></i>${label}</button>`;
+}
+
+function bindSeriesToggleButtons(root = document) {
+  root.querySelectorAll("[data-series-key]").forEach((button) => {
+    if (button.dataset.toggleBound === "1") return;
+    button.dataset.toggleBound = "1";
+    button.addEventListener("click", () => {
+      const key = button.dataset.seriesKey;
+      seriesVisibility[key] = !isSeriesVisible(key);
+      applySeriesVisibility();
+    });
+  });
+}
+
+function installModifierWheelZoom(containerId, chart) {
+  const container = document.getElementById(containerId);
+  container.addEventListener("wheel", (event) => {
+    if (!event.metaKey && !event.ctrlKey) return;
+    event.preventDefault();
+    const range = chart.timeScale().getVisibleLogicalRange();
+    if (!range) return;
+    const rect = container.getBoundingClientRect();
+    const cursorX = event.clientX - rect.left;
+    const span = range.to - range.from;
+    const cursorLogical = chart.timeScale().coordinateToLogical(cursorX);
+    if (cursorLogical == null) return;
+    const cursorRatio = Math.min(Math.max((cursorLogical - range.from) / span, 0), 1);
+    const factor = event.deltaY < 0 ? 0.85 : 1.15;
+    const nextSpan = Math.max(10, span * factor);
+    chart.timeScale().setVisibleLogicalRange({
+      from: cursorLogical - nextSpan * cursorRatio,
+      to: cursorLogical + nextSpan * (1 - cursorRatio),
+    });
+    renderAllTradeBubbles();
+  }, { passive: false });
+}
+
+function fitChartOnce(key, chart) {
+  if (fittedCharts.has(key)) return;
+  chart.timeScale().fitContent();
+  fittedCharts.add(key);
 }
 
 function nearestTrade(trades, time) {
@@ -1081,6 +1152,7 @@ function renderTradeBubbles(lead) {
     for (const marker of descriptor.markers || []) {
       const coordinateSeries = descriptor.markerSeries || descriptor.series;
       if (!coordinateSeries || !coordinateSeries.priceToCoordinate) continue;
+      if (!isSeriesVisible(descriptor.key)) continue;
       const x = chart.timeScale().timeToCoordinate(marker.time);
       const y = coordinateSeries.priceToCoordinate(marker.price);
       if (x == null || y == null || x < 0 || y < 0 || x > width || y > height) continue;
@@ -1180,13 +1252,13 @@ attachTooltip(charts[0].chart, "d0-chart", () => [
   { name: "Actual - forecast", color: "#94a3b8", kind: "delta", data: visibleData("hourlyError", d0HourlyErrorData) },
   { name: "Since-midnight max", color: "#26a69a", kind: "temp", data: visibleData("actualMax", d0ActualMaxData) },
   { name: "Current temperature", color: "#5b9bd5", kind: "temp", data: visibleData("currentTemp", d0CurrentTempData) },
-  ...charts[0].series.map(s => ({ name: s.name, color: s.color, kind: "odds", data: s.data, markers: s.markers })),
+  ...charts[0].series.map(s => ({ name: s.name, color: s.color, kind: "odds", data: visibleData(s.key, s.data), markers: isSeriesVisible(s.key) ? s.markers : [] })),
 ]);
 attachTooltip(charts[1].chart, "d1-chart", () =>
-  charts[1].series.map(s => ({ name: s.name, color: s.color, kind: s.kind, data: s.data, markers: s.markers }))
+  charts[1].series.map(s => ({ name: s.name, color: s.color, kind: s.kind, data: visibleData(s.key, s.data), markers: isSeriesVisible(s.key) ? s.markers : [] }))
 );
 attachTooltip(charts[2].chart, "d2-chart", () =>
-  charts[2].series.map(s => ({ name: s.name, color: s.color, kind: s.kind, data: s.data, markers: s.markers }))
+  charts[2].series.map(s => ({ name: s.name, color: s.color, kind: s.kind, data: visibleData(s.key, s.data), markers: isSeriesVisible(s.key) ? s.markers : [] }))
 );
 attachTooltip(pnlChart, "pnl-chart", () => [
   { name: "Realized", color: "#26a69a", kind: "money", data: realizedData },
@@ -1217,6 +1289,7 @@ function renderLeadPanel(panel) {
     const legend = [];
     panel.top_tokens.forEach((item, idx) => {
       const color = oddsColors[idx % oddsColors.length];
+      const key = `d0-token-${item.token_id}`;
       const s = charts[0].chart.addLineSeries({
         color,
         lineWidth: 1,
@@ -1226,12 +1299,14 @@ function renderLeadPanel(panel) {
       });
       s.setData(item.points);
       const markerSeries = markerOnlySeries(charts[0].chart, item.markers || []);
-      charts[0].series.push({ series: s, markerSeries, name: `${item.label} ${item.side}`, color, kind: "odds", data: item.points, markers: item.markers || [] });
-      legend.push(`<span><i style="background:${color}"></i>${item.label} ${item.side} (${item.latest_price.toFixed(2)})</span>`);
+      charts[0].series.push({ key, series: s, markerSeries, name: `${item.label} ${item.side}`, color, kind: "odds", data: item.points, markers: item.markers || [] });
+      legend.push(legendButton(key, color, `${item.label} ${item.side} (${item.latest_price.toFixed(2)})`));
     });
     document.getElementById("d0-legend").innerHTML = legend.join("");
+    bindSeriesToggleButtons(document.getElementById("d0-legend"));
+    applySeriesVisibility();
     if (panel.forecast.length || d0HourlyForecastData.length || d0HourlyActualData.length || panel.actual_max.length || panel.current_temp.length || panel.top_tokens.some(s => s.points.length)) {
-      charts[0].chart.timeScale().fitContent();
+      fitChartOnce("d0", charts[0].chart);
     }
     return;
   }
@@ -1252,6 +1327,7 @@ function renderLeadPanel(panel) {
   ];
   panel.top_tokens.forEach((item, idx) => {
     const color = oddsColors[idx % oddsColors.length];
+    const key = `d${lead}-token-${item.token_id}`;
     const s = charts[lead].chart.addLineSeries({
       color,
       lineWidth: 1,
@@ -1261,12 +1337,14 @@ function renderLeadPanel(panel) {
     });
     s.setData(item.points);
     const markerSeries = markerOnlySeries(charts[lead].chart, item.markers || []);
-    charts[lead].series.push({ series: s, markerSeries, name: `${item.label} ${item.side}`, color, kind: "odds", data: item.points, markers: item.markers || [] });
-    legend.push(`<span><i style="background:${color}"></i>${item.label} ${item.side} (${item.latest_price.toFixed(2)})</span>`);
+    charts[lead].series.push({ key, series: s, markerSeries, name: `${item.label} ${item.side}`, color, kind: "odds", data: item.points, markers: item.markers || [] });
+    legend.push(legendButton(key, color, `${item.label} ${item.side} (${item.latest_price.toFixed(2)})`));
   });
   document.getElementById(`d${lead}-legend`).innerHTML = legend.join("");
+  bindSeriesToggleButtons(document.getElementById(`d${lead}-legend`));
+  applySeriesVisibility();
   if (panel.forecast.length || panel.top_tokens.some(s => s.points.length)) {
-    charts[lead].chart.timeScale().fitContent();
+    fitChartOnce(`d${lead}`, charts[lead].chart);
   }
 }
 
@@ -1287,7 +1365,7 @@ async function loadAll() {
   realizedSeries.setData(realizedData);
   unrealizedSeries.setData(unrealizedData);
   totalSeries.setData(totalData);
-  if (pnl.realized.length) pnlChart.timeScale().fitContent();
+  if (pnl.realized.length) fitChartOnce("pnl", pnlChart);
 
   document.getElementById("last-update").textContent =
     "updated " + new Date().toLocaleTimeString();
@@ -1298,15 +1376,14 @@ document.getElementById("refresh-btn").addEventListener("click", () => {
 });
 document.getElementById("token-side").addEventListener("change", (event) => {
   tokenSide = event.target.value === "NO" ? "NO" : "YES";
+  fittedCharts.clear();
   loadAll();
 });
-document.querySelectorAll("[data-series-key]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const key = button.dataset.seriesKey;
-    seriesVisibility[key] = !seriesVisibility[key];
-    applySeriesVisibility();
-  });
+bindSeriesToggleButtons();
+Object.values(charts).forEach((chartState, idx) => {
+  installModifierWheelZoom(`d${idx}-chart`, chartState.chart);
 });
+installModifierWheelZoom("pnl-chart", pnlChart);
 
 applySeriesVisibility();
 loadAll();
