@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Protocol
 
 from .config import Settings
@@ -111,25 +112,41 @@ class PolymarketClobClient:
             signature_type=config.signature_type,
             funder=config.funder_address,
         )
+        self._signature_type = config.signature_type
 
     def signer_address(self) -> str | None:
         return getattr(self._client, "get_address", lambda: None)()
 
     def balance_usd(self) -> float | None:
         if hasattr(self._client, "get_balance_allowance"):
-            result = self._client.get_balance_allowance({})
+            result = self._client.get_balance_allowance(self._collateral_params())
             for key in ("balance", "usdc", "available"):
                 if key in result:
-                    return float(result[key])
+                    return _usdc_amount(result[key])
         return None
 
     def allowance_ok(self) -> bool:
         if hasattr(self._client, "get_balance_allowance"):
-            result = self._client.get_balance_allowance({})
+            result = self._client.get_balance_allowance(self._collateral_params())
             allowance = result.get("allowance")
             if allowance is not None:
                 return float(allowance) > 0
         return True
+
+    def _collateral_params(self):
+        try:
+            from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+        except ImportError:
+            return SimpleNamespace(
+                asset_type="COLLATERAL", signature_type=self._signature_type
+            )
+        try:
+            return BalanceAllowanceParams(
+                asset_type=AssetType.COLLATERAL,
+                signature_type=self._signature_type,
+            )
+        except TypeError:
+            return BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
 
     def buy_fak(self, token_id: str, price: float, size_usd: float) -> dict:
         return self._post_order(token_id, price, size_usd, "BUY")
@@ -584,3 +601,10 @@ def _optional_float(payload: dict, *keys: str) -> float | None:
         if value not in (None, ""):
             return float(value)
     return None
+
+
+def _usdc_amount(value) -> float:
+    amount = float(value or 0)
+    if amount >= 1_000_000:
+        return amount / 1_000_000
+    return amount

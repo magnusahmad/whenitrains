@@ -1800,6 +1800,29 @@ function fitChartOnce(key, chart) {
   fittedCharts.add(key);
 }
 
+function hktWallClockUnix(dateText, hour = 0, minute = 0, second = 0) {
+  const parts = String(dateText || "").split("-").map(Number);
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+  const [year, month, day] = parts;
+  return Math.floor(Date.UTC(year, month - 1, day, hour, minute, second) / 1000) - HKT_OFFSET_SEC;
+}
+
+function hktDayRange(dateText) {
+  const from = hktWallClockUnix(dateText, 0, 0, 0);
+  const to = hktWallClockUnix(dateText, 23, 59, 59);
+  if (from == null || to == null) return null;
+  return { from, to };
+}
+
+function setHktDayVisibleRange(chart, dateText) {
+  const range = hktDayRange(dateText);
+  if (!range) {
+    chart.timeScale().fitContent();
+    return;
+  }
+  chart.timeScale().setVisibleRange(range);
+}
+
 function nearestTrade(trades, time) {
   if (!trades || !trades.length || time == null) return null;
   let best = null;
@@ -2045,12 +2068,8 @@ function renderLeadPanel(panel) {
     document.getElementById("l0-legend").innerHTML = lowLegend.join("");
     bindSeriesToggleButtons(document.getElementById("l0-legend"));
     applySeriesVisibility();
-    if (panel.forecast.length || d0HourlyForecastData.length || d0HourlyActualData.length || panel.actual_max.length || panel.current_temp.length || panel.top_tokens.some(s => s.points.length)) {
-      fitChartOnce("d0", charts[0].chart);
-    }
-    if (l0ForecastLowData.length || l0HourlyForecastData.length || l0HourlyActualData.length || l0ActualMinData.length || l0CurrentTempData.length || (panel.low_tokens || []).some(s => s.points.length)) {
-      fitChartOnce("l0", lowCharts[0].chart);
-    }
+    setHktDayVisibleRange(charts[0].chart, panel.target_date);
+    setHktDayVisibleRange(lowCharts[0].chart, panel.target_date);
     return;
   }
 

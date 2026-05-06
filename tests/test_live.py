@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from whenitrains.live import (
     LiveConfig,
+    PolymarketClobClient,
     execute_live_buy,
     execute_live_sell,
     load_live_config,
@@ -46,6 +47,17 @@ class FakeClobClient:
         if not self.fill:
             return {"order_id": order_id, "token_id": token_id, "status": "submitted"}
         return {"order_id": order_id, "token_id": token_id, "status": "filled"}
+
+
+class StrictBalanceClient:
+    def __init__(self):
+        self.params = []
+
+    def get_balance_allowance(self, params):
+        if not hasattr(params, "signature_type"):
+            raise AttributeError("params missing signature_type")
+        self.params.append(params)
+        return {"balance": "5000000", "allowance": "1"}
 
 
 class LiveTests(unittest.TestCase):
@@ -106,6 +118,15 @@ class LiveTests(unittest.TestCase):
             self.assertIsNotNone(pos)
             self.assertAlmostEqual(pos["net_shares"], 12.5)
             self.assertAlmostEqual(live_total_open_exposure(db), 5.0)
+
+    def test_polymarket_balance_uses_typed_params_and_converts_wei(self):
+        client = PolymarketClobClient.__new__(PolymarketClobClient)
+        client._client = StrictBalanceClient()
+        client._signature_type = 2
+
+        self.assertAlmostEqual(client.balance_usd(), 5.0)
+        self.assertTrue(client.allowance_ok())
+        self.assertEqual(len(client._client.params), 2)
 
     def test_execute_live_buy_blocks_when_kill_switch_enabled(self):
         with tempfile.TemporaryDirectory() as tmp:
