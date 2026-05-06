@@ -22,6 +22,7 @@ FLW_PAGE_URL = "https://www.weather.gov.hk/en/wxinfo/currwx/flw.htm"
 FLW_PAGE_DATA_URL = "https://www.weather.gov.hk/json/DYN_DAT_MINDS_FLW.json"
 OCF_STATION_URL = "https://maps.weather.gov.hk/ocf/dat/HKO.xml"
 OCF_TEXT_URL = "https://maps.weather.gov.hk/ocf/text_e.html?mode=0&station=HKO"
+RHRREAD_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=en"
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,14 @@ class HkoObservation:
     since_midnight_max_c: float
     since_midnight_min_c: float
     raw: dict[str, str]
+
+
+@dataclass(frozen=True)
+class HkoCurrentTemperature:
+    observed_at_hkt: datetime
+    station: str
+    temperature_c: float
+    raw: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -121,6 +130,25 @@ def parse_since_midnight_csv(text: str) -> HkoObservation:
                 raw=row,
             )
     raise ValueError("HK Observatory row not found in since-midnight CSV")
+
+
+def parse_rhrread_temperature_json(
+    text: str, station: str = "Hong Kong Observatory"
+) -> HkoCurrentTemperature:
+    payload = json.loads(text)
+    update_time = datetime.fromisoformat(payload["updateTime"])
+    if update_time.tzinfo is None:
+        update_time = update_time.replace(tzinfo=HKT)
+    temperature_rows = payload.get("temperature", {}).get("data") or []
+    for row in temperature_rows:
+        if row.get("place") == station:
+            return HkoCurrentTemperature(
+                observed_at_hkt=update_time.astimezone(HKT),
+                station=station,
+                temperature_c=float(row["value"]),
+                raw={"payload": payload, "temperature_row": row},
+            )
+    raise ValueError(f"{station} temperature row not found in rhrread JSON")
 
 
 def parse_flw_page(text: str) -> HkoForecast:

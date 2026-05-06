@@ -1,0 +1,22 @@
+# Agent Safety Rules
+
+This repo has an intentionally untracked production-like SQLite database under `data/`.
+
+Hard rules:
+
+- Never delete `data/`, `data/whenitrains.sqlite3`, `data/backups/`, or any `*.sqlite3` file unless the user explicitly asks for that exact destructive action.
+- Never run broad cleanup commands such as `rm -rf data`, `find . -name '*.sqlite3' -delete`, or `git clean -fdx` in this repo.
+- Before any command that clears state, migrates data in a non-additive way, or rewrites storage logic, create a backup:
+
+```bash
+PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db
+```
+
+- Use `reset-paper --yes` for paper-trading cleanup. It clears only paper orders, positions, decisions, and signals, and it creates a backup first by default.
+- Use `/private/tmp/*.sqlite3` for smoke tests and destructive experiments.
+
+Rationale:
+
+- `data/` is ignored by git, so git cannot recover the live database.
+- The DB contains HKO snapshots, Polymarket orderbooks, decisions, and paper trade history that cannot be fully reconstructed from source code.
+- SQLite backups should use the CLI backup command because it uses SQLite's online backup API and runs an integrity check.

@@ -9,5 +9,10 @@ class Settings:
     max_order_usd: float = 250.0
     max_daily_drawdown_usd: float = 4000.0
     stale_price_min_move: float = 0.02
-    take_profit_move: float = 0.03
+    take_profit_move: float = 0.20
     max_hold_minutes: float = 10.0
+    max_entry_price: float = 0.98
+    forecast_change_max_price_move: float = 0.20
+    forecast_change_max_entry_price: float = 0.70
+    forecast_value_max_yes_ask: float = 0.30
+    forecast_value_max_lead_days: int = 1

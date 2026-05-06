@@ -51,6 +51,7 @@ def calculate_entry(
     size_usd: float,
     asks: list[tuple[float, float]],
     max_order_usd: float,
+    max_price: float | None = None,
 ) -> EntryQuote:
     if size_usd > max_order_usd:
         return EntryQuote(
@@ -61,6 +62,8 @@ def calculate_entry(
     shares = 0.0
     limit_price = None
     for price, available_shares in sorted(asks):
+        if max_price is not None and price > max_price:
+            continue
         if remaining <= 0:
             break
         take = min(available_shares, remaining / price)
@@ -71,8 +74,9 @@ def calculate_entry(
         remaining -= take * price
         limit_price = price
     if shares <= 0:
+        reason = "no ask depth at or below max price" if max_price is not None else "no ask depth"
         return EntryQuote(
-            "rejected", token_id, "BUY", size_usd, None, None, 0, 0, "no ask depth"
+            "rejected", token_id, "BUY", size_usd, None, None, 0, 0, reason
         )
     return EntryQuote(
         "fillable",
@@ -95,8 +99,9 @@ def execute_paper_buy(
     asks: list[tuple[float, float]],
     max_order_usd: float,
     reason: str,
+    max_price: float | None = None,
 ) -> PersistedPaperResult:
-    quote = calculate_entry(token_id, size_usd, asks, max_order_usd)
+    quote = calculate_entry(token_id, size_usd, asks, max_order_usd, max_price=max_price)
     if quote.status != "fillable":
         store_paper_order_result(
             db, token_id, f"BUY_{side}", None, size_usd, None, 0, "rejected", quote.reason

@@ -5,6 +5,7 @@ from whenitrains.hko import (
     parse_flw_page_data_json,
     parse_http_datetime_hkt,
     parse_ocf_station_json,
+    parse_rhrread_temperature_json,
     parse_since_midnight_csv,
 )
 
@@ -21,6 +22,23 @@ class HkoParserTests(unittest.TestCase):
         self.assertEqual(obs.observed_at_hkt.isoformat(), "2026-05-03T20:30:00+08:00")
         self.assertEqual(obs.since_midnight_max_c, 29.6)
         self.assertEqual(obs.since_midnight_min_c, 23.4)
+
+    def test_parse_rhrread_hk_observatory_temperature(self):
+        payload = """
+        {
+          "updateTime": "2026-05-05T17:02:00+08:00",
+          "temperature": {
+            "data": [
+              {"place": "King's Park", "value": 21, "unit": "C"},
+              {"place": "Hong Kong Observatory", "value": 21.4, "unit": "C"}
+            ]
+          }
+        }
+        """
+        obs = parse_rhrread_temperature_json(payload)
+        self.assertEqual(obs.station, "Hong Kong Observatory")
+        self.assertEqual(obs.observed_at_hkt.isoformat(), "2026-05-05T17:02:00+08:00")
+        self.assertEqual(obs.temperature_c, 21.4)
 
     def test_parse_flw_webpage_bulletin_time_and_range(self):
         html = """

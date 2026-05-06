@@ -2,23 +2,27 @@ from __future__ import annotations
 
 import argparse
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .config import Settings
+from .forecast_accuracy import build_forecast_accuracy_report, render_accuracy_report
 from .hko import (
     FLW_PAGE_DATA_URL,
     FLW_PAGE_URL,
     OCF_STATION_URL,
+    RHRREAD_URL,
     SINCE_MIDNIGHT_URL,
     fetch_response,
     parse_flw_page,
     parse_flw_page_data_json,
     parse_http_datetime_hkt,
     parse_ocf_station_json,
+    parse_rhrread_temperature_json,
     parse_since_midnight_csv,
     HKT,
 )
+from .hourly_accuracy import build_hourly_accuracy_report, render_hourly_accuracy_report
 from .polymarket import (
     event_slug_for_date,
     fetch_hk_temperature_event,
@@ -26,21 +30,25 @@ from .polymarket import (
     resolution_rules_warning,
 )
 from .polymarket import fetch_orderbook
+from .dashboard_server import serve as serve_dashboard
 from .runner import render_dashboard, run_paper_loop, run_paper_tick
 from .scheduler import run_scheduled_paper_loop
 from .paper_db import calculate_entry, calculate_exit, execute_paper_buy, execute_paper_sell
 from .storage import (
+    backup_sqlite_database,
     connect,
     find_outcome_by_label,
     latest_orderbook,
     list_hko_update_times,
     list_hko_forecast_dates,
     list_outcomes,
+    list_outcomes_from_date,
     list_outcomes_for_date,
     migrate,
     reset_paper_state,
     record_hko_update_minute,
     store_hko_forecasts,
+    store_hko_current_temperature,
     store_hko_observation,
     store_orderbook,
     store_ocf_forecast_samples,
@@ -85,16 +93,42 @@ def main(argv: list[str] | None = None) -> int:
     scheduled_loop.add_argument("--sleep", type=float, default=1.0)
     scheduled_loop.add_argument("--ticks", type=int)
     scheduled_loop.add_argument("--verbose", action="store_true")
+    scheduled_loop.add_argument("--no-startup-backup", action="store_true")
     ocf_sample = sub.add_parser("sample-ocf")
     ocf_sample.add_argument("--interval-minutes", type=float, default=10.0)
     ocf_sample.add_argument("--hours", type=float, default=24.0)
     ocf_sample.add_argument("--ticks", type=int)
     reset_paper = sub.add_parser("reset-paper")
     reset_paper.add_argument("--yes", action="store_true")
+    reset_paper.add_argument("--no-backup", action="store_true")
+    backup_db = sub.add_parser("backup-db")
+    backup_db.add_argument("--backup-dir")
+    backup_db.add_argument("--keep", type=int, default=5)
+    accuracy = sub.add_parser("research-forecast-accuracy")
+    accuracy.add_argument("--start")
+    accuracy.add_argument("--end")
+    accuracy.add_argument("--months", type=int, default=12)
+    accuracy.add_argument("--cache-dir", default="data/research/hko_forecast_accuracy")
+    accuracy.add_argument("--output")
+    hourly_accuracy = sub.add_parser("research-hourly-accuracy")
+    hourly_accuracy.add_argument("--output")
     sub.add_parser("dashboard")
+    dashboard_serve = sub.add_parser("dashboard-serve")
+    dashboard_serve.add_argument("--host", default="127.0.0.1")
+    dashboard_serve.add_argument("--port", type=int, default=8765)
     args = parser.parse_args(argv)
 
-    db = connect(Path(args.db))
+    db_path = Path(args.db)
+    if args.command == "backup-db":
+        backup_path = backup_sqlite_database(
+            db_path,
+            backup_dir=Path(args.backup_dir) if args.backup_dir else None,
+            keep=args.keep,
+        )
+        print(f"created backup {backup_path}")
+        return 0
+
+    db = connect(db_path)
     if args.command == "init-db":
         migrate(db)
         print(f"initialized {args.db}")
@@ -226,12 +260,21 @@ def main(argv: list[str] | None = None) -> int:
         migrate(db)
         print(render_dashboard(db))
         return 0
+    if args.command == "dashboard-serve":
+        migrate(db)
+        db.close()
+        serve_dashboard(db_path, host=args.host, port=args.port)
+        return 0
     if args.command == "paper-scheduler":
         migrate(db)
+        if not args.no_startup_backup:
+            backup_path = backup_sqlite_database(db_path)
+            print(f"created startup backup {backup_path}")
         run_scheduled_paper_loop(
             db,
             fetch_since_midnight=lambda: _fetch_since_midnight(db),
             fetch_bulletin=lambda: _fetch_bulletin(db),
+            fetch_current_temperature=lambda: _fetch_current_temperature(db),
             learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
             discover_market=lambda target: _discover_markets_for_forecast_dates(db, target),
             fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
@@ -273,8 +316,31 @@ def main(argv: list[str] | None = None) -> int:
         if not args.yes:
             print("refusing to reset paper state without --yes")
             return 2
+        if not args.no_backup:
+            backup_path = backup_sqlite_database(db_path)
+            print(f"created backup {backup_path}")
         reset_paper_state(db)
         print("reset paper orders, positions, decisions, and signals")
+        return 0
+    if args.command == "research-forecast-accuracy":
+        end = date.fromisoformat(args.end) if args.end else datetime.now(HKT).date() - timedelta(days=1)
+        start = date.fromisoformat(args.start) if args.start else _months_before(end, args.months)
+        rows, summaries = build_forecast_accuracy_report(
+            start=start,
+            end=end,
+            cache_dir=Path(args.cache_dir),
+        )
+        report = render_accuracy_report(rows, summaries, start, end)
+        if args.output:
+            Path(args.output).write_text(report + "\n")
+        print(report)
+        return 0
+    if args.command == "research-hourly-accuracy":
+        rows, summaries = build_hourly_accuracy_report(db)
+        report = render_hourly_accuracy_report(rows, summaries)
+        if args.output:
+            Path(args.output).write_text(report + "\n")
+        print(report)
         return 0
     return 1
 
@@ -282,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
 def _fetch_hko(db) -> None:
     _fetch_since_midnight(db)
     _fetch_bulletin(db)
+    _fetch_current_temperature(db)
 
 
 def _fetch_since_midnight(db) -> str:
@@ -290,6 +357,15 @@ def _fetch_since_midnight(db) -> str:
         db, "hko", SINCE_MIDNIGHT_URL, response.text, response.headers
     )
     store_hko_observation(db, obs_snapshot.id, parse_since_midnight_csv(response.text))
+    return response.text
+
+
+def _fetch_current_temperature(db) -> str:
+    response = fetch_response(RHRREAD_URL)
+    snapshot = store_raw_snapshot(db, "hko", RHRREAD_URL, response.text, response.headers)
+    store_hko_current_temperature(
+        db, snapshot.id, parse_rhrread_temperature_json(response.text)
+    )
     return response.text
 
 
@@ -392,7 +468,7 @@ def _fetch_orderbooks(db, target_date=None, quiet: bool = False) -> None:
     outcomes = (
         list_outcomes_for_date(db, target_date.isoformat())
         if target_date is not None
-        else list_outcomes(db)
+        else list_outcomes_from_date(db, datetime.now(HKT).date().isoformat())
     )
     for outcome in outcomes:
         try:
@@ -425,6 +501,19 @@ def _fetch_orderbooks(db, target_date=None, quiet: bool = False) -> None:
 
 def _fmt(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.4f}"
+
+
+def _months_before(day: date, months: int) -> date:
+    month_index = day.year * 12 + day.month - 1 - months
+    year = month_index // 12
+    month = month_index % 12 + 1
+    return date(year, month, min(day.day, _month_days(year, month)))
+
+
+def _month_days(year: int, month: int) -> int:
+    if month == 12:
+        return 31
+    return (date(year, month + 1, 1) - date(year, month, 1)).days
 
 
 if __name__ == "__main__":

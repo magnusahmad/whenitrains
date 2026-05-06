@@ -132,7 +132,7 @@ PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-smoke.sq
 PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 fetch-orderbooks
 PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 calc-entry '25°C' YES 100
 PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 paper-buy '25°C' YES 100
-PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 check-exit '25°C' YES --take-profit 0.03
+PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 check-exit '25°C' YES --take-profit 0.20
 PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-paper-smoke.sqlite3 paper-sell '25°C' YES
 PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-live-paper-smoke.sqlite3 paper-loop --ticks 1 --interval 1
 PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-live-paper-smoke.sqlite3 dashboard
@@ -401,3 +401,190 @@ Verification:
 - Header/update-minute tests cover HTTP date parsing, full raw snapshot retention, and learned scheduler minutes.
 - Smoke test against HKO OCF feed stored 10 forecast rows; first row was `2026-05-04`, displayed high `27`, raw high `27.1`, update time `2026-05-04T13:11:47+08:00`.
 - Full test suite: `PYTHONPATH=src python3 -m unittest discover -s tests` -> `Ran 44 tests ... OK`.
+
+## Paper Trading Fixes - May 5, 2026
+
+DB review findings:
+
+- The OCF forecast source did not produce a same-source forecast high change during the sampled run. May 4 stayed at `28.0`; May 5 stayed at `24.0`.
+- The observed `25.0 -> 28.0` forecast-change event was source pollution from older `flw_page`/legacy rows mixed with the active OCF source.
+- The May 4 actual max crossed into the top bucket, but the `26°C or higher` YES market was already near `0.999`, leaving no useful paper-tradable upside.
+- Actual-cross processing was vulnerable to missing a transition after duplicate/unchanged observation rows arrived, because it only compared the latest two observed rows.
+
+Implementation changes:
+
+- Active forecast discovery/trading/dashboard logic now uses `ocf_station` only. Legacy `flw_page`/`fnd` rows remain in the DB for audit but cannot trigger paper forecast trades.
+- Actual-cross logic now scans all distinct increasing observed-max transitions and processes any unprocessed threshold-crossing transition, instead of only comparing the latest two rows.
+- Added `Settings.max_entry_price = 0.98`; candidate buys above this executable ask are logged as missed with reason `entry price above max`.
+- This prevents near-settled entries such as buying YES at `0.999`, where the upside is too small for the latency POC.
+
+Verification:
+
+- Added tests for ignoring FLW forecasts in active trading, scanning a past actual-cross transition after later duplicate observations, and rejecting near-settled entry prices.
+- Full test suite: `PYTHONPATH=src python3 -m unittest discover -s tests` -> `Ran 52 tests ... OK`.
+
+## Forecast-Move Strategy Update - May 5, 2026
+
+Overnight paper run finding:
+
+- The May 5 OCF forecast changed from `24.0` to `23.0`.
+- Buying `23°C YES`, `24°C NO`, and `25°C NO` would have worked materially better than broad proximity buying.
+- `22°C YES` was too far from the new forecast value and stayed near zero.
+- The paper loss was dominated by selling May 5 positions against May 4 actual max data; actual max checks must be target-date scoped.
+
+Updated entry rules:
+
+- Forecast down, e.g. `24.0 -> 23.0`: buy only the new forecast bucket YES (`23°C YES`) and buy NO on exact/GTE values above the new forecast (`24°C NO`, `25°C NO`, etc.).
+- Forecast up, e.g. `24.0 -> 25.0`: buy only the new forecast bucket YES (`25°C YES`, or the matching top bucket if applicable) and buy NO on exact/bottom values below the new forecast.
+- Do not buy extra far-away YES outcomes just because the move direction weakly helps them.
+- Actual-cross trading is now allowed only when the same-day actual max crosses above the current same-day OCF forecast max.
+
+Updated exit rules:
+
+- Removed take-profit and 10-minute timeout exits from the scheduler path.
+- Positions are held until a later forecast change or same-day actual max update invalidates them.
+- Forecast invalidation exits: sell YES if the new forecast no longer matches that bucket; sell NO if the new forecast now matches that bucket.
+- Actual invalidation exits are same-date only; previous-day actual max values cannot invalidate future/current-day positions.
+
+Verification:
+
+- Added tests for forecast-down selection, forecast-up selection, forecast invalidation exits, same-date actual-cross gating, and ignoring previous-day actual transitions.
+- Full test suite: `PYTHONPATH=src python3 -m unittest discover -s tests` -> `Ran 57 tests ... OK`.
+
+## Orderbook Polling Cleanup - May 5, 2026
+
+Finding:
+
+- After a market date passed, stored outcomes for that date could still be polled by the scheduler.
+- Polymarket CLOB returned repeated `HTTP Error 404: Not Found` for those stale tokens.
+
+Implementation:
+
+- Default orderbook polling now fetches only outcomes with market target dates at or after the current HKT date.
+- Explicit date-specific orderbook fetches still work for debugging.
+
+Verification:
+
+- Added a storage test confirming past market outcomes are excluded from default active polling.
+- Full test suite: `PYTHONPATH=src python3 -m unittest discover -s tests` -> `Ran 58 tests ... OK`.
+
+## Forecast Value Entry Rule - May 5, 2026
+
+Rule:
+
+- HKO today/next-day max-temperature forecasts are treated as high-confidence anchors.
+- If the HKO forecast bucket is cheap (`YES` ask at or below `0.30`) and the market favorite is below the forecast bucket, buy the forecast bucket `YES`.
+- If the market favorite is above the forecast bucket and the forecast bucket is not the top bucket, skip the trade because the market may be pricing threshold risk just above the forecast integer.
+- If the forecast bucket is the top bucket and the favorite is below it, the cheap-top-bucket buy remains valid.
+
+Implementation:
+
+- Added a `forecast_value` entry path that runs even when the forecast value has not changed.
+- Scope is today and next-day markets only via `Settings.forecast_value_max_lead_days = 1`.
+- Cheap forecast bucket threshold is configurable via `Settings.forecast_value_max_yes_ask = 0.30`.
+- Existing duplicate-position and max-entry-price guards still apply.
+
+Verification:
+
+- Added tests for cheap forecast bucket with lower favorite, skip when favorite is above a non-top forecast bucket, and buy when the cheap forecast bucket is the top bucket.
+- Full test suite: `PYTHONPATH=src python3 -m unittest discover -s tests` -> `Ran 61 tests ... OK`.
+
+Logging update:
+
+- Forecast-value skip notes now include the target date, forecast bucket label, current YES ask, configured cheap threshold, favorite bucket, or lead-time reason.
+- Example: `forecast value skipped: 2026-05-06 27°C ask=0.460 > cheap_threshold=0.300`.
+- Example: `forecast value skipped: 2026-05-07 lead_days=2 > max=1`.
+- Full test suite after logging update: `PYTHONPATH=src python3 -m unittest discover -s tests` -> `Ran 63 tests ... OK`.
+
+Sizing update:
+
+- Forecast-value buys only consume ask depth at or below the configured cheap threshold (`0.30`).
+- Order size is capped by remaining position budget: buy up to `$250` total invested in that token, not `$250` on every dip.
+- Repeated dips below `0.30` can add to the same position until the `$250` budget is reached.
+- Forecast invalidation exits still sell the full open position when the HKO forecast turns against that bucket.
+- Full test suite after sizing update: `PYTHONPATH=src python3 -m unittest discover -s tests` -> `Ran 66 tests ... OK`.
+
+## Forecast-Change Repricing Guard - May 5, 2026
+
+Rule:
+
+- Forecast-change latency entries now require both:
+  - directional YES-ask movement with the event is `<= 0.20`, and
+  - executable entry ask for the token being bought is `<= 0.70`.
+- This is intended to avoid buying after the market has already repriced, e.g. `23°C YES` at `0.93` after a downside forecast update.
+- Actual-cross trades remain governed by the broader near-settlement guard and are not constrained by the forecast-change `0.70` cap.
+
+Implementation:
+
+- Added `Settings.forecast_change_max_price_move = 0.20`.
+- Added `Settings.forecast_change_max_entry_price = 0.70`.
+- Forecast-change candidate generation skips outcomes whose directional move exceeds `0.20`.
+- Forecast-change order execution only sweeps ask depth at or below `0.70`.
+
+Verification:
+
+- Added regression tests for:
+  - skipping a forecast-change trade after a `0.21` directional move,
+  - allowing a `0.20` directional move when entry is still below the cap,
+  - rejecting a near-repriced `23°C YES` at `0.93`.
+- Full test suite: `PYTHONPATH=src python3 -m unittest discover -s tests` -> `Ran 69 tests ... OK`.
+
+## D+0 Hourly Forecast Accuracy Collection - May 5, 2026
+
+Goal:
+
+- Start collecting same-day hourly forecast-vs-actual data so we can later measure HKO OCF `h+1`, `h+2`, etc. temperature error.
+
+Implementation:
+
+- Added the live current-weather endpoint:
+  `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=en`.
+- Parse the `temperature.data` row where `place == "Hong Kong Observatory"`.
+- Store those current-temperature readings in `hko_current_observations.temperature_c`, separate from since-midnight max/min rows.
+- `fetch-hko` now stores since-midnight max/min, OCF forecasts, and the current HKO temperature snapshot.
+- `paper-scheduler` now collects current HKO temperature as low-priority research data: at most hourly, only on otherwise idle ticks, and after the paper trading decision path has already run.
+- Added `research-hourly-accuracy`, which compares stored OCF hourly forecast rows to stored current-temperature observations by forecast target hour.
+- Lead-hour semantics use ceiling math: an OCF issue at `17:02` for the `18:00` forecast hour is treated as `h+1`.
+
+How to run:
+
+- Collect once: `PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 fetch-hko`
+- Report stored hourly accuracy: `PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 research-hourly-accuracy`
+- Export report: `PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 research-hourly-accuracy --output data/research/hko_hourly_accuracy.csv`
+
+Verification:
+
+- Added parser, storage, scheduler-cadence, and hourly matching tests.
+- Full test suite: `PYTHONPATH=src python3 -m unittest discover -s tests` -> `Ran 76 tests ... OK`.
+- Live smoke against HKO endpoints succeeded in `/private/tmp/whenitrains-hourly-smoke.sqlite3`; it stored a `Hong Kong Observatory` current temp and produced an initial `h+1` match from OCF hourly forecast to actual current temp.
+
+## SQLite DB Protection Plan - May 5, 2026
+
+Risk:
+
+- The live SQLite DB is under `data/`, which is intentionally gitignored.
+- Git cannot recover it if an agent deletes `data/whenitrains.sqlite3`.
+- Plain file copies can be inconsistent if SQLite is being written while copied.
+
+Implemented safeguards:
+
+- Added `backup-db`, which uses SQLite's online backup API and runs `pragma integrity_check` on the backup.
+- Default backup location: `data/backups/`.
+- Default retention: latest 5 backups. When a sixth backup is created, the oldest backup is deleted.
+- `paper-scheduler` creates a startup backup by default before entering the polling loop.
+- `reset-paper --yes` creates a backup before clearing paper state unless `--no-backup` is explicitly passed.
+- Added `AGENTS.md` with hard safety rules for future coding agents:
+  - do not delete `data/`, `data/backups/`, or SQLite DB files,
+  - do not run broad cleanup commands in this repo,
+  - use `/private/tmp/*.sqlite3` for destructive tests,
+  - create a DB backup before storage/migration/reset work.
+
+Commands:
+
+- Manual backup: `PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db`
+- Custom retention: `PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db --keep 5`
+- Disposable scheduler test without backup: `PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/test.sqlite3 paper-scheduler --ticks 1 --no-startup-backup`
+
+Verification:
+
+- Added a storage test that creates three backups, prunes to the latest two, and checks the backed-up DB still contains the expected rows.

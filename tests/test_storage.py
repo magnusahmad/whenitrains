@@ -2,14 +2,23 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from whenitrains.hko import HkoForecast, HkoObservation, HKT, OcfForecastSample
+from whenitrains.hko import (
+    HkoCurrentTemperature,
+    HkoForecast,
+    HkoObservation,
+    HKT,
+    OcfForecastSample,
+)
 from whenitrains.markets import parse_outcome_label
 from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
 from whenitrains.storage import (
+    backup_sqlite_database,
     connect,
     list_hko_update_times,
+    list_outcomes_from_date,
     migrate,
     record_hko_update_minute,
+    store_hko_current_temperature,
     store_hko_forecasts,
     store_hko_observation,
     store_ocf_forecast_samples,
@@ -22,6 +31,29 @@ from datetime import date, datetime
 
 
 class StorageTests(unittest.TestCase):
+    def test_backup_sqlite_database_creates_integrity_checked_copy_and_prunes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "live.sqlite3"
+            backup_dir = Path(tmp) / "backups"
+            db = connect(db_path)
+            migrate(db)
+            db.execute("insert into risk_events (created_at_utc, event_type, severity, details_json) values (?, ?, ?, ?)", ("now", "test", "info", "{}"))
+            db.commit()
+            db.close()
+
+            first = backup_sqlite_database(db_path, backup_dir=backup_dir, keep=2)
+            second = backup_sqlite_database(db_path, backup_dir=backup_dir, keep=2)
+            third = backup_sqlite_database(db_path, backup_dir=backup_dir, keep=2)
+
+            backups = sorted(backup_dir.glob("live-*.sqlite3"))
+            self.assertEqual(len(backups), 2)
+            self.assertNotIn(first, backups)
+            self.assertIn(second, backups)
+            self.assertIn(third, backups)
+            restored = connect(third)
+            count = restored.execute("select count(*) from risk_events").fetchone()[0]
+            self.assertEqual(count, 1)
+
     def test_store_raw_snapshot_keeps_every_fetch_with_headers(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
@@ -176,6 +208,34 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(row["raw_max_c"], 27.1)
             self.assertIn("2026-05-04T13:00:00+08:00", row["hourly_temperatures_json"])
 
+    def test_store_hko_current_temperature_uses_temperature_column(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            snapshot = store_raw_snapshot(db, "hko", "rhrread", "{}")
+
+            store_hko_current_temperature(
+                db,
+                snapshot.id,
+                HkoCurrentTemperature(
+                    observed_at_hkt=datetime(2026, 5, 5, 17, 2, tzinfo=HKT),
+                    station="Hong Kong Observatory",
+                    temperature_c=21.4,
+                    raw={"temperature_row": {"value": 21.4}},
+                ),
+            )
+
+            row = db.execute(
+                """
+                select observed_at_hkt, station, temperature_c, since_midnight_max_c
+                from hko_current_observations
+                """
+            ).fetchone()
+            self.assertEqual(row["observed_at_hkt"], "2026-05-05T17:02:00+08:00")
+            self.assertEqual(row["station"], "Hong Kong Observatory")
+            self.assertEqual(row["temperature_c"], 21.4)
+            self.assertIsNone(row["since_midnight_max_c"])
+
     def test_latest_orderbook_sorts_executable_prices(self):
         from whenitrains.storage import latest_orderbook
 
@@ -190,6 +250,38 @@ class StorageTests(unittest.TestCase):
             book = latest_orderbook(db, "yes")
             self.assertEqual(book.bids[0], (0.30, 5))
             self.assertEqual(book.asks[0], (0.40, 5))
+
+    def test_list_outcomes_from_date_excludes_past_markets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            for target_date, token in [
+                (date(2026, 5, 4), "past"),
+                (date(2026, 5, 5), "today"),
+                (date(2026, 5, 6), "future"),
+            ]:
+                store_polymarket_event(
+                    db,
+                    TemperatureMarket(
+                        event_id=f"event-{token}",
+                        event_slug=f"slug-{token}",
+                        title="Highest temperature",
+                        target_date=target_date,
+                        outcomes=[
+                            Outcome(
+                                market_id=f"m-{token}",
+                                label="25°C",
+                                predicate=parse_outcome_label("25°C"),
+                                yes_token_id=f"yes-{token}",
+                                no_token_id=f"no-{token}",
+                            )
+                        ],
+                    ),
+                )
+
+            rows = list_outcomes_from_date(db, "2026-05-05")
+
+            self.assertEqual([row["yes_token_id"] for row in rows], ["yes-today", "yes-future"])
 
 
 if __name__ == "__main__":

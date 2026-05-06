@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, time as day_time, timezone
 from pathlib import Path
 
-from .hko import HKT, HkoForecast, HkoObservation, OcfForecastSample
+from .hko import HKT, HkoCurrentTemperature, HkoForecast, HkoObservation, OcfForecastSample
 from .polymarket import OrderBook, TemperatureMarket
 
 
@@ -22,6 +22,53 @@ def connect(path: Path) -> sqlite3.Connection:
     db = sqlite3.connect(path)
     db.row_factory = sqlite3.Row
     return db
+
+
+def backup_sqlite_database(
+    db_path: Path,
+    backup_dir: Path | None = None,
+    keep: int | None = 5,
+) -> Path:
+    if not db_path.exists():
+        raise FileNotFoundError(f"database does not exist: {db_path}")
+    if backup_dir is None:
+        backup_dir = db_path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    backup_path = backup_dir / f"{db_path.stem}-{timestamp}.sqlite3"
+    source = sqlite3.connect(db_path)
+    try:
+        destination = sqlite3.connect(backup_path)
+        try:
+            source.backup(destination)
+        finally:
+            destination.close()
+    finally:
+        source.close()
+    _assert_sqlite_backup_ok(backup_path)
+    if keep is not None and keep > 0:
+        _prune_old_backups(backup_dir, db_path.stem, keep)
+    return backup_path
+
+
+def _assert_sqlite_backup_ok(backup_path: Path) -> None:
+    db = sqlite3.connect(backup_path)
+    try:
+        result = db.execute("pragma integrity_check").fetchone()
+    finally:
+        db.close()
+    if result is None or result[0] != "ok":
+        raise sqlite3.DatabaseError(f"backup integrity check failed: {backup_path}")
+
+
+def _prune_old_backups(backup_dir: Path, db_stem: str, keep: int) -> None:
+    backups = sorted(
+        backup_dir.glob(f"{db_stem}-*.sqlite3"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for stale in backups[keep:]:
+        stale.unlink()
 
 
 def migrate(db: sqlite3.Connection) -> None:
@@ -338,6 +385,29 @@ def store_hko_observation(
     db.commit()
 
 
+def store_hko_current_temperature(
+    db: sqlite3.Connection, snapshot_id: int, observation: HkoCurrentTemperature
+) -> None:
+    db.execute(
+        """
+        insert into hko_current_observations
+        (snapshot_id, observed_at_hkt, station, temperature_c,
+         since_midnight_min_c, since_midnight_max_c, raw_observation)
+        values (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            snapshot_id,
+            observation.observed_at_hkt.isoformat(),
+            observation.station,
+            observation.temperature_c,
+            None,
+            None,
+            json.dumps(observation.raw),
+        ),
+    )
+    db.commit()
+
+
 def store_hko_forecasts(
     db: sqlite3.Connection, snapshot_id: int, forecasts: list[HkoForecast]
 ) -> None:
@@ -559,6 +629,23 @@ def list_outcomes_for_date(db: sqlite3.Connection, target_date_hkt: str) -> list
     )
 
 
+def list_outcomes_from_date(db: sqlite3.Connection, min_date_hkt: str) -> list[sqlite3.Row]:
+    return list(
+        db.execute(
+            """
+            select o.id, o.market_id, o.polymarket_market_id, o.label,
+                   o.predicate_type, o.predicate_value_c, o.yes_token_id, o.no_token_id,
+                   m.target_date_hkt, m.slug
+            from outcomes o
+            join markets m on m.id = o.market_id
+            where m.target_date_hkt >= ?
+            order by m.target_date_hkt, o.predicate_value_c, o.label
+            """,
+            (min_date_hkt,),
+        )
+    )
+
+
 def list_hko_forecast_dates(
     db: sqlite3.Connection, min_date_hkt: str | None = None
 ) -> list[str]:
@@ -573,7 +660,7 @@ def list_hko_forecast_dates(
             f"""
             select distinct forecast_date_hkt
             from hko_forecasts
-            where source_type in ('ocf_station', 'flw_page')
+            where source_type = 'ocf_station'
               and forecast_date_hkt is not null
               and forecast_max_c is not null
               and coalesce(parse_warning, 0) = 0
@@ -603,6 +690,7 @@ def list_tradeable_forecast_dates(
             where m.target_date_hkt is not null
               and f.forecast_max_c is not null
               and coalesce(f.parse_warning, 0) = 0
+              and f.source_type = 'ocf_station'
               {date_filter}
             order by m.target_date_hkt
             """,
@@ -816,7 +904,7 @@ def latest_two_forecast_highs(
             f"""
             select forecast_date_hkt, forecast_max_c, update_time, parse_warning, max(id) as id
             from hko_forecasts
-            where source_type in ('ocf_station', 'flw_page')
+            where source_type = 'ocf_station'
               and forecast_max_c is not null
               and coalesce(parse_warning, 0) = 0
               {date_filter}
@@ -827,6 +915,24 @@ def latest_two_forecast_highs(
             params,
         )
     )
+
+
+def latest_forecast_high(
+    db: sqlite3.Connection, forecast_date_hkt: str
+) -> sqlite3.Row | None:
+    return db.execute(
+        """
+        select forecast_date_hkt, forecast_max_c, update_time, parse_warning, id
+        from hko_forecasts
+        where source_type = 'ocf_station'
+          and forecast_date_hkt = ?
+          and forecast_max_c is not null
+          and coalesce(parse_warning, 0) = 0
+        order by id desc
+        limit 1
+        """,
+        (forecast_date_hkt,),
+    ).fetchone()
 
 
 def latest_two_observed_maxes(db: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -842,6 +948,51 @@ def latest_two_observed_maxes(db: sqlite3.Connection) -> list[sqlite3.Row]:
             """
         )
     )
+
+
+def observed_max_increases(
+    db: sqlite3.Connection, target_date_hkt: str | None = None
+) -> list[tuple[sqlite3.Row, sqlite3.Row]]:
+    params: tuple[str, ...] = ()
+    date_filter = ""
+    if target_date_hkt is not None:
+        date_filter = "and substr(observed_at_hkt, 1, 10) = ?"
+        params = (target_date_hkt,)
+    rows = list(
+        db.execute(
+            f"""
+            select observed_at_hkt, since_midnight_max_c, max(id) as id
+            from hko_current_observations
+            where since_midnight_max_c is not null
+              {date_filter}
+            group by observed_at_hkt, since_midnight_max_c
+            order by id asc
+            """,
+            params,
+        )
+    )
+    transitions = []
+    for old, new in zip(rows, rows[1:]):
+        if float(new["since_midnight_max_c"]) > float(old["since_midnight_max_c"]):
+            transitions.append((old, new))
+    return transitions
+
+
+def latest_observed_max_for_date(
+    db: sqlite3.Connection, target_date_hkt: str
+) -> sqlite3.Row | None:
+    return db.execute(
+        """
+        select observed_at_hkt, since_midnight_max_c, max(id) as id
+        from hko_current_observations
+        where since_midnight_max_c is not null
+          and substr(observed_at_hkt, 1, 10) = ?
+        group by observed_at_hkt, since_midnight_max_c
+        order by id desc
+        limit 1
+        """,
+        (target_date_hkt,),
+    ).fetchone()
 
 
 def latest_two_orderbook_prices(
@@ -867,7 +1018,7 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
         """
         select forecast_date_hkt, forecast_max_c, update_time, parse_warning
         from hko_forecasts
-        where source_type in ('ocf_station', 'flw_page')
+        where source_type = 'ocf_station'
           and forecast_date_hkt = ?
         order by id desc
         limit 1

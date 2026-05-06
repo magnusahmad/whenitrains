@@ -47,6 +47,15 @@ class PaperDbTests(unittest.TestCase):
         self.assertAlmostEqual(entry.limit_price, 0.39)
         self.assertAlmostEqual(entry.estimated_avg_price, 0.385)
 
+    def test_calculate_entry_respects_max_price(self):
+        asks = [(0.30, 100), (0.31, 1000)]
+        entry = calculate_entry("yes", 250, asks, max_order_usd=250, max_price=0.30)
+
+        self.assertEqual(entry.status, "fillable")
+        self.assertAlmostEqual(entry.limit_price, 0.30)
+        self.assertAlmostEqual(entry.estimated_cost_usd, 30.0)
+        self.assertAlmostEqual(entry.estimated_shares, 100.0)
+
     def test_paper_buy_and_sell_persist_position_and_pnl(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

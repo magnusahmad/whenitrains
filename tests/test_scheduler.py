@@ -19,7 +19,7 @@ from whenitrains.storage import connect, migrate
 
 
 class SchedulerTests(unittest.TestCase):
-    def test_forecast_window_is_every_ten_minutes_for_ten_seconds(self):
+    def test_regular_forecast_window_is_every_ten_minutes_for_ten_seconds(self):
         before = datetime(2026, 5, 4, 0, 9, 59, tzinfo=HKT)
         start = datetime(2026, 5, 4, 0, 10, 0, tzinfo=HKT)
         end = datetime(2026, 5, 4, 0, 10, 10, tzinfo=HKT)
@@ -51,17 +51,17 @@ class SchedulerTests(unittest.TestCase):
             _due_sources(datetime(2026, 5, 4, 20, 8, 0, tzinfo=HKT)),
         )
 
-    def test_learned_forecast_minute_is_due_inside_that_minute(self):
+    def test_learned_forecast_minute_is_reused_every_hour_with_catchup(self):
         learned = [time(13, 12)]
-        before = datetime(2026, 5, 4, 13, 11, 59, tzinfo=HKT)
-        start = datetime(2026, 5, 4, 13, 12, 0, tzinfo=HKT)
-        end = datetime(2026, 5, 4, 13, 12, 59, tzinfo=HKT)
-        after = datetime(2026, 5, 4, 13, 13, 0, tzinfo=HKT)
+        before = datetime(2026, 5, 4, 15, 11, 59, tzinfo=HKT)
+        start = datetime(2026, 5, 4, 15, 12, 0, tzinfo=HKT)
+        catchup = datetime(2026, 5, 4, 15, 42, 0, tzinfo=HKT)
+        after = datetime(2026, 5, 4, 16, 2, 1, tzinfo=HKT)
 
         state = SchedulerState()
         self.assertNotIn("bulletin", {item.source for item in due_hko_sources(before, state, learned)})
         self.assertIn("bulletin", {item.source for item in due_hko_sources(start, state, learned)})
-        self.assertIn("bulletin", {item.source for item in due_hko_sources(end, state, learned)})
+        self.assertIn("bulletin", {item.source for item in due_hko_sources(catchup, state, learned)})
         self.assertNotIn("bulletin", {item.source for item in due_hko_sources(after, state, learned)})
 
     def test_content_change_marks_window_complete(self):
@@ -97,12 +97,29 @@ class SchedulerTests(unittest.TestCase):
         actions = scheduler_actions(now, state)
         self.assertTrue(actions.discover_market)
         self.assertTrue(actions.fetch_orderbooks)
+        self.assertFalse(actions.fetch_current_temperature)
 
         state.last_market_discovery_at = now
         state.last_orderbook_fetch_at = now
+        state.last_current_temperature_fetch_at = now
         actions = scheduler_actions(now + timedelta(seconds=10), state)
         self.assertFalse(actions.discover_market)
         self.assertFalse(actions.fetch_orderbooks)
+        self.assertFalse(actions.fetch_current_temperature)
+
+    def test_current_temperature_collection_is_idle_only(self):
+        now = datetime(2026, 5, 4, 12, 5, 0, tzinfo=HKT)
+        state = SchedulerState(
+            last_market_discovery_at=now,
+            last_orderbook_fetch_at=now,
+            last_current_temperature_fetch_at=now - timedelta(seconds=3600),
+        )
+
+        actions = scheduler_actions(now, state)
+
+        self.assertFalse(actions.discover_market)
+        self.assertFalse(actions.fetch_orderbooks)
+        self.assertTrue(actions.fetch_current_temperature)
 
     def test_quiet_scheduler_suppresses_orderbook_only_noop_tick(self):
         result = RunnerResult(notes=("forecast high unchanged", "observed max unchanged"))
@@ -138,6 +155,29 @@ class SchedulerTests(unittest.TestCase):
                     max_ticks=0,
                 )
             self.assertIn("paper-scheduler started", output.getvalue())
+
+    def test_scheduler_logs_fetch_error_and_keeps_running(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            output = StringIO()
+            now = datetime(2026, 5, 4, 10, 9, 0, tzinfo=HKT)
+            with redirect_stdout(output):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: (_ for _ in ()).throw(
+                        OSError("dns failed")
+                    ),
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=lambda target: None,
+                    max_ticks=1,
+                    now_fn=lambda: now,
+                )
+
+            text = output.getvalue()
+            self.assertIn("paper-scheduler started", text)
+            self.assertIn("since_midnight fetch failed: OSError: dns failed", text)
 
 
 def _due_sources(now):
