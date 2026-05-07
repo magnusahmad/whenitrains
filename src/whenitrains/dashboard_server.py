@@ -2801,8 +2801,64 @@ LIVE_HTML = (
         "whenitrains paper dashboard", "whenitrains live dashboard"
     )
     .replace(
-        "⚠ Paper Trading Mode — simulated fills only, no real orders sent",
-        "LIVE TRADING — real orders",
+        "</style>",
+        """
+  .live-banner {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 34px;
+    padding: 8px 16px;
+    overflow: hidden;
+    background:
+      linear-gradient(90deg, rgba(18, 185, 129, 0.16), transparent 28%, rgba(56, 189, 248, 0.12)),
+      #07110f;
+    color: #dffcf0;
+    border-bottom: 1px solid rgba(45, 212, 191, 0.7);
+    box-shadow: inset 0 -1px 0 rgba(20, 184, 166, 0.32), 0 1px 20px rgba(20, 184, 166, 0.14);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.7px;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .live-banner::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(110deg, transparent 0%, rgba(255,255,255,0.09) 42%, transparent 58%);
+    transform: translateX(-62%);
+    opacity: 0.65;
+    pointer-events: none;
+  }
+  .live-banner-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #34d399;
+    box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.12), 0 0 16px rgba(52, 211, 153, 0.75);
+    flex: 0 0 auto;
+  }
+  .live-banner-label {
+    color: #e8fff7;
+  }
+  .live-banner-detail {
+    color: #8ee9d2;
+    font-weight: 650;
+    letter-spacing: 0.35px;
+  }
+  @media (max-width: 560px) {
+    .live-banner-detail {
+      display: none;
+    }
+  }
+</style>""",
+    )
+    .replace(
+        '<div class="banner">⚠ Paper Trading Mode — simulated fills only, no real orders sent</div>',
+        '<div class="live-banner"><span class="live-banner-dot"></span><span class="live-banner-label">LIVE ORDERS</span><span class="live-banner-detail">Polymarket execution enabled</span></div>',
     )
     .replace(
         "whenitrains · HK temperature paper desk",

@@ -927,7 +927,11 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("<th>Time HKT</th>", INDEX_HTML)
 
     def test_live_html_reuses_paper_dashboard_with_live_endpoints(self):
-        self.assertIn("LIVE TRADING — real orders", LIVE_HTML)
+        self.assertIn('class="live-banner"', LIVE_HTML)
+        self.assertIn("LIVE ORDERS", LIVE_HTML)
+        self.assertIn("Polymarket execution enabled", LIVE_HTML)
+        self.assertIn("live-banner-dot", LIVE_HTML)
+        self.assertNotIn("Paper Trading Mode", LIVE_HTML)
         self.assertIn("whenitrains · HK temperature live desk", LIVE_HTML)
         self.assertIn('/api/live/trades?view=${encodeURIComponent(view)}', LIVE_HTML)
         self.assertIn('fetchJSON("/api/live/stats")', LIVE_HTML)
