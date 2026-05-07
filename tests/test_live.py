@@ -36,8 +36,8 @@ class FakeClobClient:
     def allowance_ok(self):
         return True
 
-    def buy_fak(self, token_id, price, size_usd):
-        self.buys.append((token_id, price, size_usd))
+    def buy_fak(self, token_id, price, shares):
+        self.buys.append((token_id, price, shares))
         return {"orderID": "buy-1", "status": "matched"}
 
     def sell_fak(self, token_id, price, shares):
@@ -139,7 +139,7 @@ class LiveTests(unittest.TestCase):
             )
 
             self.assertEqual(result.status, "filled")
-            self.assertEqual(client.buys, [("yes25", 0.40, 5.0)])
+            self.assertEqual(client.buys, [("yes25", 0.40, 12.5)])
             pos = get_live_position(db, "yes25")
             self.assertIsNotNone(pos)
             self.assertAlmostEqual(pos["net_shares"], 12.5)

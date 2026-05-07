@@ -74,7 +74,7 @@ class LiveClobClient(Protocol):
     def allowance_ok(self) -> bool:
         ...
 
-    def buy_fak(self, token_id: str, price: float, size_usd: float) -> dict:
+    def buy_fak(self, token_id: str, price: float, shares: float) -> dict:
         ...
 
     def sell_fak(self, token_id: str, price: float, shares: float) -> dict:
@@ -159,8 +159,8 @@ class PolymarketClobClient:
         except TypeError:
             return BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
 
-    def buy_fak(self, token_id: str, price: float, size_usd: float) -> dict:
-        return self._post_order(token_id, price, size_usd, "BUY")
+    def buy_fak(self, token_id: str, price: float, shares: float) -> dict:
+        return self._post_order(token_id, price, shares, "BUY")
 
     def sell_fak(self, token_id: str, price: float, shares: float) -> dict:
         return self._post_order(token_id, price, shares, "SELL")
@@ -184,21 +184,25 @@ class PolymarketClobClient:
 
     def _post_order(self, token_id: str, price: float, size: float, side: str) -> dict:
         try:
-            from py_clob_client.clob_types import MarketOrderArgs, OrderType
+            from py_clob_client.clob_types import OrderArgs, OrderType
             from py_clob_client.order_builder.constants import BUY, SELL
         except ImportError as exc:
             raise LiveTradingError("py-clob-client order types unavailable") from exc
-        args = MarketOrderArgs(
-            token_id=token_id,
-            amount=size,
-            side=BUY if side == "BUY" else SELL,
-            order_type=OrderType.FAK,
-        )
+        order_kwargs = {
+            "token_id": token_id,
+            "price": price,
+            "size": size,
+            "side": BUY if side == "BUY" else SELL,
+        }
+        try:
+            args = OrderArgs(**order_kwargs, order_type=OrderType.FAK)
+        except TypeError:
+            args = OrderArgs(**order_kwargs)
         options = self._order_options(token_id)
         try:
-            signed = self._client.create_market_order(args, options=options)
+            signed = self._client.create_order(args, options=options)
         except TypeError:
-            signed = self._client.create_market_order(args)
+            signed = self._client.create_order(args)
         return dict(self._client.post_order(signed, OrderType.FAK))
 
     def _order_options(self, token_id: str) -> SimpleNamespace:
@@ -456,7 +460,7 @@ def execute_live_buy(
 
     request = {"token_id": token_id, "price": quote.limit_price, "size_usd": quote.estimated_cost_usd, "order_type": "FAK"}
     try:
-        response = client.buy_fak(token_id, float(quote.limit_price), quote.estimated_cost_usd)
+        response = client.buy_fak(token_id, float(quote.limit_price), quote.estimated_shares)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
         store_risk_event(db, "live_order_submit_failed", "critical", {"token_id": token_id, "error": str(exc)})
