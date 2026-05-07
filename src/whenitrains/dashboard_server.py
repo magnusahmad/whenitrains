@@ -2858,7 +2858,7 @@ LIVE_HTML = (
     )
     .replace(
         '<div class="banner">⚠ Paper Trading Mode — simulated fills only, no real orders sent</div>',
-        '<div class="live-banner"><span class="live-banner-dot"></span><span class="live-banner-label">LIVE ORDERS</span><span class="live-banner-detail">Polymarket execution enabled</span></div>',
+        '<div class="live-banner"><span class="live-banner-dot"></span><span class="live-banner-label">LIVE ORDERS</span></div>',
     )
     .replace(
         "whenitrains · HK temperature paper desk",
