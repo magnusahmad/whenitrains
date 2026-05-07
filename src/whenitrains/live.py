@@ -736,8 +736,12 @@ def _fill_values(
         shares = default_shares
     if filled and size_usd is None:
         size_usd = default_size_usd
+    if filled and (size_usd is None or size_usd <= 0) and shares is not None and default_price is not None:
+        size_usd = shares * default_price
     if price is None:
         price = default_price
+    if filled and (price is None or price <= 0) and shares and size_usd:
+        price = size_usd / shares
     return price, float(size_usd or 0.0), float(shares or 0.0)
 
 

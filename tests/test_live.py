@@ -10,6 +10,7 @@ from whenitrains.live import (
     execute_live_buy,
     execute_live_sell,
     _floor_decimal,
+    _fill_values,
     load_live_config,
     preflight_live,
 )
@@ -211,6 +212,18 @@ class LiveTests(unittest.TestCase):
     def test_floor_decimal_avoids_float_rounding_up(self):
         self.assertEqual(_floor_decimal(5.009, "0.01"), 5.0)
         self.assertEqual(_floor_decimal(5.999, "0.01"), 5.99)
+
+    def test_fill_values_uses_default_cost_when_reconcile_omits_amount(self):
+        price, cost, shares = _fill_values(
+            {"status": "filled", "matched_size": "11.90476", "price": "0"},
+            0.42,
+            5.0,
+            11.90476,
+        )
+
+        self.assertAlmostEqual(price, 0.42, places=6)
+        self.assertAlmostEqual(cost, 5.0)
+        self.assertAlmostEqual(shares, 11.90476)
 
     def test_preflight_returns_failure_instead_of_raising_on_timeout(self):
         with tempfile.TemporaryDirectory() as tmp:
