@@ -46,7 +46,9 @@ OCF HKO station forecast feed:
 
 Page: `https://maps.weather.gov.hk/ocf/text_e.html?mode=0&station=HKO`
 
-Data feed: `https://maps.weather.gov.hk/ocf/dat/HKO.xml`
+Primary station forecast feed: `https://www.hko.gov.hk/wxinfo/awsgis/forecast/HKO.xml`
+
+Fallback station forecast feed: `https://maps.weather.gov.hk/ocf/dat/HKO.xml`
 
 Observed payload:
 
@@ -116,10 +118,10 @@ Ran 18 tests in 0.015s
 OK
 ```
 
-Current green run after adding the paper runner, dashboard, missed-decision logging, actual-cross entry handling, live scaffolding, and web UI updates:
+Current green run after adding the paper runner, dashboard, missed-decision logging, actual-cross entry handling, live scaffolding, AWS GIS actual priority, backtesting harnesses, scheduler logging fixes, and web UI updates:
 
 ```text
-Ran 100 tests in 0.708s
+Ran 151 tests in 0.690s
 OK
 ```
 
@@ -334,17 +336,22 @@ Paper-mode milestones 1-5 are complete as local building blocks, one-shot CLI co
 
 Scheduler defaults for the POC:
 
+- HKO AWS GIS actuals: `https://www.hko.gov.hk/wxinfo/awsgis/latestReadings_AWS1_v2.txt` is the priority D+0 actual source. Parse the `HKO` row and store decimal `TEMP`, `MAXTEMP`, and `MINTEMP` as current temperature, since-midnight max, and since-midnight min.
+- HKO AWS GIS actuals: poll every 5 minutes, plus 10-second cadence from 30 seconds before through 30 seconds after learned update minutes. Learned AWS update minutes are stored under `aws_gis_actual`.
+- AWS GIS failures: `rhrread` may be stored as an observation fallback under `rhrread_actual`, but the scheduler must still log `aws_actual fetch failed` and must not mark the AWS window complete.
 - HKO since-midnight max/min CSV: source updates extremely regularly every 10 minutes, typically near `:00`, `:09`, `:19`, `:29`, `:38`, `:48`, and `:58`; poll from 10:00 to 20:00 HKT only.
-- HKO since-midnight max/min CSV: for each expected publication time, poll from T-1m through T+2m every 10 seconds. If the content hash changes, perform one confirmation fetch, then stop polling that window.
-- HKO OCF station forecast feed: source is `https://maps.weather.gov.hk/ocf/dat/HKO.xml`, discovered from the OCF text page JavaScript. It returns JSON despite the `.xml` extension, with `DailyForecast` and `HourlyWeatherForecast`.
-- HKO OCF station forecast feed: stored payload `LastModified` changes are irregular but roughly hourly, with median observed gaps near 60 minutes and common gaps around 40, 60, and 80 minutes. The hourly forecast rows are a full 24-hour path republished with each OCF payload version.
-- HKO OCF station forecast feed: every fetch stores full response headers plus HTTP `Date`, HTTP `Last-Modified`, and `ETag`. Raw snapshots are no longer deduped by content hash because unchanged payloads can still provide useful response metadata.
-- HKO OCF station forecast feed: payload `LastModified` and HTTP `Last-Modified` are converted to HKT minute-of-day entries in `hko_source_update_minutes`. The scheduler includes those learned minutes as daily forecast poll windows while keeping the coarse 10-minute discovery probe.
+- HKO since-midnight max/min CSV: for each expected publication time, poll from T-1m through T+2m every 10 seconds as an observation/cross-check source. If the content hash changes, perform one confirmation fetch, then stop polling that window.
+- HKO AWS GIS station forecast feed: source is `https://www.hko.gov.hk/wxinfo/awsgis/forecast/HKO.xml`. It returns JSON despite the `.xml` extension, with `DailyForecast` and `HourlyWeatherForecast`.
+- HKO AWS GIS station forecast feed: hourly forecast rows carry decimal temperatures when available and cover the full available station horizon, not only D+0 or the next 24 hours. The runner uses hourly-path min/max first for every covered date, then daily decimal max/min if no hourly rows are available.
+- HKO OCF station forecast feed: `https://maps.weather.gov.hk/ocf/dat/HKO.xml` remains a same-shape fallback if AWS GIS forecast fetch or parse fails.
+- Station forecast feed: stored payload `LastModified` changes are irregular but roughly hourly, with median observed gaps near 60 minutes and common gaps around 40, 60, and 80 minutes. The hourly forecast rows are a full path republished with each payload version.
+- Station forecast feed: every fetch stores full response headers plus HTTP `Date`, HTTP `Last-Modified`, and `ETag`. Raw snapshots are no longer deduped by content hash because unchanged payloads can still provide useful response metadata.
+- Station forecast feed: payload `LastModified` and HTTP `Last-Modified` are converted to HKT minute-of-day entries in `hko_source_update_minutes`. The scheduler includes those learned minutes as daily forecast poll windows while keeping the coarse 10-minute discovery probe.
 - Polymarket/orderbooks: monitor target-day markets until the Hong Kong day ends.
 - Future-date forecast trading: market discovery now runs for every OCF forecast date at or after the current HKT date. Orderbook polling covers all discovered HK high-temperature outcomes. Forecast-change entries are evaluated per target date.
-- Current-day actual trading: since-midnight actual-cross entries, actual invalidation, and hold-to-maturity logic remain current-day only. Future-date positions can still exit by forecast invalidation or risk rule, but are not invalidated by today's actual max.
+- Current-day actual trading: AWS GIS actual-cross entries, actual invalidation, and hold-to-maturity logic remain current-day only. Future-date positions can still exit by forecast invalidation or risk rule, but are not invalidated by today's actual max.
 - Current scheduler implementation: `paper-scheduler` evaluates HKO source windows every loop, fetches HKO only when inside the agreed windows, refreshes all discovered HK high-temperature orderbooks on a separate 15-second cadence, discovers markets for all current/future OCF forecast dates on a 5-minute cadence, and runs the paper decision pass every loop.
-- Scheduler output is quiet by default: orderbook-only/no-op ticks are suppressed. It prints when HKO is fetched, a signal/trade/missed-trade occurs, or a non-noop decision is made.
+- Scheduler output is quiet by default: orderbook-only/no-op ticks are suppressed. It prints when HKO is fetched, a signal/trade/missed-trade occurs, a non-noop decision is made, or AWS actual fetch fails.
 - Use `paper-scheduler --verbose` to restore noisy output: every scheduler tick plus all orderbook bid/ask lines.
 - HKO source polling respects the in-window 10-second cadence; unchanged HKO payloads no longer print every scheduler tick.
 - Individual Polymarket CLOB orderbook fetch failures are logged as warnings and do not crash the scheduler.
@@ -380,8 +387,9 @@ Dashboard:
 
 - Terminal command `dashboard` prints the current paper summary backed by SQLite.
 - Browser command `dashboard-serve` starts the local web UI at `http://127.0.0.1:8765/`.
-- Paper route `/` shows D+0/D+1/D+2 forecast panels, OCF forecast highs, D+0 hourly forecast and actual readings, D+0 actual-minus-forecast error, since-midnight max, current HKO temperature, YES/NO token price series, filled trade markers, and paper PnL.
-- Paper UI controls include manual refresh, YES/NO token-side selector, auto-refresh every 15 seconds, legend toggles, delayed crosshair tooltips, and modifier-wheel/touch chart zoom.
+- Paper route `/` shows D+0/D+1/D+2 forecast panels, precise decimal bot signals, AWS GIS/OCF station forecast highs for covered horizons, D+0 AWS GIS actual readings, D+0 actual-minus-forecast hover values, since-midnight max/min, current HKO temperature, YES/NO token price series, visible signal bubbles, filled trade markers, and paper PnL.
+- Paper UI controls include manual refresh, YES/NO token-side selector, auto-refresh every 15 seconds, legend toggles, delayed crosshair tooltips, and modifier-wheel/touch chart zoom. Times render in HKT as `YYYY-MM-DD HH:MM:SS`, and chart x-axes are scoped to the selected HKT date starting at midnight.
+- Open positions, realized PnL, and unrealized PnL summary tiles are clickable and replace charts with the relevant paper trade/activity table. Realized PnL tables show close/sell events, while unrealized PnL uses current executable bids for open positions.
 - Paper API routes are `/api/stats`, `/api/forecast-panels?side=YES|NO`, `/api/pnl`, and legacy `/api/forecast-vs-actual`.
 - Live route `/live` shows live open positions, open exposure, realized PnL, live order counts by status, kill-switch settings, and recent live orders.
 - Live API route is `/api/live/stats`; it refreshes every 5 seconds and reads live tables/settings only.
@@ -392,7 +400,7 @@ Dashboard:
 Discovery:
 
 - The rendered OCF page is `https://maps.weather.gov.hk/ocf/text_e.html?mode=0&station=HKO`.
-- Its JavaScript fetches station data from `https://maps.weather.gov.hk/ocf/dat/HKO.xml`.
+- Its JavaScript fetches station data from `https://www.hko.gov.hk/wxinfo/awsgis/forecast/HKO.xml`, falling back to the older OCF URL if needed.
 - The station feed returned `LastModified: 20260504131147`, `StationCode: HKO`, `DailyForecast`, and `HourlyWeatherForecast` during the smoke test.
 - The daily max/min table display can be reproduced from `DailyForecast[].ForecastMaximumTemperature` and `ForecastMinimumTemperature`; for example, raw `27.1` becomes displayed high `27`.
 - The sampler stores raw decimal daily values and hourly table rows in `ocf_forecast_samples`, while `hko_forecasts` stores the displayed integer forecast high for display/audit.

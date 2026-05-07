@@ -2,8 +2,10 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from whenitrains.backtest import run_backtest_day
+from whenitrains.config import Settings
 from whenitrains.hko import HkoForecast, OcfForecastSample
 from whenitrains.markets import parse_outcome_label
 from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
@@ -43,16 +45,19 @@ class BacktestTests(unittest.TestCase):
             store_polymarket_event(db, market)
             _store_forecast(db, 28, "2026-05-04T00:00:00+08:00")
             _store_forecast(db, 29, "2026-05-04T01:00:00+08:00")
-            _store_orderbook_at(db, "yes29", "2026-05-03T16:50:00+00:00", 0.40)
-            _store_orderbook_at(db, "yes29", "2026-05-03T17:00:00+00:00", 0.405)
+            _store_orderbook_at(db, "yes29", "2026-05-03T16:50:00+00:00", 0.24)
+            _store_orderbook_at(db, "yes29", "2026-05-03T17:00:00+00:00", 0.245)
             db.close()
 
-            result = run_backtest_day(
-                source,
-                date(2026, 5, 4),
-                replay_db=replay,
-                tick_source="data",
-            )
+            with patch.object(
+                Settings, "ocf_forecast_freshness_max_age_minutes", 10_000_000
+            ):
+                result = run_backtest_day(
+                    source,
+                    date(2026, 5, 4),
+                    replay_db=replay,
+                    tick_source="data",
+                )
 
             filled = [order for order in result.orders if order.status == "filled"]
             self.assertEqual(len(filled), 1)

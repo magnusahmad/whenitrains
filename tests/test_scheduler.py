@@ -43,53 +43,41 @@ class SchedulerTests(unittest.TestCase):
         self.assertIn("aws_actual", _due_sources(end))
         self.assertNotIn("aws_actual", _due_sources(after))
 
-    def test_learned_aws_actual_time_gets_thirty_second_poll_window(self):
-        learned = [time(14, 30)]
+    def test_learned_aws_actual_fetchable_time_gets_two_minute_poll_window(self):
+        learned = [time(14, 36)]
         state = SchedulerState()
 
         self.assertNotIn(
-            "aws_actual",
-            {
-                item.source
-                for item in due_hko_sources(
-                    datetime(2026, 5, 4, 14, 29, 29, tzinfo=HKT),
-                    state,
-                    learned_actual_times=learned,
-                )
-            },
+            time(14, 36),
+            _due_aws_schedules(
+                    datetime(2026, 5, 4, 14, 33, 59, tzinfo=HKT),
+                state,
+                learned,
+            ),
         )
         self.assertIn(
-            "aws_actual",
-            {
-                item.source
-                for item in due_hko_sources(
-                    datetime(2026, 5, 4, 14, 29, 30, tzinfo=HKT),
-                    state,
-                    learned_actual_times=learned,
-                )
-            },
+            time(14, 36),
+            _due_aws_schedules(
+                    datetime(2026, 5, 4, 14, 34, 0, tzinfo=HKT),
+                state,
+                learned,
+            ),
         )
         self.assertIn(
-            "aws_actual",
-            {
-                item.source
-                for item in due_hko_sources(
-                    datetime(2026, 5, 4, 14, 30, 30, tzinfo=HKT),
-                    state,
-                    learned_actual_times=learned,
-                )
-            },
+            time(14, 36),
+            _due_aws_schedules(
+                    datetime(2026, 5, 4, 14, 38, 0, tzinfo=HKT),
+                state,
+                learned,
+            ),
         )
         self.assertNotIn(
-            "aws_actual",
-            {
-                item.source
-                for item in due_hko_sources(
-                    datetime(2026, 5, 4, 14, 30, 31, tzinfo=HKT),
-                    state,
-                    learned_actual_times=learned,
-                )
-            },
+            time(14, 36),
+            _due_aws_schedules(
+                    datetime(2026, 5, 4, 14, 38, 1, tzinfo=HKT),
+                state,
+                learned,
+            ),
         )
 
     def test_since_midnight_window_is_one_minute_before_to_two_minutes_after(self):
@@ -329,6 +317,14 @@ class SchedulerTests(unittest.TestCase):
 
 def _due_sources(now):
     return {item.source for item in due_hko_sources(now, SchedulerState())}
+
+
+def _due_aws_schedules(now, state, learned_actuals):
+    return {
+        item.scheduled_at.time()
+        for item in due_hko_sources(now, state, learned_actual_times=learned_actuals)
+        if item.source == "aws_actual"
+    }
 
 
 if __name__ == "__main__":

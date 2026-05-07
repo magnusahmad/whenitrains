@@ -22,6 +22,7 @@ FLW_PAGE_URL = "https://www.weather.gov.hk/en/wxinfo/currwx/flw.htm"
 FLW_PAGE_DATA_URL = "https://www.weather.gov.hk/json/DYN_DAT_MINDS_FLW.json"
 OCF_STATION_URL = "https://maps.weather.gov.hk/ocf/dat/HKO.xml"
 OCF_TEXT_URL = "https://maps.weather.gov.hk/ocf/text_e.html?mode=0&station=HKO"
+AWS_GIS_FORECAST_URL = "https://www.hko.gov.hk/wxinfo/awsgis/forecast/HKO.xml"
 AWS_GIS_READINGS_URL = "https://www.hko.gov.hk/wxinfo/awsgis/latestReadings_AWS1_v2.txt"
 RHRREAD_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=en"
 

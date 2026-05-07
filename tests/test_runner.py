@@ -1054,7 +1054,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(decision["label"], "29°C")
             self.assertEqual(decision["side"], "YES")
 
-    def test_d0_forecast_value_uses_aws_actual_instead_of_ocf(self):
+    def test_forecast_value_does_not_use_aws_actual_as_forecast(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
                 Path(tmp) / "test.db",
@@ -1080,7 +1080,42 @@ class RunnerTests(unittest.TestCase):
                 """
             ).fetchone()
             self.assertEqual(decision["event_type"], "forecast_value")
-            self.assertEqual(decision["label"], "29°C")
+            self.assertEqual(decision["label"], "30°C")
+
+    def test_forecast_value_skips_stale_ocf_sample(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m30",
+                        label="30°C",
+                        predicate=parse_outcome_label("30°C"),
+                        yes_token_id="yes30",
+                        no_token_id="no30",
+                    ),
+                    Outcome(
+                        market_id="m29",
+                        label="29°C",
+                        predicate=parse_outcome_label("29°C"),
+                        yes_token_id="yes29",
+                        no_token_id="no29",
+                    ),
+                ],
+            )
+            _store_forecast(db, 30, "2026-05-05T09:11:53+08:00")
+            stale_at = (datetime.now(timezone.utc) - timedelta(minutes=91)).isoformat()
+            db.execute("update ocf_forecast_samples set fetched_at_utc = ?", (stale_at,))
+            db.commit()
+            _store_book_pair(db, "yes30", old_ask=0.20, new_ask=0.20)
+            _store_book_pair(db, "yes29", old_ask=0.60, new_ask=0.60)
+
+            result = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertTrue(any("OCF forecast sample stale" in note for note in result.notes))
 
     def test_low_forecast_value_buys_cheap_bucket_when_favorite_is_higher(self):
         with tempfile.TemporaryDirectory() as tmp:

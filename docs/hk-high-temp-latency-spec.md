@@ -53,11 +53,13 @@ Parser examples:
 
 Use direct HKO sources that publish quickly enough for latency trading.
 
-- Since-midnight max/min actuals for the Hong Kong Observatory automatic weather station, updated every 10 minutes: `https://data.weather.gov.hk/weatherAPI/hko_data/csdi/dataset/latest_since_midnight_maxmin_csdi_4.csv`
+- AWS GIS automatic weather station latest readings for the Hong Kong Observatory station, updated around every 5 minutes: `https://www.hko.gov.hk/wxinfo/awsgis/latestReadings_AWS1_v2.txt`
+- Since-midnight max/min actuals for the Hong Kong Observatory automatic weather station, updated every 10 minutes and retained for observation/cross-checking: `https://data.weather.gov.hk/weatherAPI/hko_data/csdi/dataset/latest_since_midnight_maxmin_csdi_4.csv`
+- AWS GIS HKO station forecast feed: `https://www.hko.gov.hk/wxinfo/awsgis/forecast/HKO.xml`
 - OCF HKO station forecast page: `https://maps.weather.gov.hk/ocf/text_e.html?mode=0&station=HKO`
-- OCF HKO station forecast data feed discovered behind that page: `https://maps.weather.gov.hk/ocf/dat/HKO.xml`
+- OCF HKO station forecast data feed discovered behind that page and retained as forecast fallback: `https://maps.weather.gov.hk/ocf/dat/HKO.xml`
 - Local weather forecast bulletin webpage, retained as an old fallback/parser fixture only: `https://www.weather.gov.hk/en/wxinfo/currwx/flw.htm`
-- Current weather report: `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=en`
+- Current weather report, retained as observation/fallback evidence only: `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=en`
 - Warning summary: `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=warnsum&lang=en`
 - Warning details: `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=warningInfo&lang=en`
 - Special weather tips: `https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=swt&lang=en`
@@ -65,8 +67,10 @@ Use direct HKO sources that publish quickly enough for latency trading.
 
 Parsing rules:
 
-- Since-midnight actuals: use the Hong Kong Observatory automatic weather station row. This is the station that resolves the target markets.
-- OCF station forecast: fetch the HKO station feed and parse `DailyForecast[].ForecastDate`, `ForecastMaximumTemperature`, `ForecastMinimumTemperature`, and `HourlyWeatherForecast[]`. The visual page labels this as `Max & Min Temperature Forecast (°C)` and `Temperature Forecast (°C)`. Store the displayed integer max from the max/min table, reproduced from `ForecastMaximumTemperature` using nearest-integer display rounding, but keep the raw decimal daily max and decimal hourly path in sampler/audit storage. Trading decisions use a decimal effective max: latest hourly-path max first, raw decimal daily max second. Rounded/display max is not a trading authority.
+- AWS GIS actuals: use the `HKO` row from `latestReadings_AWS1_v2.txt`. Store `TEMP` as decimal current temperature, `MAXTEMP` as decimal since-midnight max, and `MINTEMP` as decimal since-midnight min. For actual-cross trading, actual invalidation, and dashboard current actuals, AWS GIS latest readings are the source of truth when present.
+- CSDI and `rhrread`: keep ingesting these feeds for observation and latency comparison only. Do not treat a new CSDI or `rhrread` value between AWS GIS updates as a trading signal while AWS GIS is the configured D+0 source of truth; it may be stale relative to AWS GIS.
+- AWS GIS station forecast: fetch `forecast/HKO.xml` first and parse `DailyForecast[].ForecastDate`, `ForecastMaximumTemperature`, `ForecastMinimumTemperature`, and `HourlyWeatherForecast[]`. Despite the `.xml` suffix it is JSON. It carries decimal hourly forecast temperatures and can carry decimal daily max/min values. Trading decisions use the full available decimal hourly path first for each covered date, then daily decimal max/min if hourly rows are unavailable. Rounded/display max is not a trading authority.
+- OCF station forecast fallback: if the AWS GIS station forecast fetch or parse fails, fall back to `https://maps.weather.gov.hk/ocf/dat/HKO.xml`, which has the same station forecast shape. Store both feeds through the same normalized forecast/sample tables so the runner and dashboard consume one station-forecast model.
 - The Open Data API `flw` and `fnd` feeds are removed as trading inputs for this POC because historical evidence shows they can lag the actual bulletin/webpage update or have unclear update timing.
 - The old local weather forecast bulletin and 9-day forecast are removed from the trading signal path for this POC.
 - The OCF station feed provides multiple days, but the current paper latency strategy still focuses on the current-day HK highest-temperature market first.
@@ -133,15 +137,27 @@ HKO webhooks are preferred if a reliable official event feed exists, but assume 
 
 Polling strategy:
 
+- HKO AWS GIS actuals:
+  - source is `latestReadings_AWS1_v2.txt`; parse only the `HKO` station row for the trading signal
+  - baseline poll cadence is every 5 minutes, matching the observed feed cadence
+  - learned update minutes are stored as `aws_gis_actual` in `hko_source_update_minutes`
+  - near learned AWS update minutes, poll every 10 seconds from 30 seconds before through 30 seconds after the learned minute
+  - every newly observed AWS payload timestamp should be logged as an actual update time
+  - if AWS GIS fetch or parsing fails, the scheduler may store an `rhrread` fallback row for observation under `rhrread_actual`, but it must still log `aws_actual fetch failed` and must not mark the AWS polling window complete
 - HKO since-midnight max/min CSV:
   - source updates extremely regularly every 10 minutes, typically near `:00`, `:09`, `:19`, `:29`, `:38`, `:48`, and `:58`
-  - poll only during the Hong Kong weather day from 10:00 to 20:00 HKT
+  - poll only during the Hong Kong weather day from 10:00 to 20:00 HKT as an observation/cross-check source
   - polling window: from 1 minute before each expected publication time through 2 minutes after it
   - cadence inside the window: every 10 seconds
   - if content hash changes, perform one confirmation fetch, then stop polling that window
   - if no change by the end of the window, log a warning and wait for the next expected publication time
   - outside 10:00-20:00 HKT: do not poll
-- HKO OCF station forecast feed:
+- HKO AWS GIS station forecast feed:
+  - source is `https://www.hko.gov.hk/wxinfo/awsgis/forecast/HKO.xml`
+  - despite the `.xml` extension, it returns JSON with `DailyForecast` and `HourlyWeatherForecast`
+  - the hourly forecast rows cover the full available station forecast horizon, not only D+0 or the next 24 hours
+  - the scheduler fetches this feed before the OCF station fallback URL
+- HKO OCF station forecast fallback:
   - observed payload `LastModified` cadence is irregular but roughly hourly; recent stored gaps have a median near 60 minutes, with common gaps around 40, 60, and 80 minutes
   - the hourly forecast table is a 24-hour path republished with each OCF payload version, not a source fetched only once per forecast hour
   - current scheduler cadence: poll learned OCF update windows plus a coarse discovery probe so newly observed update minutes can be learned
@@ -150,12 +166,12 @@ Polling strategy:
 - Polymarket markets/orderbooks: monitor active target-day markets until the Hong Kong day ends.
 - Future market discovery: after OCF forecast ingestion, discover HK highest-temperature markets for every OCF forecast date at or after the current HKT date. Fetch orderbooks for all discovered active HK high-temperature outcomes.
 - Forecast-change trading can operate on future target-date markets when the OCF forecast high for that date changes and the corresponding market price is stale.
-- Since-midnight actual-cross trading remains current-day only. Actual-temperature invalidation and hold-to-maturity checks must only apply to positions whose market target date equals the current HKT date.
+- AWS GIS actual-cross trading remains current-day only. Actual-temperature invalidation and hold-to-maturity checks must only apply to positions whose market target date equals the current HKT date.
 - Resolution watcher: after the target day ends, check Polymarket once per day for final resolution.
 - Final Daily Extract: since resolution uses finalized data only, final settlement audit is separate from since-midnight trading signals.
 - Resolution-rule guard: every discovered HK highest-temperature event must include the expected HKO Daily Extract resolution wording. The first sentence date may vary, but the remainder must match the expected `Absolute Daily Max (deg. C)`, finalized Daily Extract, one-decimal precision, and no-post-finalization-revisions language. If the normalized text is missing or changed, print a critical terminal warning and persist a `risk_events` row before any trading decisions rely on that market.
 
-Every HKO snapshot should produce a content hash. If the hash changes, the event bus emits `HKO_UPDATE_DETECTED`. OCF forecast event-time precedence is payload `LastModified`, then HTTP `Last-Modified`, then local fetch time.
+Every HKO snapshot should produce a content hash. If the hash changes, the event bus emits `HKO_UPDATE_DETECTED`. OCF forecast event-time precedence is payload `LastModified`, then HTTP `Last-Modified`, then local fetch time. AWS GIS actual event-time precedence is the payload header `Latest readings recorded at ... Hong Kong Time`, then local fetch time.
 
 Rate-limit and failure backoff:
 
@@ -219,6 +235,8 @@ Core tables:
   - `humidity_pct`
   - `rainfall_mm`
   - `raw_observation`
+
+  `station='HKO'` identifies AWS GIS rows. `station='HK Observatory'` identifies CSDI since-midnight rows. `station='Hong Kong Observatory'` identifies `rhrread` current-weather rows. Dashboard and runner logic must not infer source type from numeric shape alone; use station/source evidence and update-minute labels.
 
 - `hko_daily_actuals`
   - `date_hkt`
@@ -400,6 +418,13 @@ Tick sources:
 - `--include-orderbook-ticks`: include orderbook snapshot timestamps for data-driven replays.
 - `--max-ticks`: cap replay length for smoke tests.
 - `--json`: emit machine-readable output for analysis.
+
+Experimental backtesting:
+
+- `experiment-backtest-day YYYY-MM-DD` runs an isolated strategy harness against the same historical source rows.
+- Experimental strategies write only to `experiment_runs`, `experiment_decisions`, `experiment_orders`, `experiment_positions`, and `experiment_metrics` in the replay DB.
+- The experimental harness must not mutate `paper_orders`, `paper_positions`, `paper_decisions`, or `signals`.
+- Use this path for future policy variants and PnL comparisons before moving logic into the production paper scheduler.
 
 ## 9. Trade Candidate And Repricing Logic
 
@@ -761,14 +786,19 @@ Paper web dashboard:
 - APIs: `/api/stats`, `/api/forecast-panels?side=YES|NO`, `/api/pnl`, and legacy `/api/forecast-vs-actual`.
 - Auto-refreshes every 15 seconds.
 - Shows D+0, D+1, and D+2 forecast panels.
-- D+0 includes raw OCF forecast high, hourly forecast, hourly actual temperature, hourly actual-minus-forecast error, since-midnight max, and current HKO temperature.
+- All dashboard times are HKT and should render as `YYYY-MM-DD HH:MM:SS`.
+- Forecast-panel x-axes are scoped to the selected HKT date and start at local midnight. They must not drift across midnight into prior-day ticks.
+- D+0 shows the precise decimal bot signal used for trading, not rounded display values. It includes the active forecast/actual signal, hourly forecast where relevant, hourly actual temperature, hourly actual-minus-forecast hover values, since-midnight max/min, and current HKO temperature.
 - D+1/D+2 show OCF forecast high and selected Polymarket token price series.
 - Token-side selector switches between YES and NO token charts.
 - Price series include trade markers for filled paper buys and sells.
+- Bot signal updates are rendered as always-visible bubbles so update times are visible and hoverable. Hover text includes the signal type, decimal value, HKT timestamp, and nearby buy/sell details.
 - Legend items can be toggled on/off.
-- Tooltips are delayed to reduce accidental hover noise and include nearby trade details.
+- Tooltips are delayed to reduce accidental hover noise and include nearby trade details, relevant signal value, and signal timestamp.
 - Modifier-wheel zoom and touch/pinch chart scaling are supported.
 - Paper PnL chart replays filled paper orders against later executable bids to show realized, unrealized, and total estimates.
+- Open positions, realized PnL, and unrealized PnL summary tiles are clickable. Clicking a tile replaces the chart area with the relevant table of paper buys/sells/positions so trading activity can be copied and audited quickly.
+- Realized PnL tables show realized sell/close events, not buy events. Unrealized PnL uses current executable bids for still-open positions; realized PnL is proceeds minus average entry cost and should not change unless a closing trade or correction changes the realized ledger.
 
 Live web dashboard:
 
@@ -791,7 +821,7 @@ Live web dashboard:
 ### Milestone 2: HKO Ingestion
 
 - Fetch and store raw HKO forecast/current/warning snapshots.
-- Normalize OCF station forecast rows.
+- Normalize AWS GIS/OCF station forecast rows.
 - Normalize current observations.
 - Load daily max actuals for the HKO station.
 - Detect HKO update changes by content hash.
@@ -838,7 +868,7 @@ Live web dashboard:
 ## 17. Open Questions
 
 - HKO since-midnight max/min endpoint is confirmed: `https://data.weather.gov.hk/weatherAPI/hko_data/csdi/dataset/latest_since_midnight_maxmin_csdi_4.csv`.
-- HKO OCF station feed is confirmed as the current forecast source: `https://maps.weather.gov.hk/ocf/dat/HKO.xml`; parse displayed max/min forecast rows from `DailyForecast` and retain raw hourly forecast rows from `HourlyWeatherForecast`.
+- HKO AWS GIS station forecast feed is confirmed as the primary forecast source: `https://www.hko.gov.hk/wxinfo/awsgis/forecast/HKO.xml`; parse displayed max/min forecast rows from `DailyForecast` and retain raw hourly forecast rows from `HourlyWeatherForecast`. The older OCF URL `https://maps.weather.gov.hk/ocf/dat/HKO.xml` remains a same-shape fallback.
 - Polymarket market semantics are confirmed from sampled May 4 and May 5, 2026 HK highest-temperature markets: final HKO Daily Extract `Absolute Daily Max (deg. C)`, one-decimal precision, no rounding for integer buckets, finalized data only, and no later revisions considered.
 - Paper-mode daily drawdown is intentionally set to USD 4,000 / 80% for stress testing. Live-mode drawdown needs a safer value before enablement.
 - Wallet plan for live mode: use a dedicated bot hot key and Polymarket proxy wallet funded only with the current live risk budget plus a small operational buffer. Real-auth smoke must confirm the account-specific signature type and funder value before any real order.

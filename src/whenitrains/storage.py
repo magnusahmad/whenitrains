@@ -283,6 +283,73 @@ def migrate(db: sqlite3.Connection) -> None:
             evidence_json text,
             unique(source, update_minute_hkt)
         );
+
+        create table if not exists experiment_runs (
+            id integer primary key autoincrement,
+            name text not null,
+            strategy text not null,
+            config_json text not null,
+            source_db text,
+            target_start_hkt text,
+            target_end_hkt text,
+            created_at_utc text not null
+        );
+
+        create table if not exists experiment_decisions (
+            id integer primary key autoincrement,
+            run_id integer not null,
+            created_at_utc text not null,
+            event_key text not null,
+            target_date_hkt text,
+            outcome_id text,
+            label text,
+            side text,
+            action text,
+            status text,
+            reason text,
+            details_json text,
+            unique(run_id, event_key)
+        );
+
+        create table if not exists experiment_orders (
+            id integer primary key autoincrement,
+            run_id integer not null,
+            created_at_utc text not null,
+            decision_id integer,
+            outcome_id text,
+            label text,
+            side text,
+            action text,
+            status text,
+            limit_price real,
+            requested_size_usd real,
+            fill_price real,
+            fill_size_usd real,
+            fill_shares real,
+            reason text,
+            details_json text
+        );
+
+        create table if not exists experiment_positions (
+            run_id integer not null,
+            outcome_id text not null,
+            label text,
+            side text,
+            net_shares real not null,
+            avg_price real not null,
+            realized_pnl real not null,
+            updated_at_utc text not null,
+            primary key(run_id, outcome_id)
+        );
+
+        create table if not exists experiment_metrics (
+            id integer primary key autoincrement,
+            run_id integer not null,
+            name text not null,
+            value real,
+            details_json text,
+            created_at_utc text not null
+        );
         """
     )
     _add_column_if_missing(db, "raw_snapshots", "response_headers_json", "text")

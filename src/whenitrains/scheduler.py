@@ -12,6 +12,7 @@ from .runner import run_paper_tick
 
 SINCE_MIDNIGHT_MINUTES = (0, 9, 19, 29, 38, 48, 58)
 AWS_ACTUAL_POLL_MINUTES = tuple(range(0, 60, 5))
+AWS_ACTUAL_FETCHABLE_BUFFER_SECONDS = 120
 FORECAST_POLL_MINUTES = tuple(range(0, 60, 10))
 FORECAST_CATCHUP_MINUTES = 50
 
@@ -178,14 +179,6 @@ def run_scheduled_paper_loop(
                 state, plans["bulletin"], payload, now
             ):
                 notes.append("forecast changed")
-        if actions.discover_market:
-            if _try_run_action("market discovery", lambda: discover_market(now.date()), notes):
-                mark_market_discovered(state, now)
-                notes.append("discovered market")
-        if actions.fetch_orderbooks:
-            if _try_run_action("orderbooks", lambda: fetch_orderbooks(now.date()), notes):
-                mark_orderbooks_fetched(state, now)
-                notes.append("fetched orderbooks")
         if actions.fetch_current_temperature and fetch_current_temperature is not None:
             temp_notes: list[str] = []
             payload = _try_fetch_source("aws_actual", fetch_current_temperature, temp_notes)
@@ -198,6 +191,14 @@ def run_scheduled_paper_loop(
                 print("; ".join(temp_notes))
             else:
                 notes.extend(temp_notes)
+        if actions.discover_market:
+            if _try_run_action("market discovery", lambda: discover_market(now.date()), notes):
+                mark_market_discovered(state, now)
+                notes.append("discovered market")
+        if actions.fetch_orderbooks:
+            if _try_run_action("orderbooks", lambda: fetch_orderbooks(now.date()), notes):
+                mark_orderbooks_fetched(state, now)
+                notes.append("fetched orderbooks")
         tick_fn = run_tick_fn or run_paper_tick
         result = tick_fn(db, today_hkt=now.date())
         if should_print_scheduled_tick(notes, result, quiet):
@@ -270,10 +271,8 @@ def _aws_actual_plans(
         for hour in range(24)
         for minute in AWS_ACTUAL_POLL_MINUTES
     }
-    scheduled_times.update(learned_actual_times)
     for scheduled_time in sorted(scheduled_times):
         scheduled = datetime.combine(target, scheduled_time, tzinfo=HKT)
-        learned = scheduled_time in learned_actual_times
         plans.append(
             SourcePollPlan(
                 source="aws_actual",
@@ -283,6 +282,24 @@ def _aws_actual_plans(
                 ),
                 window_end=min(
                     scheduled + timedelta(seconds=30), day_end
+                ),
+                cadence_seconds=10,
+            )
+        )
+    learned_publish_times = set(learned_actual_times) - scheduled_times
+    for scheduled_time in sorted(learned_publish_times):
+        scheduled = datetime.combine(target, scheduled_time, tzinfo=HKT)
+        plans.append(
+            SourcePollPlan(
+                source="aws_actual",
+                scheduled_at=scheduled,
+                window_start=max(
+                    scheduled - timedelta(seconds=AWS_ACTUAL_FETCHABLE_BUFFER_SECONDS),
+                    day_start,
+                ),
+                window_end=min(
+                    scheduled + timedelta(seconds=AWS_ACTUAL_FETCHABLE_BUFFER_SECONDS),
+                    day_end,
                 ),
                 cadence_seconds=10,
             )

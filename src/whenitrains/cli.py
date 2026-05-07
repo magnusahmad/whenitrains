@@ -8,8 +8,15 @@ from pathlib import Path
 
 from .backtest import dumps_result_json, render_backtest_result, run_backtest_day
 from .config import Settings
+from .experiments.backtest import (
+    dumps_experiment_result_json,
+    render_experiment_result,
+    run_experiment_backtest_day,
+)
+from .experiments.config import ExperimentConfig
 from .forecast_accuracy import build_forecast_accuracy_report, render_accuracy_report
 from .hko import (
+    AWS_GIS_FORECAST_URL,
     AWS_GIS_READINGS_URL,
     FLW_PAGE_DATA_URL,
     FLW_PAGE_URL,
@@ -146,6 +153,19 @@ def main(argv: list[str] | None = None) -> int:
     backtest.add_argument("--include-orderbook-ticks", action="store_true")
     backtest.add_argument("--max-ticks", type=int)
     backtest.add_argument("--json", action="store_true")
+    experiment_backtest = sub.add_parser("experiment-backtest-day")
+    experiment_backtest.add_argument("date")
+    experiment_backtest.add_argument("--config")
+    experiment_backtest.add_argument("--replay-db")
+    experiment_backtest.add_argument(
+        "--tick-source",
+        choices=["scheduler", "data", "both"],
+        default="data",
+        help="scheduler uses historical paper decision timestamps; data uses stored data fetch timestamps",
+    )
+    experiment_backtest.add_argument("--include-orderbook-ticks", action="store_true")
+    experiment_backtest.add_argument("--max-ticks", type=int)
+    experiment_backtest.add_argument("--json", action="store_true")
     live_store_key = sub.add_parser("live-store-hot-key")
     live_store_key.add_argument("--service", default=Settings.live_keychain_service)
     live_store_key.add_argument("--account", default=Settings.live_keychain_account)
@@ -353,6 +373,26 @@ def main(argv: list[str] | None = None) -> int:
             max_ticks=args.max_ticks,
         )
         print(dumps_result_json(result) if args.json else render_backtest_result(result))
+        return 0
+    if args.command == "experiment-backtest-day":
+        db.close()
+        target = date.fromisoformat(args.date)
+        config = ExperimentConfig.from_path(Path(args.config) if args.config else None)
+        replay_db = Path(args.replay_db) if args.replay_db else None
+        result = run_experiment_backtest_day(
+            db_path,
+            target,
+            config,
+            replay_db=replay_db,
+            tick_source=args.tick_source,
+            include_orderbook_ticks=args.include_orderbook_ticks,
+            max_ticks=args.max_ticks,
+        )
+        print(
+            dumps_experiment_result_json(result)
+            if args.json
+            else render_experiment_result(result)
+        )
         return 0
     if args.command == "live-store-hot-key":
         private_key = getpass.getpass("Polymarket bot private key: ")
@@ -737,16 +777,51 @@ def _fetch_current_temperature(db) -> str:
     try:
         response = fetch_response(AWS_GIS_READINGS_URL)
         observation = parse_aws_gis_current_temperature(response.text)
-    except Exception:
-        response = fetch_response(RHRREAD_URL)
-        observation = parse_rhrread_temperature_json(response.text)
+    except Exception as aws_error:
+        try:
+            response = fetch_response(RHRREAD_URL)
+            observation = parse_rhrread_temperature_json(response.text)
+        except Exception as fallback_error:
+            raise RuntimeError(
+                "AWS GIS actual fetch failed and rhrread observation fallback failed: "
+                f"{type(aws_error).__name__}: {aws_error}; "
+                f"{type(fallback_error).__name__}: {fallback_error}"
+            ) from aws_error
+        snapshot = store_raw_snapshot(
+            db, "hko", response.url, response.text, response.headers
+        )
+        store_hko_current_temperature(db, snapshot.id, observation)
+        record_hko_update_minute(
+            db,
+            "rhrread_actual",
+            observation.observed_at_hkt,
+            {
+                "kind": "payload_header",
+                "value": observation.observed_at_hkt.isoformat(),
+                "endpoint": response.url,
+            },
+        )
+        raise RuntimeError(
+            "AWS GIS actual fetch failed; stored rhrread observation fallback only: "
+            f"{type(aws_error).__name__}: {aws_error}"
+        ) from aws_error
     snapshot = store_raw_snapshot(db, "hko", response.url, response.text, response.headers)
-    store_hko_current_temperature(
-        db, snapshot.id, observation
-    )
-    record_hko_update_minute(
-        db,
-        "aws_gis_actual",
+    store_hko_current_temperature(db, snapshot.id, observation)
+    _record_aws_actual_update_minutes(db, response, observation)
+    return response.text
+
+
+def _record_aws_actual_update_minutes(db, response, observation) -> None:
+    seen: set[str] = set()
+
+    def record(update_time: datetime, evidence: dict) -> None:
+        minute = update_time.strftime("%H:%M")
+        if minute in seen:
+            return
+        seen.add(minute)
+        record_hko_update_minute(db, "aws_gis_actual", update_time, evidence)
+
+    record(
         observation.observed_at_hkt,
         {
             "kind": "payload_header",
@@ -754,7 +829,18 @@ def _fetch_current_temperature(db) -> str:
             "endpoint": response.url,
         },
     )
-    return response.text
+    header_last_modified = parse_http_datetime_hkt(response.headers.get("Last-Modified"))
+    if header_last_modified is not None:
+        record(
+            header_last_modified,
+            {
+                "kind": "http_Last-Modified",
+                "value": response.headers.get("Last-Modified"),
+                "etag": response.headers.get("Etag") or response.headers.get("ETag"),
+                "payload_observed_at_hkt": observation.observed_at_hkt.isoformat(),
+                "endpoint": response.url,
+            },
+        )
 
 
 def _fetch_bulletin(db) -> str:
@@ -763,9 +849,12 @@ def _fetch_bulletin(db) -> str:
 
 
 def _fetch_ocf_forecast(db) -> tuple[str, list]:
-    response = fetch_response(OCF_STATION_URL)
+    try:
+        response = fetch_response(AWS_GIS_FORECAST_URL)
+    except Exception:
+        response = fetch_response(OCF_STATION_URL)
     ocf_snapshot = store_raw_snapshot(
-        db, "hko", OCF_STATION_URL, response.text, response.headers
+        db, "hko", response.url, response.text, response.headers
     )
     forecasts, samples = parse_ocf_station_json(response.text)
     store_hko_forecasts(db, ocf_snapshot.id, forecasts)

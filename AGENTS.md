@@ -2,6 +2,13 @@
 
 This repo has an intentionally untracked production-like SQLite database under `data/`.
 
+## Engineering Workflow Rules
+
+- In this codebase, everything is testable. Whenever you add a new feature or functionality, cover it with tests, including tests that explicitly verify the intended business logic is observed.
+- Use red/green TDD. Before starting implementation work, specify the failing tests you expect to write or run first.
+- When making a change to the web dashboard, always perform visual checks with Browser Use and do not call the work done until those visual checks look good.
+- Track the state of the codebase with detailed specs and status files. Check an existing status file such as `status.md` or a feature-specific `*-status.md` file before updating or creating one, and follow the established structure for current state, decisions, milestones, tests, and exit criteria.
+
 Hard rules:
 
 - Never delete `data/`, `data/whenitrains.sqlite3`, `data/backups/`, or any `*.sqlite3` file unless the user explicitly asks for that exact destructive action.

@@ -1281,11 +1281,6 @@ def _effective_forecast_rows(
     limit: int = 1,
     market_kind: str = "highest",
 ) -> list[dict]:
-    aws_rows = _aws_actual_forecast_rows(
-        db, forecast_date_hkt, limit=limit, market_kind=market_kind
-    )
-    if aws_rows:
-        return aws_rows
     rows = db.execute(
         """
         select id, forecast_date_hkt, fetched_at_utc, forecast_min_c, forecast_max_c,
@@ -1314,47 +1309,6 @@ def _effective_forecast_rows(
                 "forecast_max_c": effective_value,
                 "forecast_value_c": effective_value,
                 "update_time": update_time,
-            }
-        )
-        if len(result) >= limit:
-            break
-    return result
-
-
-def _aws_actual_forecast_rows(
-    db: sqlite3.Connection,
-    forecast_date_hkt: str,
-    limit: int,
-    market_kind: str,
-) -> list[dict]:
-    column = "since_midnight_min_c" if market_kind == "lowest" else "since_midnight_max_c"
-    rows = db.execute(
-        f"""
-        select id, observed_at_hkt, {column} as forecast_value_c
-        from hko_current_observations
-        where station = 'HKO'
-          and substr(observed_at_hkt, 1, 10) = ?
-          and {column} is not null
-        order by observed_at_hkt desc, id desc
-        """,
-        (forecast_date_hkt,),
-    )
-    result: list[dict] = []
-    seen_update_times: set[str] = set()
-    for row in rows:
-        update_time = row["observed_at_hkt"]
-        if update_time in seen_update_times:
-            continue
-        seen_update_times.add(update_time)
-        value = float(row["forecast_value_c"])
-        result.append(
-            {
-                "id": f"aws_actual:{row['id']}",
-                "forecast_date_hkt": forecast_date_hkt,
-                "forecast_max_c": value,
-                "forecast_value_c": value,
-                "update_time": update_time,
-                "source_type": "aws_gis_actual",
             }
         )
         if len(result) >= limit:
@@ -1678,8 +1632,6 @@ def _forecast_value_guard_reason(
         return None
     predicate = parse_outcome_label(outcome["label"])
     if predicate.value_c is None:
-        return None
-    if _has_aws_actual_observations(db, date.fromisoformat(target_date_hkt)):
         return None
     market_kind = _temperature_market_kind_for_row(outcome)
     if market_kind == "lowest":

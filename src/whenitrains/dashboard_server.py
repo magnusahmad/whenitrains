@@ -1649,13 +1649,13 @@ const l0CurrentTempSeries = lowCharts[0].chart.addLineSeries({
   color: "#5b9bd5", lineWidth: 3, lineStyle: LightweightCharts.LineStyle.Dotted,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
   pointMarkersVisible: true,
-  pointMarkersRadius: 2,
+  pointMarkersRadius: 3,
 });
 const d0CurrentTempSeries = charts[0].chart.addLineSeries({
   color: "#5b9bd5", lineWidth: 3, lineStyle: LightweightCharts.LineStyle.Dotted,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
   pointMarkersVisible: true,
-  pointMarkersRadius: 2,
+  pointMarkersRadius: 3,
 });
 
 const pnlChart = LightweightCharts.createChart(document.getElementById("pnl-chart"), {
