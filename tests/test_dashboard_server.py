@@ -6,6 +6,7 @@ from pathlib import Path
 from whenitrains.dashboard_server import (
     INDEX_HTML,
     dashboard_stats,
+    forecast_series,
     forecast_panels,
     hourly_actual_series,
     hourly_error_series,
@@ -201,6 +202,42 @@ class DashboardServerTests(unittest.TestCase):
                 hourly_error_series(panel["hourly_forecast"], actual)[0]["value"],
                 0.6,
             )
+
+    def test_forecast_series_uses_effective_ocf_sample_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            target = date(2026, 5, 6)
+            snapshot = store_raw_snapshot(db, "hko", "ocf", "{}")
+            store_ocf_forecast_samples(
+                db,
+                snapshot.id,
+                [
+                    OcfForecastSample(
+                        forecast_date_hkt=target,
+                        forecast_min_c=23,
+                        forecast_max_c=28,
+                        raw_min_c=23.0,
+                        raw_max_c=28.0,
+                        hourly_temperatures=[
+                            {
+                                "forecast_hour_hkt": "2026-05-06T06:00:00+08:00",
+                                "temperature_c": 23.2,
+                            },
+                            {
+                                "forecast_hour_hkt": "2026-05-06T14:00:00+08:00",
+                                "temperature_c": 27.7,
+                            },
+                        ],
+                        raw={"LastModified": "2026-05-06T09:14:00+08:00"},
+                    )
+                ],
+            )
+
+            high = forecast_series(db, target.isoformat(), value_kind="max")
+            low = forecast_series(db, target.isoformat(), value_kind="min")
+
+            self.assertEqual(high[0]["value"], 27.7)
+            self.assertEqual(low[0]["value"], 23.2)
 
     def test_dashboard_stats_use_decimal_forecast_high_and_low(self):
         with tempfile.TemporaryDirectory() as tmp:

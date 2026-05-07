@@ -131,6 +131,9 @@ class PolymarketClobClient:
             allowance = result.get("allowance")
             if allowance is not None:
                 return float(allowance) > 0
+            allowances = result.get("allowances")
+            if isinstance(allowances, dict):
+                return any(float(value or 0) > 0 for value in allowances.values())
         return True
 
     def balance_allowance(self) -> dict | None:
@@ -188,10 +191,11 @@ class PolymarketClobClient:
         args = MarketOrderArgs(
             token_id=token_id,
             amount=size,
-            price=price,
             side=BUY if side == "BUY" else SELL,
+            order_type=OrderType.FAK,
         )
-        return dict(self._client.create_market_order(args, OrderType.FAK))
+        signed = self._client.create_market_order(args)
+        return dict(self._client.post_order(signed, OrderType.FAK))
 
 
 def load_live_config(environ: dict[str, str] | None = None) -> LiveConfig:
@@ -412,6 +416,7 @@ def execute_live_buy(
     try:
         response = client.buy_fak(token_id, float(quote.limit_price), quote.estimated_cost_usd)
     except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
         store_risk_event(db, "live_order_submit_failed", "critical", {"token_id": token_id, "error": str(exc)})
         store_live_order(
             db,
@@ -423,12 +428,12 @@ def execute_live_buy(
             requested_size_usd=size_usd,
             limit_price=quote.limit_price,
             reason=reason,
-            error=type(exc).__name__,
+            error=error,
             raw_request=request,
             event_type=event_type,
             event_key=event_key,
         )
-        return LiveExecutionResult("error", token_id, f"BUY_{side}", None, 0, 0, type(exc).__name__)
+        return LiveExecutionResult("error", token_id, f"BUY_{side}", None, 0, 0, error)
     clob_order_id = _order_id(response)
     order_id = store_live_order(
         db,
@@ -508,6 +513,7 @@ def execute_live_sell(
     try:
         response = client.sell_fak(token_id, best_bid, shares)
     except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
         store_risk_event(db, "live_order_submit_failed", "critical", {"token_id": token_id, "error": str(exc)})
         store_live_order(
             db,
@@ -518,12 +524,12 @@ def execute_live_sell(
             status="error",
             limit_price=best_bid,
             reason=reason,
-            error=type(exc).__name__,
+            error=error,
             raw_request=request,
             event_type=event_type,
             event_key=event_key,
         )
-        return LiveExecutionResult("error", token_id, "SELL", None, 0, 0, type(exc).__name__)
+        return LiveExecutionResult("error", token_id, "SELL", None, 0, 0, error)
     clob_order_id = _order_id(response)
     order_id = store_live_order(
         db,
@@ -647,5 +653,8 @@ def _allowance_ok_from_payload(payload: dict | None) -> bool:
         return True
     allowance = payload.get("allowance")
     if allowance is None:
+        allowances = payload.get("allowances")
+        if isinstance(allowances, dict):
+            return any(float(value or 0) > 0 for value in allowances.values())
         return True
     return float(allowance) > 0

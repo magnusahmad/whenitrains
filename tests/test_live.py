@@ -140,6 +140,17 @@ class LiveTests(unittest.TestCase):
         self.assertTrue(client.allowance_ok())
         self.assertEqual(len(client._client.params), 2)
 
+    def test_plural_allowances_are_required_when_present(self):
+        client = PolymarketClobClient.__new__(PolymarketClobClient)
+        client._signature_type = 2
+
+        class ZeroAllowances:
+            def get_balance_allowance(self, _params):
+                return {"balance": "5000000", "allowances": {"a": "0", "b": "0"}}
+
+        client._client = ZeroAllowances()
+        self.assertFalse(client.allowance_ok())
+
     def test_preflight_returns_failure_instead_of_raising_on_timeout(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

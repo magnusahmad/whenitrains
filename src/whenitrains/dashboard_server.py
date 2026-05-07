@@ -250,6 +250,10 @@ def forecast_series(
     exact_raw: bool = False,
     value_kind: str = "max",
 ) -> list[dict]:
+    sample_series = _effective_forecast_sample_series(db, target_date_hkt, value_kind)
+    if sample_series:
+        return sample_series
+
     column = "forecast_min_c" if value_kind == "min" else "forecast_max_c"
     rows = db.execute(
         f"""
@@ -275,6 +279,38 @@ def forecast_series(
             raw_value = _raw_forecast_value(row["raw_forecast"], value_kind)
             value = raw_value or value
         seen[ts] = value
+    return [{"time": ts, "value": value} for ts, value in sorted(seen.items())]
+
+
+def _effective_forecast_sample_series(
+    db: sqlite3.Connection, target_date_hkt: str, value_kind: str
+) -> list[dict]:
+    rows = db.execute(
+        """
+        select forecast_date_hkt, fetched_at_utc, raw_min_c, raw_max_c,
+               hourly_temperatures_json, raw_daily_forecast
+        from ocf_forecast_samples
+        where forecast_date_hkt = ?
+        order by fetched_at_utc asc, id asc
+        """,
+        (target_date_hkt,),
+    ).fetchall()
+    seen: dict[int, float] = {}
+    for row in rows:
+        update_time = _forecast_sample_update_time(row)
+        ts = _to_unix(update_time)
+        if ts is None:
+            continue
+        hourly_values = _hourly_values_from_json(
+            row["forecast_date_hkt"], row["hourly_temperatures_json"]
+        )
+        if hourly_values:
+            value = min(hourly_values) if value_kind == "min" else max(hourly_values)
+        else:
+            raw_column = "raw_min_c" if value_kind == "min" else "raw_max_c"
+            value = _optional_float(row[raw_column])
+        if value is not None:
+            seen[ts] = value
     return [{"time": ts, "value": value} for ts, value in sorted(seen.items())]
 
 
