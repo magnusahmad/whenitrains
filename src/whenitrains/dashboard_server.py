@@ -1368,20 +1368,12 @@ INDEX_HTML = r"""<!doctype html>
   .signal-bubble {
     position: absolute;
     z-index: 9;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
+    width: 6px;
+    height: 6px;
     border-radius: 999px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #0d1117;
-    font-size: 10px;
-    font-weight: 800;
-    line-height: 1;
     transform: translate(-50%, -50%);
     pointer-events: auto;
-    box-shadow: 0 0 0 2px #0d1117, 0 2px 8px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 0 0 1px #0d1117, 0 1px 4px rgba(0, 0, 0, 0.35);
   }
   .signal-bubble.high { background: #f0b400; }
   .signal-bubble.low { background: #38bdf8; }
@@ -1635,7 +1627,7 @@ const d0HourlyActualSeries = charts[0].chart.addLineSeries({
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
   priceLineVisible: false,
   pointMarkersVisible: true,
-  pointMarkersRadius: 6,
+  pointMarkersRadius: 2,
 });
 const d0ActualMaxSeries = charts[0].chart.addLineSeries({
   color: "#26a69a", lineWidth: 2,
@@ -1651,7 +1643,7 @@ const l0HourlyActualSeries = lowCharts[0].chart.addLineSeries({
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
   priceLineVisible: false,
   pointMarkersVisible: true,
-  pointMarkersRadius: 6,
+  pointMarkersRadius: 2,
 });
 const l0ActualMinSeries = lowCharts[0].chart.addLineSeries({
   color: "#2dd4bf", lineWidth: 2,
@@ -1661,13 +1653,13 @@ const l0CurrentTempSeries = lowCharts[0].chart.addLineSeries({
   color: "#5b9bd5", lineWidth: 3, lineStyle: LightweightCharts.LineStyle.Dotted,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
   pointMarkersVisible: true,
-  pointMarkersRadius: 6,
+  pointMarkersRadius: 2,
 });
 const d0CurrentTempSeries = charts[0].chart.addLineSeries({
   color: "#5b9bd5", lineWidth: 3, lineStyle: LightweightCharts.LineStyle.Dotted,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
   pointMarkersVisible: true,
-  pointMarkersRadius: 6,
+  pointMarkersRadius: 2,
 });
 
 const pnlChart = LightweightCharts.createChart(document.getElementById("pnl-chart"), {
@@ -1730,9 +1722,9 @@ const seriesVisibility = {
   forecastHigh: true,
   forecastLow: true,
   lowHourlyForecast: true,
-  lowHourlyActual: true,
+  lowHourlyActual: false,
   hourlyForecast: true,
-  hourlyActual: true,
+  hourlyActual: false,
   actualMin: true,
   actualMax: true,
   currentTemp: true,
@@ -2158,7 +2150,6 @@ function renderSignalBubblesForChart(descriptors, containerId, chart) {
       if (x == null || y == null || x < 0 || y < 0 || x > width || y > height) continue;
       const bubble = document.createElement("div");
       bubble.className = `signal-bubble ${descriptor.kind === "low" ? "low" : "high"}`;
-      bubble.textContent = descriptor.kind === "low" ? "L" : "H";
       bubble.title = `${descriptor.name} ${formatValue(point.value, "temp")} · ${fmtHKT(point.time)}`;
       bubble.style.left = `${x}px`;
       bubble.style.top = `${y}px`;
