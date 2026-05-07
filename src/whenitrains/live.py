@@ -202,21 +202,42 @@ class PolymarketClobClient:
         return dict(self._client.post_order(signed, OrderType.FAK))
 
     def _order_options(self, token_id: str) -> SimpleNamespace:
+        tick_size = self._get_tick_size(token_id)
+        neg_risk = self._get_neg_risk(token_id)
+        if tick_size is not None and neg_risk is not None:
+            return SimpleNamespace(tick_size=str(tick_size), neg_risk=bool(neg_risk))
+
         try:
             market = self._client.get_market(token_id)
         except Exception:
             market = {}
-        tick_size = (
+        tick_size = tick_size or (
             market.get("minimum_tick_size")
             or market.get("minimumTickSize")
             or market.get("tick_size")
             or market.get("tickSize")
             or "0.01"
         )
-        neg_risk = market.get("neg_risk")
+        neg_risk = neg_risk if neg_risk is not None else market.get("neg_risk")
         if neg_risk is None:
             neg_risk = market.get("negRisk")
         return SimpleNamespace(tick_size=str(tick_size), neg_risk=bool(neg_risk))
+
+    def _get_tick_size(self, token_id: str) -> str | None:
+        if not hasattr(self._client, "get_tick_size"):
+            return None
+        try:
+            return str(self._client.get_tick_size(token_id))
+        except Exception:
+            return None
+
+    def _get_neg_risk(self, token_id: str) -> bool | None:
+        if not hasattr(self._client, "get_neg_risk"):
+            return None
+        try:
+            return bool(self._client.get_neg_risk(token_id))
+        except Exception:
+            return None
 
 
 def load_live_config(environ: dict[str, str] | None = None) -> LiveConfig:

@@ -62,9 +62,17 @@ class StrictBalanceClient:
 
 
 class MarketMetadataClient:
+    def get_tick_size(self, token_id):
+        self.tick_size_token_id = token_id
+        return "0.001"
+
+    def get_neg_risk(self, token_id):
+        self.neg_risk_token_id = token_id
+        return True
+
     def get_market(self, token_id):
         self.market_token_id = token_id
-        return {"minimum_tick_size": "0.001", "neg_risk": True}
+        return {"minimum_tick_size": "0.01", "neg_risk": False}
 
 
 class TimeoutPreflightClient:
@@ -166,7 +174,8 @@ class LiveTests(unittest.TestCase):
 
         self.assertEqual(options.tick_size, "0.001")
         self.assertTrue(options.neg_risk)
-        self.assertEqual(client._client.market_token_id, "token")
+        self.assertEqual(client._client.tick_size_token_id, "token")
+        self.assertEqual(client._client.neg_risk_token_id, "token")
 
     def test_preflight_returns_failure_instead_of_raising_on_timeout(self):
         with tempfile.TemporaryDirectory() as tmp:
