@@ -114,14 +114,7 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
     _ensure_paper_order_exclusions(db)
     today_hkt = datetime.now(HKT).date().isoformat()
     forecast = latest_decimal_forecast_stats(db, today_hkt)
-    obs = db.execute(
-        """
-        select observed_at_hkt, since_midnight_min_c, since_midnight_max_c, temperature_c
-        from hko_current_observations
-        order by id desc
-        limit 1
-        """
-    ).fetchone()
+    obs = latest_observation_stats(db)
     counts = {
         "hko_forecasts": db.execute(
             """
@@ -176,13 +169,45 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
         executable_unrealized += shares * (bid - avg_price)
     return {
         "latest_forecast": forecast,
-        "latest_observation": dict(obs) if obs else None,
+        "latest_observation": obs,
         "counts": counts,
         "open_positions": open_positions,
         "realized_pnl": realized,
         "executable_unrealized_pnl": executable_unrealized,
         "total_profit": realized + executable_unrealized,
         "worst_case_open_loss": worst_case_open_loss,
+    }
+
+
+def latest_observation_stats(db: sqlite3.Connection) -> dict | None:
+    since_midnight = db.execute(
+        """
+        select observed_at_hkt, since_midnight_min_c, since_midnight_max_c
+        from hko_current_observations
+        where since_midnight_min_c is not null
+           or since_midnight_max_c is not null
+        order by observed_at_hkt desc, id desc
+        limit 1
+        """
+    ).fetchone()
+    current = db.execute(
+        """
+        select observed_at_hkt, station, temperature_c
+        from hko_current_observations
+        where temperature_c is not null
+        order by observed_at_hkt desc, id desc
+        limit 1
+        """
+    ).fetchone()
+    if since_midnight is None and current is None:
+        return None
+    return {
+        "observed_at_hkt": since_midnight["observed_at_hkt"] if since_midnight else current["observed_at_hkt"],
+        "since_midnight_min_c": since_midnight["since_midnight_min_c"] if since_midnight else None,
+        "since_midnight_max_c": since_midnight["since_midnight_max_c"] if since_midnight else None,
+        "temperature_c": current["temperature_c"] if current else None,
+        "temperature_observed_at_hkt": current["observed_at_hkt"] if current else None,
+        "temperature_station": current["station"] if current else None,
     }
 
 
@@ -1755,6 +1780,7 @@ function renderStats(stats) {
     { label: "Forecast updated",    value: fmtHKTUpdate(f.update_time) },
     { label: "Since-midnight min",  value: o.since_midnight_min_c != null ? fmtTemp(o.since_midnight_min_c) : (o.temperature_c != null ? fmtTemp(o.temperature_c) + " (cur)" : "n/a") },
     { label: "Since-midnight max",  value: o.since_midnight_max_c != null ? fmtTemp(o.since_midnight_max_c) : (o.temperature_c != null ? fmtTemp(o.temperature_c) + " (cur)" : "n/a") },
+    { label: "Current temp",        value: o.temperature_c != null ? fmtTemp(o.temperature_c) : "n/a" },
     { label: "Observed at",         value: o.observed_at_hkt ? o.observed_at_hkt.slice(11,16) + " HKT" : "n/a" },
     { label: "Open positions",      value: String(stats.open_positions ?? 0), drilldown: "open" },
     { label: "Realized PnL",        value: fmtMoney(stats.realized_pnl), cls: classForMoney(stats.realized_pnl), drilldown: "realized" },

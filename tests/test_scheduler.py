@@ -160,6 +160,27 @@ class SchedulerTests(unittest.TestCase):
             {item.source for item in due_hko_sources(now + timedelta(seconds=10), state)},
         )
 
+    def test_aws_actual_changed_payload_does_not_complete_poll_window(self):
+        now = datetime(2026, 5, 4, 12, 4, 30, tzinfo=HKT)
+        state = SchedulerState()
+        plan = [item for item in due_hko_sources(now, state) if item.source == "aws_actual"][0]
+
+        changed = mark_source_fetch(state, plan, "previous reading", now, changed=True)
+
+        self.assertTrue(changed)
+        self.assertIn(
+            "aws_actual",
+            {item.source for item in due_hko_sources(now + timedelta(seconds=10), state)},
+        )
+        self.assertIn(
+            "aws_actual",
+            {item.source for item in due_hko_sources(now + timedelta(seconds=30), state)},
+        )
+        self.assertNotIn(
+            "aws_actual",
+            {item.source for item in due_hko_sources(now + timedelta(seconds=61), state)},
+        )
+
     def test_orderbooks_and_market_discovery_have_separate_cadence(self):
         now = datetime(2026, 5, 4, 12, 5, tzinfo=HKT)
         state = SchedulerState()
@@ -175,7 +196,7 @@ class SchedulerTests(unittest.TestCase):
         actions = scheduler_actions(now + timedelta(seconds=10), state)
         self.assertFalse(actions.discover_market)
         self.assertFalse(actions.fetch_orderbooks)
-        self.assertFalse(actions.fetch_current_temperature)
+        self.assertTrue(actions.fetch_current_temperature)
 
     def test_current_temperature_collection_can_run_with_orderbook_work(self):
         now = datetime(2026, 5, 4, 12, 5, 0, tzinfo=HKT)

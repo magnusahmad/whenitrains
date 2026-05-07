@@ -120,7 +120,7 @@ def mark_source_fetch(
     )
     state.last_hashes[plan.source] = content_hash
     state.last_source_poll_at[key] = now_hkt or datetime.now(HKT)
-    if did_change:
+    if did_change and plan.source != "aws_actual":
         state.completed_windows.add(key)
     return did_change
 

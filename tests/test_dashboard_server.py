@@ -334,6 +334,42 @@ class DashboardServerTests(unittest.TestCase):
             self.assertEqual(stats["latest_observation"]["since_midnight_min_c"], 21.6)
             self.assertEqual(stats["latest_observation"]["since_midnight_max_c"], 24.6)
 
+    def test_dashboard_stats_include_latest_current_temperature_with_newer_since_midnight_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            current_snapshot = store_raw_snapshot(db, "hko", "aws", "{}")
+            store_hko_current_temperature(
+                db,
+                current_snapshot.id,
+                HkoCurrentTemperature(
+                    observed_at_hkt=datetime(2026, 5, 6, 13, 40, tzinfo=HKT),
+                    station="HKO",
+                    temperature_c=24.6,
+                    since_midnight_min_c=21.6,
+                    since_midnight_max_c=24.6,
+                    raw={},
+                ),
+            )
+            since_midnight_snapshot = store_raw_snapshot(db, "hko", "obs", "{}")
+            store_hko_observation(
+                db,
+                since_midnight_snapshot.id,
+                HkoObservation(
+                    observed_at_hkt=datetime(2026, 5, 6, 13, 50, tzinfo=HKT),
+                    station="HK Observatory",
+                    since_midnight_min_c=21.6,
+                    since_midnight_max_c=24.6,
+                    raw={},
+                ),
+            )
+
+            stats = dashboard_stats(db)
+
+            self.assertEqual(stats["latest_observation"]["observed_at_hkt"], "2026-05-06T13:50:00+08:00")
+            self.assertEqual(stats["latest_observation"]["temperature_c"], 24.6)
+            self.assertEqual(stats["latest_observation"]["temperature_observed_at_hkt"], "2026-05-06T13:40:00+08:00")
+            self.assertEqual(stats["latest_observation"]["temperature_station"], "HKO")
+
     def test_hourly_actual_ignores_since_midnight_max_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_dashboard_db(Path(tmp) / "test.db")
