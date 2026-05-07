@@ -15,6 +15,7 @@ from whenitrains.storage import (
     backup_sqlite_database,
     connect,
     list_hko_update_times,
+    find_outcome_by_label_and_filters,
     list_outcomes_from_date,
     list_tradeable_forecast_dates,
     migrate,
@@ -170,6 +171,38 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(db.execute("select count(*) from outcomes").fetchone()[0], 1)
             self.assertEqual(db.execute("select count(*) from orderbook_snapshots").fetchone()[0], 1)
             self.assertEqual(db.execute("select count(*) from signals").fetchone()[0], 1)
+
+    def test_find_outcome_by_label_requires_filters_for_duplicate_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            high = TemperatureMarket(
+                event_id="high",
+                event_slug="highest-temperature-in-hong-kong-on-may-7-2026",
+                title="High",
+                target_date=date(2026, 5, 7),
+                outcomes=[
+                    Outcome("m_high", "29°C", parse_outcome_label("29°C"), "high_yes", "high_no")
+                ],
+            )
+            low = TemperatureMarket(
+                event_id="low",
+                event_slug="lowest-temperature-in-hong-kong-on-may-7-2026",
+                title="Low",
+                target_date=date(2026, 5, 7),
+                outcomes=[
+                    Outcome("m_low", "29°C", parse_outcome_label("29°C"), "low_yes", "low_no")
+                ],
+            )
+            store_polymarket_event(db, high)
+            store_polymarket_event(db, low)
+
+            with self.assertRaises(ValueError):
+                find_outcome_by_label_and_filters(db, "29°C")
+            row = find_outcome_by_label_and_filters(
+                db, "29°C", target_date_hkt="2026-05-07", slug_contains="highest"
+            )
+            self.assertEqual(row["yes_token_id"], "high_yes")
 
     def test_store_ocf_forecast_samples_keeps_daily_and_hourly_tables(self):
         with tempfile.TemporaryDirectory() as tmp:

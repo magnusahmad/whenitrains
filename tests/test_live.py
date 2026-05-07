@@ -61,6 +61,12 @@ class StrictBalanceClient:
         return {"balance": "5000000", "allowance": "1"}
 
 
+class MarketMetadataClient:
+    def get_market(self, token_id):
+        self.market_token_id = token_id
+        return {"minimum_tick_size": "0.001", "neg_risk": True}
+
+
 class TimeoutPreflightClient:
     def signer_address(self):
         return "0xsigner"
@@ -150,6 +156,16 @@ class LiveTests(unittest.TestCase):
 
         client._client = ZeroAllowances()
         self.assertFalse(client.allowance_ok())
+
+    def test_market_order_options_use_market_metadata(self):
+        client = PolymarketClobClient.__new__(PolymarketClobClient)
+        client._client = MarketMetadataClient()
+        client._signature_type = 2
+
+        options = client._order_options("token")
+
+        self.assertEqual(options, {"tick_size": "0.001", "neg_risk": True})
+        self.assertEqual(client._client.market_token_id, "token")
 
     def test_preflight_returns_failure_instead_of_raising_on_timeout(self):
         with tempfile.TemporaryDirectory() as tmp:

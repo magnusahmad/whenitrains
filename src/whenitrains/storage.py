@@ -766,6 +766,47 @@ def find_outcome_by_label(db: sqlite3.Connection, label: str) -> sqlite3.Row:
     return row
 
 
+def find_outcome_by_label_and_filters(
+    db: sqlite3.Connection,
+    label: str,
+    *,
+    target_date_hkt: str | None = None,
+    slug_contains: str | None = None,
+) -> sqlite3.Row:
+    filters = ["o.label = ?"]
+    params: list[str] = [label]
+    if target_date_hkt is not None:
+        filters.append("m.target_date_hkt = ?")
+        params.append(target_date_hkt)
+    if slug_contains is not None:
+        filters.append("m.slug like ?")
+        params.append(f"%{slug_contains}%")
+    rows = list(
+        db.execute(
+            f"""
+            select o.id, o.market_id, o.polymarket_market_id, o.label,
+                   o.predicate_type, o.predicate_value_c, o.yes_token_id, o.no_token_id,
+                   m.target_date_hkt, m.slug
+            from outcomes o
+            join markets m on m.id = o.market_id
+            where {" and ".join(filters)}
+            order by m.target_date_hkt desc, m.slug, o.id desc
+            """,
+            tuple(params),
+        )
+    )
+    if not rows:
+        raise ValueError(f"outcome label not found: {label}")
+    if len(rows) > 1:
+        choices = ", ".join(
+            f"{row['target_date_hkt']} {row['slug']}" for row in rows[:5]
+        )
+        raise ValueError(
+            f"ambiguous outcome label {label}; use --date or --market-kind. matches: {choices}"
+        )
+    return rows[0]
+
+
 def find_outcome_by_token(db: sqlite3.Connection, token_id: str) -> sqlite3.Row | None:
     return db.execute(
         """

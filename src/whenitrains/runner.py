@@ -394,7 +394,7 @@ def _process_forecast_value_entry_kind(
         )
     event_key = (
         f"{event_type}:{target_date.isoformat()}:"
-        f"{latest['id']}:{forecast_row['polymarket_market_id']}:"
+        f"{forecast_value:g}:{forecast_row['polymarket_market_id']}:"
         f"{favorite['polymarket_market_id']}:{forecast_book.best_ask}"
     )
     if has_processed_event(db, event_key):
@@ -587,8 +587,19 @@ def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerRes
         buys_filled=aggregate.buys_filled,
         buys_missed=aggregate.buys_missed,
         signals=aggregate.signals,
-        notes=tuple(notes),
+        notes=tuple(_dedupe_notes(notes)),
     )
+
+
+def _dedupe_notes(notes: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for note in notes:
+        if note in seen:
+            continue
+        seen.add(note)
+        deduped.append(note)
+    return deduped
 
 
 def _process_actual_min_transition(

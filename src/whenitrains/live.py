@@ -194,8 +194,29 @@ class PolymarketClobClient:
             side=BUY if side == "BUY" else SELL,
             order_type=OrderType.FAK,
         )
-        signed = self._client.create_market_order(args)
+        options = self._order_options(token_id)
+        try:
+            signed = self._client.create_market_order(args, options=options)
+        except TypeError:
+            signed = self._client.create_market_order(args)
         return dict(self._client.post_order(signed, OrderType.FAK))
+
+    def _order_options(self, token_id: str) -> dict:
+        try:
+            market = self._client.get_market(token_id)
+        except Exception:
+            market = {}
+        tick_size = (
+            market.get("minimum_tick_size")
+            or market.get("minimumTickSize")
+            or market.get("tick_size")
+            or market.get("tickSize")
+            or "0.01"
+        )
+        neg_risk = market.get("neg_risk")
+        if neg_risk is None:
+            neg_risk = market.get("negRisk")
+        return {"tick_size": str(tick_size), "neg_risk": bool(neg_risk)}
 
 
 def load_live_config(environ: dict[str, str] | None = None) -> LiveConfig:

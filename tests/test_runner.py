@@ -430,6 +430,31 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertIsNotNone(position)
 
+    def test_actual_cross_notes_are_deduped_when_no_cross_occurs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m30",
+                        label="30°C or higher",
+                        predicate=parse_outcome_label("30°C or higher"),
+                        yes_token_id="yes30",
+                        no_token_id="no30",
+                    )
+                ],
+            )
+            _store_forecast(db, 31, "2026-05-04T00:45:00+08:00")
+            _store_observation(db, 28.0)
+            _store_observation(db, 29.0)
+            _store_observation(db, 30.0)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(
+                result.notes.count("actual max has not crossed above forecast max"), 1
+            )
+
     def test_actual_cross_buys_no_on_invalidated_lower_exact_bucket(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
@@ -1314,6 +1339,40 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(filled_orders[0], 2)
             self.assertAlmostEqual(filled_orders[1], 250.0)
+
+    def test_forecast_value_same_value_and_price_is_processed_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_threshold_risk_outcomes(),
+            )
+            _store_forecast(db, 29, "2026-05-05T09:11:53+08:00")
+            _store_book_pair(db, "yes28", old_ask=0.60, new_ask=0.60)
+            _store_book_pair(db, "yes30", old_ask=0.10, new_ask=0.10)
+            _store_book_pair(db, "yes29", old_ask=0.23, new_ask=0.23)
+
+            first = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+            _store_forecast(db, 29, "2026-05-05T09:12:53+08:00")
+            second = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(first.buys_filled, 1)
+            self.assertEqual(second.signals, 0)
+            self.assertIn(
+                "forecast value skipped: 2026-05-04 29°C already processed at ask=0.230",
+                second.notes,
+            )
+            event_count = db.execute(
+                """
+                select count(*)
+                from paper_decisions
+                where event_type = 'forecast_value' and action = 'EVENT'
+                """
+            ).fetchone()[0]
+            self.assertEqual(event_count, 1)
 
     def test_forecast_value_ignores_floating_point_dust_budget(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -49,6 +49,7 @@ from .storage import (
     backup_sqlite_database,
     connect,
     find_outcome_by_label,
+    find_outcome_by_label_and_filters,
     latest_orderbook,
     list_hko_update_times,
     list_live_orders_by_status,
@@ -154,11 +155,15 @@ def main(argv: list[str] | None = None) -> int:
     live_buy.add_argument("label")
     live_buy.add_argument("side", choices=["YES", "NO"])
     live_buy.add_argument("size_usd", type=float)
+    live_buy.add_argument("--date")
+    live_buy.add_argument("--market-kind", choices=["highest", "lowest"])
     live_buy.add_argument("--live", action="store_true")
     live_buy.add_argument("--yes-i-understand", action="store_true")
     live_sell = sub.add_parser("live-sell")
     live_sell.add_argument("label")
     live_sell.add_argument("side", choices=["YES", "NO"])
+    live_sell.add_argument("--date")
+    live_sell.add_argument("--market-kind", choices=["highest", "lowest"])
     live_sell.add_argument("--live", action="store_true")
     live_sell.add_argument("--yes-i-understand", action="store_true")
     live_reconcile = sub.add_parser("live-reconcile")
@@ -407,7 +412,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             config = load_live_config()
             client = PolymarketClobClient(config)
-            outcome = find_outcome_by_label(db, args.label)
+            outcome = find_outcome_by_label_and_filters(
+                db,
+                args.label,
+                target_date_hkt=args.date,
+                slug_contains=args.market_kind,
+            )
             token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
             book = latest_orderbook(db, token_id)
             max_price = book.best_ask + Settings.max_entry_limit_slippage if book.best_ask is not None else None
@@ -444,7 +454,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             config = load_live_config()
             client = PolymarketClobClient(config)
-            outcome = find_outcome_by_label(db, args.label)
+            outcome = find_outcome_by_label_and_filters(
+                db,
+                args.label,
+                target_date_hkt=args.date,
+                slug_contains=args.market_kind,
+            )
             token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
             book = latest_orderbook(db, token_id)
             result = execute_live_sell(
