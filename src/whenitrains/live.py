@@ -93,11 +93,10 @@ class LiveClobClient(Protocol):
 class PolymarketClobClient:
     def __init__(self, config: LiveConfig):
         try:
-            from py_clob_client.client import ClobClient
-            from py_clob_client.clob_types import ApiCreds
+            from py_clob_client_v2 import ApiCreds, ClobClient
         except ImportError as exc:
             raise LiveTradingError(
-                "py-clob-client is not installed; install dependencies before live trading"
+                "py-clob-client-v2 is not installed; run `python3 -m pip install -e .` before live trading"
             ) from exc
         creds = ApiCreds(
             api_key=config.api_key,
@@ -113,6 +112,7 @@ class PolymarketClobClient:
             funder=config.funder_address,
         )
         self._signature_type = config.signature_type
+        self._uses_v2_client = True
 
     def signer_address(self) -> str | None:
         return getattr(self._client, "get_address", lambda: None)()
@@ -146,7 +146,7 @@ class PolymarketClobClient:
 
     def _collateral_params(self):
         try:
-            from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+            from py_clob_client_v2 import AssetType, BalanceAllowanceParams
         except ImportError:
             return SimpleNamespace(
                 asset_type="COLLATERAL", signature_type=self._signature_type
@@ -171,6 +171,12 @@ class PolymarketClobClient:
         return {"order_id": order_id, "token_id": token_id, "status": "unknown"}
 
     def cancel_order(self, order_id: str) -> dict:
+        if self._uses_v2_client and hasattr(self._client, "cancel_order"):
+            try:
+                from py_clob_client_v2 import OrderPayload
+            except ImportError as exc:
+                raise LiveTradingError("py-clob-client-v2 order types unavailable") from exc
+            return dict(self._client.cancel_order(OrderPayload(orderID=order_id)))
         if hasattr(self._client, "cancel"):
             return dict(self._client.cancel(order_id))
         if hasattr(self._client, "cancel_order"):
@@ -183,6 +189,8 @@ class PolymarketClobClient:
         raise LiveTradingError("CLOB client does not expose cancel_all")
 
     def _post_order(self, token_id: str, price: float, size: float, side: str) -> dict:
+        if self._uses_v2_client:
+            return self._post_v2_order(token_id, price, size, side)
         try:
             from py_clob_client.clob_types import OrderArgs, OrderType
             from py_clob_client.order_builder.constants import BUY, SELL
@@ -204,6 +212,32 @@ class PolymarketClobClient:
         except TypeError:
             signed = self._client.create_order(args)
         return dict(self._client.post_order(signed, OrderType.FAK))
+
+    def _post_v2_order(self, token_id: str, price: float, size: float, side: str) -> dict:
+        try:
+            from py_clob_client_v2 import (
+                OrderArgs,
+                OrderType,
+                PartialCreateOrderOptions,
+                Side,
+            )
+        except ImportError as exc:
+            raise LiveTradingError("py-clob-client-v2 order types unavailable") from exc
+        options = self._order_options(token_id)
+        response = self._client.create_and_post_order(
+            order_args=OrderArgs(
+                token_id=token_id,
+                price=price,
+                size=size,
+                side=Side.BUY if side == "BUY" else Side.SELL,
+            ),
+            options=PartialCreateOrderOptions(
+                tick_size=options.tick_size,
+                neg_risk=options.neg_risk,
+            ),
+            order_type=OrderType.FAK,
+        )
+        return dict(response)
 
     def _order_options(self, token_id: str) -> SimpleNamespace:
         tick_size = self._get_tick_size(token_id)
