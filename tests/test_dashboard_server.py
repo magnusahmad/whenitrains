@@ -530,7 +530,107 @@ class DashboardServerTests(unittest.TestCase):
             self.assertEqual(row["action"], "BUY_YES")
             self.assertRegex(row["created_at_hkt"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
             self.assertAlmostEqual(row["latest_bid"], 0.42)
-            self.assertGreater(row["unrealized_pnl"], 0)
+            self.assertAlmostEqual(row["unrealized_pnl"], 40)
+
+    def test_paper_trade_rows_unrealized_pnl_is_per_buy_fill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_paper_order_result(
+                db,
+                "yes25",
+                "BUY_YES",
+                limit_price=0.25,
+                size_usd=50,
+                fill_price=0.25,
+                fill_size_usd=50,
+                status="filled",
+                reason="first entry",
+            )
+            store_paper_order_result(
+                db,
+                "yes25",
+                "BUY_YES",
+                limit_price=0.40,
+                size_usd=80,
+                fill_price=0.40,
+                fill_size_usd=80,
+                status="filled",
+                reason="second entry",
+            )
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.50, 10)],
+                    asks=[(0.52, 10)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            db.execute(
+                """
+                insert into paper_positions
+                (outcome_id, net_shares, avg_price, realized_pnl, updated_at_utc)
+                values ('yes25', 400, 0.325, 0, '2026-05-06T10:00:00+00:00')
+                """
+            )
+            db.commit()
+
+            payload = paper_trade_rows(db, "unrealized")
+
+            self.assertEqual([row["reason"] for row in payload["rows"]], ["second entry", "first entry"])
+            self.assertAlmostEqual(payload["rows"][0]["unrealized_pnl"], 20)
+            self.assertAlmostEqual(payload["rows"][1]["unrealized_pnl"], 50)
+
+    def test_paper_trade_rows_unrealized_pnl_ignores_closed_float_dust(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_paper_order_result(
+                db,
+                "yes25",
+                "BUY_YES",
+                limit_price=0.25,
+                size_usd=50,
+                fill_price=0.25,
+                fill_size_usd=50,
+                status="filled",
+                reason="entry",
+            )
+            store_paper_order_result(
+                db,
+                "yes25",
+                "SELL",
+                limit_price=0.10,
+                size_usd=19.999999999999996,
+                fill_price=0.10,
+                fill_size_usd=19.999999999999996,
+                status="filled",
+                reason="exit",
+            )
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.90, 10)],
+                    asks=[(0.92, 10)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            db.execute(
+                """
+                insert into paper_positions
+                (outcome_id, net_shares, avg_price, realized_pnl, updated_at_utc)
+                values ('yes25', 0, 0, 0, '2026-05-06T10:00:00+00:00')
+                """
+            )
+            db.commit()
+
+            payload = paper_trade_rows(db, "open")
+
+            self.assertEqual(payload["rows"][0]["unrealized_pnl"], 0)
 
     def test_paper_trade_rows_returns_realized_sell_tokens(self):
         with tempfile.TemporaryDirectory() as tmp:

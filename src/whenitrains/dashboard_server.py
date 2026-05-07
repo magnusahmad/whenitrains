@@ -1034,8 +1034,12 @@ def paper_trade_rows(db: sqlite3.Connection, view: str) -> dict:
         net_shares = _optional_float(active_pos.get("net_shares")) or 0.0
         avg_price = _optional_float(active_pos.get("avg_price")) or 0.0
         unrealized = (
-            net_shares * (latest_bid - avg_price)
-            if latest_bid is not None and net_shares > 0
+            shares * (latest_bid - fill_price)
+            if row["side"] != "SELL"
+            and shares is not None
+            and fill_price is not None
+            and latest_bid is not None
+            and net_shares > 1e-8
             else 0.0
         )
         realized_pnl = (
