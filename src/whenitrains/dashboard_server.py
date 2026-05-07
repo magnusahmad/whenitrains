@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .hko import HKT
-from .storage import connect, live_dashboard_stats
+from .storage import connect, live_dashboard_stats as storage_live_dashboard_stats
 
 
 ACTIVE_PAPER_ORDER_FILTER = """
@@ -176,6 +176,49 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
         "executable_unrealized_pnl": executable_unrealized,
         "total_profit": realized + executable_unrealized,
         "worst_case_open_loss": worst_case_open_loss,
+    }
+
+
+def live_dashboard_payload(db: sqlite3.Connection) -> dict:
+    base = dashboard_stats(db)
+    live = storage_live_dashboard_stats(db)
+    counts = {
+        **base["counts"],
+        "buy_filled": db.execute(
+            "select count(*) from live_orders where side like 'BUY_%' and status = 'filled'"
+        ).fetchone()[0],
+        "buy_missed": db.execute(
+            """
+            select count(*) from live_orders
+            where side like 'BUY_%' and status in ('rejected', 'blocked', 'error')
+            """
+        ).fetchone()[0],
+        "sell_filled": db.execute(
+            "select count(*) from live_orders where side = 'SELL' and status = 'filled'"
+        ).fetchone()[0],
+        "sell_missed": db.execute(
+            """
+            select count(*) from live_orders
+            where side = 'SELL' and status in ('rejected', 'blocked', 'error')
+            """
+        ).fetchone()[0],
+    }
+    open_exposure = float(live.get("open_exposure_usd") or 0.0)
+    return {
+        **base,
+        "mode": "live",
+        "counts": counts,
+        "open_positions": live["open_positions"],
+        "realized_pnl": live["realized_pnl"],
+        "executable_unrealized_pnl": live.get("executable_unrealized_pnl", 0.0),
+        "total_profit": live.get("total_pnl", 0.0),
+        "worst_case_open_loss": open_exposure,
+        "open_exposure_usd": open_exposure,
+        "caps": live.get("caps", {}),
+        "block_new_entries": live.get("block_new_entries", False),
+        "cancel_open_orders_and_exit_positions": live.get(
+            "cancel_open_orders_and_exit_positions", False
+        ),
     }
 
 
@@ -484,6 +527,7 @@ def top_token_price_series(
     bucket_seconds: int = 60,
     include_trade_tokens: bool = False,
     market_kind: str = "highest",
+    marker_source: str = "paper",
 ) -> list[dict]:
     side = side.upper()
     if side not in {"YES", "NO"}:
@@ -528,7 +572,11 @@ def top_token_price_series(
 
     row_records = []
     for row in rows:
-        markers = paper_order_markers(db, row["token_id"])
+        markers = (
+            live_order_markers(db, row["token_id"])
+            if marker_source == "live"
+            else paper_order_markers(db, row["token_id"])
+        )
         row_records.append(
             {
                 "row": row,
@@ -670,6 +718,57 @@ def paper_order_markers(db: sqlite3.Connection, token_id: str) -> list[dict]:
     return markers
 
 
+def live_order_markers(db: sqlite3.Connection, token_id: str) -> list[dict]:
+    rows = db.execute(
+        """
+        select created_at_utc, side, fill_price, fill_size_usd, fill_shares,
+               status, reason, event_type, event_key
+        from live_orders
+        where outcome_id = ?
+          and status = 'filled'
+          and fill_price is not null
+          and created_at_utc is not null
+        order by created_at_utc asc, id asc
+        """,
+        (token_id,),
+    ).fetchall()
+    markers = []
+    for row in rows:
+        ts = _to_unix(row["created_at_utc"])
+        if ts is None:
+            continue
+        is_sell = row["side"] == "SELL"
+        markers.append(
+            {
+                "time": ts,
+                "position": "aboveBar" if is_sell else "belowBar",
+                "color": "#ef5350" if is_sell else "#26a69a",
+                "shape": "circle",
+                "text": "S" if is_sell else "B",
+                "price": _optional_float(row["fill_price"]),
+                "size_usd": _optional_float(row["fill_size_usd"]),
+                "trade_side": row["side"],
+                "decision_time_hkt": _to_hkt_display(row["created_at_utc"]),
+                "decision_reason": row["reason"],
+                "signal": _live_order_signal_summary(row),
+                "signal_time_hkt": _to_hkt_display(row["created_at_utc"]),
+            }
+        )
+    return markers
+
+
+def _live_order_signal_summary(row: sqlite3.Row) -> str | None:
+    event_type = str(row["event_type"] or "")
+    event_value = _event_key_new_value(row["event_key"])
+    if event_value is not None:
+        if event_type.startswith("lowest"):
+            return f"signal low {_compact_temp(event_value)}"
+        if "actual" in event_type:
+            return f"actual signal {_compact_temp(event_value)}"
+        return f"signal high {_compact_temp(event_value)}"
+    return event_type.replace("_", " ") if event_type else None
+
+
 def _nearest_paper_decision_for_order(
     db: sqlite3.Connection, token_id: str, order: sqlite3.Row
 ) -> sqlite3.Row | None:
@@ -790,14 +889,23 @@ def _event_key_new_timestamp(event_key: str | None) -> str | None:
 
 
 def forecast_panel(
-    db: sqlite3.Connection, target_date: date, lead_days: int, token_side: str = "YES"
+    db: sqlite3.Connection,
+    target_date: date,
+    lead_days: int,
+    token_side: str = "YES",
+    marker_source: str = "paper",
 ) -> dict:
     target_text = target_date.isoformat()
     actual_min, actual_max, current = observation_series(db, target_text)
     hourly_forecast = hourly_forecast_series(db, target_text) if lead_days == 0 else []
     hourly_actual = hourly_actual_series(db, target_text) if lead_days == 0 else []
     top_tokens = top_token_price_series(
-        db, target_text, token_side, limit=None, include_trade_tokens=True
+        db,
+        target_text,
+        token_side,
+        limit=None,
+        include_trade_tokens=True,
+        marker_source=marker_source,
     )
     low_tokens = top_token_price_series(
         db,
@@ -806,6 +914,7 @@ def forecast_panel(
         limit=None,
         include_trade_tokens=True,
         market_kind="lowest",
+        marker_source=marker_source,
     )
     return {
         "lead_days": lead_days,
@@ -828,12 +937,17 @@ def forecast_panel(
 
 
 def forecast_panels(
-    db: sqlite3.Connection, today: date | None = None, token_side: str = "YES"
+    db: sqlite3.Connection,
+    today: date | None = None,
+    token_side: str = "YES",
+    marker_source: str = "paper",
 ) -> dict:
     base = today or datetime.now(HKT).date()
     return {
         "panels": [
-            forecast_panel(db, base + timedelta(days=lead), lead, token_side)
+            forecast_panel(
+                db, base + timedelta(days=lead), lead, token_side, marker_source
+            )
             for lead in (0, 1, 2)
         ],
         "available_dates": available_forecast_dates(db),
@@ -967,6 +1081,105 @@ def pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
     }
 
 
+def live_pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
+    orders = db.execute(
+        """
+        select created_at_utc, outcome_id, side, fill_price, fill_size_usd,
+               fill_shares, status
+        from live_orders
+        where status = 'filled'
+          and fill_price is not null
+          and fill_shares is not null
+          and created_at_utc is not null
+        order by created_at_utc asc, id asc
+        """
+    ).fetchall()
+    if not orders:
+        return {"realized": [], "unrealized": [], "total": []}
+
+    first_order_ts = _to_unix(orders[0]["created_at_utc"])
+    if first_order_ts is None:
+        return {"realized": [], "unrealized": [], "total": []}
+
+    held_outcomes = {row["outcome_id"] for row in orders}
+    placeholders = ",".join("?" for _ in held_outcomes)
+    snapshots = db.execute(
+        f"""
+        select fetched_at_utc, outcome_id, best_bid
+        from orderbook_snapshots
+        where best_bid is not null
+          and outcome_id in ({placeholders})
+        order by fetched_at_utc asc, id asc
+        """,
+        tuple(held_outcomes),
+    ).fetchall()
+
+    events: list[tuple[int, str, sqlite3.Row]] = []
+    for row in orders:
+        ts = _to_unix(row["created_at_utc"])
+        if ts is not None:
+            events.append((ts, "order", row))
+    for row in snapshots:
+        ts = _to_unix(row["fetched_at_utc"])
+        if ts is not None and ts >= first_order_ts:
+            events.append((ts, "book", row))
+    events.sort(key=lambda e: (e[0], 0 if e[1] == "order" else 1))
+
+    positions: dict[str, tuple[float, float]] = {}
+    bids: dict[str, float] = {}
+    realized = 0.0
+    realized_buckets: dict[int, float] = {}
+    unrealized_buckets: dict[int, float] = {}
+
+    def bucket_key(ts: int) -> int:
+        return ts - (ts % bucket_seconds)
+
+    def current_unrealized() -> float:
+        return sum(
+            shares * (bids[token] - avg)
+            for token, (shares, avg) in positions.items()
+            if shares > 0 and token in bids
+        )
+
+    for ts, kind, row in events:
+        if kind == "order":
+            token = row["outcome_id"]
+            side = row["side"] or ""
+            price = _optional_float(row["fill_price"]) or 0.0
+            usd = _optional_float(row["fill_size_usd"]) or 0.0
+            order_shares = _optional_float(row["fill_shares"]) or 0.0
+            shares, avg = positions.get(token, (0.0, 0.0))
+            if side.startswith("BUY") and order_shares > 0:
+                cost = usd if usd > 0 else order_shares * price
+                new_shares = shares + order_shares
+                new_avg = (
+                    (avg * shares + cost) / new_shares if new_shares > 0 else 0.0
+                )
+                positions[token] = (new_shares, new_avg)
+            elif side == "SELL":
+                sold_shares = min(order_shares, shares)
+                proceeds = usd if usd > 0 else sold_shares * price
+                realized += proceeds - sold_shares * avg
+                remaining = shares - sold_shares
+                positions[token] = (remaining, avg if remaining > 0 else 0.0)
+        elif kind == "book":
+            bids[row["outcome_id"]] = float(row["best_bid"])
+        bucket = bucket_key(ts)
+        realized_buckets[bucket] = realized
+        unrealized_buckets[bucket] = current_unrealized()
+
+    return {
+        "realized": [{"time": t, "value": v} for t, v in sorted(realized_buckets.items())],
+        "unrealized": [
+            {"time": t, "value": v} for t, v in sorted(unrealized_buckets.items())
+        ],
+        "total": [
+            {"time": t, "value": realized_buckets[t] + unrealized_buckets[t]}
+            for t in sorted(realized_buckets.keys())
+        ],
+    }
+
+
 def paper_trade_rows(db: sqlite3.Connection, view: str) -> dict:
     _ensure_paper_order_exclusions(db)
     view = view if view in {"open", "realized", "unrealized"} else "open"
@@ -1070,6 +1283,144 @@ def paper_trade_rows(db: sqlite3.Connection, view: str) -> dict:
             }
         )
     return {"view": view, "title": titles[view], "rows": result}
+
+
+def live_trade_rows(db: sqlite3.Connection, view: str) -> dict:
+    view = view if view in {"open", "realized", "unrealized"} else "open"
+    if view in {"open", "unrealized"}:
+        token_rows = db.execute(
+            "select outcome_id from live_positions where net_shares > 0"
+        ).fetchall()
+    else:
+        token_rows = db.execute(
+            """
+            select distinct outcome_id
+            from live_orders
+            where side = 'SELL' and status = 'filled'
+            """
+        ).fetchall()
+    tokens = [row["outcome_id"] for row in token_rows]
+    titles = {
+        "open": "Open Live Position Trades",
+        "realized": "Realized Live PnL Trades",
+        "unrealized": "Unrealized Live PnL Trades",
+    }
+    if not tokens:
+        return {"view": view, "title": titles[view], "rows": []}
+
+    placeholders = ",".join("?" for _ in tokens)
+    rows = db.execute(
+        f"""
+        select lo.id, lo.created_at_utc, lo.outcome_id, lo.side,
+               lo.limit_price, lo.fill_price, lo.fill_size_usd, lo.fill_shares,
+               lo.status, lo.reason,
+               o.label, m.target_date_hkt,
+               case
+                   when lo.outcome_id = o.yes_token_id then 'YES'
+                   when lo.outcome_id = o.no_token_id then 'NO'
+                   else null
+               end as token_side,
+               p.net_shares, p.avg_price, p.realized_pnl
+        from live_orders lo
+        left join outcomes o
+          on lo.outcome_id = o.yes_token_id or lo.outcome_id = o.no_token_id
+        left join markets m on m.id = o.market_id
+        left join live_positions p on p.outcome_id = lo.outcome_id
+        where lo.outcome_id in ({placeholders})
+          and lo.status = 'filled'
+          and (? != 'realized' or lo.side = 'SELL')
+        order by lo.created_at_utc desc, lo.id desc
+        """,
+        tuple(tokens) + (view,),
+    ).fetchall()
+    realized_by_order_id = _live_realized_pnl_by_sell_order_id(db, tokens)
+
+    result = []
+    for row in rows:
+        fill_price = _optional_float(row["fill_price"])
+        fill_size = _optional_float(row["fill_size_usd"]) or 0.0
+        shares = _optional_float(row["fill_shares"])
+        latest_bid = _latest_bid(db, row["outcome_id"])
+        net_shares = _optional_float(row["net_shares"]) or 0.0
+        avg_price = _optional_float(row["avg_price"]) or 0.0
+        unrealized = (
+            shares * (latest_bid - fill_price)
+            if row["side"] != "SELL"
+            and shares is not None
+            and fill_price is not None
+            and latest_bid is not None
+            and net_shares > 1e-8
+            else 0.0
+        )
+        realized_pnl = (
+            realized_by_order_id.get(int(row["id"]), 0.0)
+            if row["side"] == "SELL"
+            else _optional_float(row["realized_pnl"]) or 0.0
+        )
+        result.append(
+            {
+                "id": row["id"],
+                "created_at_utc": row["created_at_utc"],
+                "created_at_hkt": _to_hkt_display(row["created_at_utc"]),
+                "target_date_hkt": row["target_date_hkt"],
+                "label": row["label"] or row["outcome_id"],
+                "token_side": row["token_side"],
+                "action": row["side"],
+                "outcome_id": row["outcome_id"],
+                "limit_price": row["limit_price"],
+                "fill_price": fill_price,
+                "fill_size_usd": fill_size,
+                "shares": shares,
+                "net_shares": net_shares,
+                "avg_price": avg_price,
+                "latest_bid": latest_bid,
+                "realized_pnl": realized_pnl,
+                "unrealized_pnl": unrealized,
+                "reason": row["reason"],
+            }
+        )
+    return {"view": view, "title": titles[view], "rows": result}
+
+
+def _live_realized_pnl_by_sell_order_id(
+    db: sqlite3.Connection, tokens: list[str]
+) -> dict[int, float]:
+    if not tokens:
+        return {}
+    placeholders = ",".join("?" for _ in tokens)
+    orders = db.execute(
+        f"""
+        select id, outcome_id, side, fill_price, fill_size_usd, fill_shares
+        from live_orders
+        where outcome_id in ({placeholders})
+          and status = 'filled'
+          and fill_price is not null
+          and fill_shares is not null
+        order by created_at_utc asc, id asc
+        """,
+        tuple(tokens),
+    ).fetchall()
+    positions: dict[str, tuple[float, float]] = {}
+    realized_by_order_id: dict[int, float] = {}
+    for row in orders:
+        token = row["outcome_id"]
+        side = row["side"] or ""
+        price = _optional_float(row["fill_price"]) or 0.0
+        usd = _optional_float(row["fill_size_usd"]) or 0.0
+        order_shares = _optional_float(row["fill_shares"]) or 0.0
+        shares, avg = positions.get(token, (0.0, 0.0))
+        if side.startswith("BUY") and order_shares > 0:
+            cost = usd if usd > 0 else order_shares * price
+            new_shares = shares + order_shares
+            new_avg = (avg * shares + cost) / new_shares if new_shares > 0 else 0.0
+            positions[token] = (new_shares, new_avg)
+        elif side == "SELL":
+            sold_shares = min(order_shares, shares)
+            proceeds = usd if usd > 0 else sold_shares * price
+            realized_by_order_id[int(row["id"])] = proceeds - sold_shares * avg
+            remaining = shares - sold_shares
+            positions[token] = (remaining, avg if remaining > 0 else 0.0)
+    return realized_by_order_id
 
 
 def _realized_pnl_by_sell_order_id(
@@ -2445,73 +2796,25 @@ def _resolve_target_date(db: sqlite3.Connection, requested: str | None) -> str:
     return dates[-1] if dates else today
 
 
-LIVE_HTML = r"""<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>whenitrains live dashboard</title>
-<style>
-  body { margin: 0; background: #0f1419; color: #d7dde5; font: 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  header { padding: 18px 24px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: baseline; }
-  h1 { font-size: 18px; margin: 0; font-weight: 650; }
-  main { padding: 20px 24px; max-width: 1200px; margin: 0 auto; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
-  .card { border: 1px solid #30363d; border-radius: 6px; padding: 12px; background: #151b23; }
-  .label { color: #8b949e; font-size: 12px; }
-  .value { font-size: 22px; margin-top: 4px; }
-  table { width: 100%; border-collapse: collapse; background: #151b23; border: 1px solid #30363d; }
-  th, td { padding: 8px 10px; border-bottom: 1px solid #30363d; text-align: left; white-space: nowrap; }
-  th { color: #8b949e; font-weight: 600; font-size: 12px; }
-  a { color: #7cc7ff; text-decoration: none; }
-  .on { color: #ffb86b; }
-  .off { color: #7ee787; }
-</style>
-</head>
-<body>
-<header>
-  <h1>whenitrains · live desk</h1>
-  <a href="/">paper dashboard</a>
-</header>
-<main>
-  <section class="grid" id="stats"></section>
-  <h2>Recent live orders</h2>
-  <table>
-    <thead><tr><th>Time</th><th>Label</th><th>Side</th><th>Status</th><th>Limit</th><th>Fill</th><th>Size</th><th>Reason</th></tr></thead>
-    <tbody id="orders"></tbody>
-  </table>
-</main>
-<script>
-function money(v) { return v == null ? "n/a" : "$" + Number(v).toFixed(2); }
-function num(v) { return v == null ? "n/a" : Number(v).toFixed(4); }
-async function refresh() {
-  const res = await fetch("/api/live/stats", { cache: "no-store" });
-  const data = await res.json();
-  const stats = [
-    ["Open positions", data.open_positions],
-    ["Open exposure", money(data.open_exposure_usd)],
-    ["Realized PnL", money(data.realized_pnl)],
-    ["Orders", data.counts.orders],
-    ["Filled", data.counts.filled],
-    ["Submitted", data.counts.submitted],
-    ["Rejected", data.counts.rejected],
-    ["Blocked", data.counts.blocked],
-    ["Errors", data.counts.error],
-    ["Block entries", data.block_new_entries ? "ON" : "OFF"],
-    ["Exit on kill", data.cancel_open_orders_and_exit_positions ? "ON" : "OFF"],
-  ];
-  document.getElementById("stats").innerHTML = stats.map(([label, value]) =>
-    `<div class="card"><div class="label">${label}</div><div class="value ${value === "ON" ? "on" : value === "OFF" ? "off" : ""}">${value}</div></div>`
-  ).join("");
-  document.getElementById("orders").innerHTML = data.recent_orders.map(o =>
-    `<tr><td>${o.created_at_utc || ""}</td><td>${o.label || o.outcome_id}</td><td>${o.side}</td><td>${o.status}</td><td>${num(o.limit_price)}</td><td>${num(o.fill_price)}</td><td>${money(o.fill_size_usd || o.requested_size_usd)}</td><td>${o.reason || o.error || ""}</td></tr>`
-  ).join("");
-}
-refresh();
-setInterval(refresh, 5000);
-</script>
-</body>
-</html>"""
+LIVE_HTML = (
+    INDEX_HTML.replace(
+        "whenitrains paper dashboard", "whenitrains live dashboard"
+    )
+    .replace(
+        "⚠ Paper Trading Mode — simulated fills only, no real orders sent",
+        "LIVE TRADING — real orders",
+    )
+    .replace(
+        "whenitrains · HK temperature paper desk",
+        "whenitrains · HK temperature live desk",
+    )
+    .replace("Paper PnL ($)", "Live PnL ($)")
+    .replace("No filled paper trades for this view.", "No filled live trades for this view.")
+    .replace("/api/stats", "/api/live/stats")
+    .replace("/api/forecast-panels", "/api/live/forecast-panels")
+    .replace("/api/pnl", "/api/live/pnl")
+    .replace("/api/paper-trades", "/api/live/trades")
+)
 
 
 def _build_handler(db_path: Path):
@@ -2553,6 +2856,9 @@ def _build_handler(db_path: Path):
                     if path == "/api/stats":
                         self._send_json(dashboard_stats(db))
                         return
+                    if path == "/api/live/stats":
+                        self._send_json(live_dashboard_payload(db))
+                        return
                     if path == "/api/forecast-vs-actual":
                         requested = query.get("date", [None])[0]
                         target = _resolve_target_date(db, requested)
@@ -2574,15 +2880,27 @@ def _build_handler(db_path: Path):
                         token_side = query.get("side", ["YES"])[0]
                         self._send_json(forecast_panels(db, token_side=token_side))
                         return
+                    if path == "/api/live/forecast-panels":
+                        token_side = query.get("side", ["YES"])[0]
+                        self._send_json(
+                            forecast_panels(
+                                db, token_side=token_side, marker_source="live"
+                            )
+                        )
+                        return
                     if path == "/api/pnl":
                         self._send_json(pnl_series(db))
+                        return
+                    if path == "/api/live/pnl":
+                        self._send_json(live_pnl_series(db))
                         return
                     if path == "/api/paper-trades":
                         view = query.get("view", ["open"])[0]
                         self._send_json(paper_trade_rows(db, view))
                         return
-                    if path == "/api/live/stats":
-                        self._send_json(live_dashboard_stats(db))
+                    if path == "/api/live/trades":
+                        view = query.get("view", ["open"])[0]
+                        self._send_json(live_trade_rows(db, view))
                         return
                     self.send_error(404, "not found")
                 finally:

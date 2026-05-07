@@ -5,6 +5,7 @@ from pathlib import Path
 
 from whenitrains.dashboard_server import (
     INDEX_HTML,
+    LIVE_HTML,
     dashboard_stats,
     forecast_series,
     forecast_panels,
@@ -17,6 +18,9 @@ from whenitrains.dashboard_server import (
     top_token_price_series,
     top_yes_price_series,
     latest_decimal_forecast_stats,
+    live_dashboard_payload,
+    live_pnl_series,
+    live_trade_rows,
 )
 from whenitrains.hko import (
     HKT,
@@ -38,6 +42,7 @@ from whenitrains.storage import (
     store_paper_order_result,
     store_polymarket_event,
     store_raw_snapshot,
+    upsert_live_position,
 )
 
 
@@ -785,6 +790,63 @@ class DashboardServerTests(unittest.TestCase):
             self.assertEqual([row["id"] for row in trades["rows"]], [valid_id])
             self.assertAlmostEqual(pnl["unrealized"][-1]["value"], 100 / 0.30 * 0.10)
 
+    def test_live_dashboard_uses_live_orders_and_positions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.45, 10)],
+                    asks=[(0.47, 10)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            db.execute(
+                """
+                insert into live_orders (
+                    created_at_utc, outcome_id, label, side, action, clob_order_id,
+                    order_type, status, requested_size_usd, limit_price, fill_price,
+                    fill_size_usd, fill_shares, reason
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "2026-05-06T04:00:00+00:00",
+                    "yes25",
+                    "25°C",
+                    "BUY_YES",
+                    "BUY",
+                    "0xorder",
+                    "FAK",
+                    "filled",
+                    5.0,
+                    0.47,
+                    0.47,
+                    5.0,
+                    10.6383,
+                    "test live buy",
+                ),
+            )
+            db.commit()
+            upsert_live_position(db, "yes25", 10.6383, 0.47, 0.0)
+
+            stats = live_dashboard_payload(db)
+            pnl = live_pnl_series(db)
+            trades = live_trade_rows(db, "open")
+            panel = forecast_panels(db, today=date(2026, 5, 6), marker_source="live")[
+                "panels"
+            ][0]
+
+            self.assertEqual(stats["mode"], "live")
+            self.assertEqual(stats["open_positions"], 1)
+            self.assertEqual(stats["counts"]["buy_filled"], 1)
+            self.assertEqual(trades["rows"][0]["action"], "BUY_YES")
+            self.assertTrue(pnl["realized"])
+            self.assertEqual(panel["top_tokens"][0]["markers"][0]["text"], "B")
+
     def test_dashboard_html_has_delayed_crosshair_tooltip(self):
         self.assertIn('id="chart-tooltip"', INDEX_HTML)
         self.assertIn("Bot signal high", INDEX_HTML)
@@ -863,6 +925,12 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn('document.querySelectorAll(".chart-section")', INDEX_HTML)
         self.assertIn("Back to charts", INDEX_HTML)
         self.assertIn("<th>Time HKT</th>", INDEX_HTML)
+
+    def test_live_html_reuses_paper_dashboard_with_live_endpoints(self):
+        self.assertIn("LIVE TRADING — real orders", LIVE_HTML)
+        self.assertIn("whenitrains · HK temperature live desk", LIVE_HTML)
+        self.assertIn('/api/live/trades?view=${encodeURIComponent(view)}', LIVE_HTML)
+        self.assertIn('fetchJSON("/api/live/stats")', LIVE_HTML)
 
 
 def _seed_dashboard_db(path: Path):

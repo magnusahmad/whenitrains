@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, time as day_time, timezone
 from pathlib import Path
 
+from .config import Settings
 from .hko import HKT, HkoCurrentTemperature, HkoForecast, HkoObservation, OcfForecastSample
 from .polymarket import OrderBook, TemperatureMarket
 
@@ -1541,7 +1542,7 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
 
 
 def live_dashboard_stats(db: sqlite3.Connection) -> dict:
-    open_positions = list_open_live_positions(db)
+    open_position_rows = list_open_live_positions(db)
     open_exposure = live_total_open_exposure(db)
     realized_pnl = db.execute(
         "select coalesce(sum(realized_pnl), 0) from live_positions"
@@ -1564,6 +1565,49 @@ def live_dashboard_stats(db: sqlite3.Connection) -> dict:
             "select count(*) from live_orders where status = 'error'"
         ).fetchone()[0],
     }
+    positions = []
+    executable_unrealized_pnl = 0.0
+    missing_bid_count = 0
+    for pos in open_position_rows:
+        outcome = find_outcome_by_token(db, pos["outcome_id"])
+        bid_row = db.execute(
+            """
+            select best_bid
+            from orderbook_snapshots
+            where outcome_id = ? and best_bid is not null
+            order by fetched_at_utc desc, id desc
+            limit 1
+            """,
+            (pos["outcome_id"],),
+        ).fetchone()
+        latest_bid = float(bid_row["best_bid"]) if bid_row else None
+        shares = float(pos["net_shares"])
+        avg_price = float(pos["avg_price"])
+        cost_basis = shares * avg_price
+        current_value = shares * latest_bid if latest_bid is not None else None
+        unrealized = (
+            shares * (latest_bid - avg_price) if latest_bid is not None else None
+        )
+        if unrealized is None:
+            missing_bid_count += 1
+        else:
+            executable_unrealized_pnl += unrealized
+        token_side = None
+        if outcome is not None:
+            token_side = "YES" if pos["outcome_id"] == outcome["yes_token_id"] else "NO"
+        positions.append(
+            {
+                **dict(pos),
+                "label": outcome["label"] if outcome is not None else None,
+                "side": token_side,
+                "target_date_hkt": outcome["target_date_hkt"] if outcome is not None else None,
+                "slug": outcome["slug"] if outcome is not None else None,
+                "latest_bid": latest_bid,
+                "cost_basis_usd": cost_basis,
+                "current_value_usd": current_value,
+                "executable_unrealized_pnl": unrealized,
+            }
+        )
     recent_orders = [
         dict(row)
         for row in db.execute(
@@ -1580,14 +1624,23 @@ def live_dashboard_stats(db: sqlite3.Connection) -> dict:
     return {
         "mode": "live",
         "counts": counts,
-        "open_positions": len(open_positions),
+        "open_positions": len(open_position_rows),
         "open_exposure_usd": open_exposure,
         "realized_pnl": float(realized_pnl or 0.0),
+        "executable_unrealized_pnl": executable_unrealized_pnl,
+        "total_pnl": float(realized_pnl or 0.0) + executable_unrealized_pnl,
+        "missing_bid_positions": missing_bid_count,
+        "caps": {
+            "manual_order_usd": Settings.live_manual_order_cap_usd,
+            "scheduler_order_usd": Settings.live_scheduler_order_cap_usd,
+            "open_exposure_usd": Settings.live_total_open_exposure_cap_usd,
+            "daily_realized_loss_usd": Settings.live_daily_realized_loss_cap_usd,
+        },
         "block_new_entries": live_setting_enabled(db, "block_new_entries"),
         "cancel_open_orders_and_exit_positions": live_setting_enabled(
             db, "cancel_open_orders_and_exit_positions"
         ),
-        "positions": [dict(row) for row in open_positions],
+        "positions": positions,
         "recent_orders": recent_orders,
     }
 
