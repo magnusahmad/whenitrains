@@ -1,4 +1,5 @@
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -8,6 +9,7 @@ from whenitrains.live import (
     PolymarketClobClient,
     execute_live_buy,
     execute_live_sell,
+    _floor_decimal,
     load_live_config,
     preflight_live,
 )
@@ -73,6 +75,14 @@ class MarketMetadataClient:
     def get_market(self, token_id):
         self.market_token_id = token_id
         return {"minimum_tick_size": "0.01", "neg_risk": False}
+
+
+class V2MarketBuyClient(MarketMetadataClient):
+    def create_and_post_market_order(self, order_args, options, order_type):
+        self.order_args = order_args
+        self.order_options = options
+        self.order_type = order_type
+        return {"orderID": "order-1", "status": "matched"}
 
 
 class TimeoutPreflightClient:
@@ -176,6 +186,31 @@ class LiveTests(unittest.TestCase):
         self.assertTrue(options.neg_risk)
         self.assertEqual(client._client.tick_size_token_id, "token")
         self.assertEqual(client._client.neg_risk_token_id, "token")
+
+    def test_v2_market_buy_floors_usdc_amount_to_cents(self):
+        fake_module = types.SimpleNamespace(
+            MarketOrderArgs=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            PartialCreateOrderOptions=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            OrderType=types.SimpleNamespace(FAK="FAK"),
+            Side=types.SimpleNamespace(BUY="BUY", SELL="SELL"),
+        )
+        client = PolymarketClobClient.__new__(PolymarketClobClient)
+        client._client = V2MarketBuyClient()
+        client._signature_type = 3
+
+        with patch.dict("sys.modules", {"py_clob_client_v2": fake_module}):
+            response = client._post_v2_market_buy("token", 0.47, 5.009)
+
+        self.assertEqual(response["orderID"], "order-1")
+        self.assertEqual(client._client.order_args.amount, 5.0)
+        self.assertEqual(client._client.order_args.price, 0.47)
+        self.assertEqual(client._client.order_args.order_type, "FAK")
+        self.assertEqual(client._client.order_options.tick_size, "0.001")
+        self.assertTrue(client._client.order_options.neg_risk)
+
+    def test_floor_decimal_avoids_float_rounding_up(self):
+        self.assertEqual(_floor_decimal(5.009, "0.01"), 5.0)
+        self.assertEqual(_floor_decimal(5.999, "0.01"), 5.99)
 
     def test_preflight_returns_failure_instead_of_raising_on_timeout(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Protocol
@@ -252,10 +253,13 @@ class PolymarketClobClient:
         except ImportError as exc:
             raise LiveTradingError("py-clob-client-v2 order types unavailable") from exc
         options = self._order_options(token_id)
+        amount = _floor_decimal(size_usd, "0.01")
+        if amount <= 0:
+            raise LiveTradingError("buy amount rounds below one cent")
         response = self._client.create_and_post_market_order(
             order_args=MarketOrderArgs(
                 token_id=token_id,
-                amount=round(size_usd, 2),
+                amount=amount,
                 side=Side.BUY,
                 price=price,
                 order_type=OrderType.FAK,
@@ -305,6 +309,10 @@ class PolymarketClobClient:
             return bool(self._client.get_neg_risk(token_id))
         except Exception:
             return None
+
+
+def _floor_decimal(value: float, quantum: str) -> float:
+    return float(Decimal(str(value)).quantize(Decimal(quantum), rounding=ROUND_DOWN))
 
 
 def load_live_config(environ: dict[str, str] | None = None) -> LiveConfig:
