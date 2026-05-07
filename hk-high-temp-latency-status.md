@@ -1,6 +1,6 @@
 # HK High Temp Latency Status
 
-Last updated: 2026-05-06 HKT
+Last updated: 2026-05-07 HKT
 
 ## Current State
 
@@ -337,7 +337,9 @@ Paper-mode milestones 1-5 are complete as local building blocks, one-shot CLI co
 Scheduler defaults for the POC:
 
 - HKO AWS GIS actuals: `https://www.hko.gov.hk/wxinfo/awsgis/latestReadings_AWS1_v2.txt` is the priority D+0 actual source. Parse the `HKO` row and store decimal `TEMP`, `MAXTEMP`, and `MINTEMP` as current temperature, since-midnight max, and since-midnight min.
-- HKO AWS GIS actuals: poll every 5 minutes, plus 10-second cadence from 30 seconds before through 30 seconds after learned update minutes. Learned AWS update minutes are stored under `aws_gis_actual`.
+- HKO AWS GIS actuals: poll regular observed-reading slots every 5 minutes, with 10-second cadence from 30 seconds before through 30 seconds after each slot.
+- HKO AWS GIS actuals: also learn fetchable/publish minutes from HTTP `Last-Modified` under `aws_gis_actual`; these learned publish minutes are expanded into the matching 10-minute publish pattern and use a wider 2-minute buffer on each side, still at 10-second cadence. Example: a payload reading labeled `19:30` first became fetchable after the file publish around `19:38`, so the scheduler should cover both the `19:30` observed-reading window and the learned `:08/:18/:28/:38/:48/:58` publish pattern.
+- HKO AWS GIS actuals: a dedicated scheduler worker fetches current actuals with its own SQLite connections, so market discovery/orderbook refresh and paper/live decision work cannot delay actual ingestion inside active windows.
 - AWS GIS failures: `rhrread` may be stored as an observation fallback under `rhrread_actual`, but the scheduler must still log `aws_actual fetch failed` and must not mark the AWS window complete.
 - HKO since-midnight max/min CSV: source updates extremely regularly every 10 minutes, typically near `:00`, `:09`, `:19`, `:29`, `:38`, `:48`, and `:58`; poll from 10:00 to 20:00 HKT only.
 - HKO since-midnight max/min CSV: for each expected publication time, poll from T-1m through T+2m every 10 seconds as an observation/cross-check source. If the content hash changes, perform one confirmation fetch, then stop polling that window.
@@ -350,10 +352,11 @@ Scheduler defaults for the POC:
 - Polymarket/orderbooks: monitor target-day markets until the Hong Kong day ends.
 - Future-date forecast trading: market discovery now runs for every OCF forecast date at or after the current HKT date. Orderbook polling covers all discovered HK high-temperature outcomes. Forecast-change entries are evaluated per target date.
 - Current-day actual trading: AWS GIS actual-cross entries, actual invalidation, and hold-to-maturity logic remain current-day only. Future-date positions can still exit by forecast invalidation or risk rule, but are not invalidated by today's actual max.
-- Current scheduler implementation: `paper-scheduler` evaluates HKO source windows every loop, fetches HKO only when inside the agreed windows, refreshes all discovered HK high-temperature orderbooks on a separate 15-second cadence, discovers markets for all current/future OCF forecast dates on a 5-minute cadence, and runs the paper decision pass every loop.
+- Current scheduler implementation: `paper-scheduler` runs a dedicated AWS actual polling worker, evaluates other HKO source windows every loop, refreshes all discovered HK high-temperature orderbooks on a separate 15-second cadence, discovers markets for all current/future OCF forecast dates on a 5-minute cadence, and runs the paper decision pass every loop.
 - Scheduler output is quiet by default: orderbook-only/no-op ticks are suppressed. It prints when HKO is fetched, a signal/trade/missed-trade occurs, a non-noop decision is made, or AWS actual fetch fails.
 - Use `paper-scheduler --verbose` to restore noisy output: every scheduler tick plus all orderbook bid/ask lines.
 - HKO source polling respects the in-window 10-second cadence; unchanged HKO payloads no longer print every scheduler tick.
+- AWS actual windows may overlap; overlap is intentional and increases coverage without causing multiple AWS fetches in a single scheduler tick.
 - Individual Polymarket CLOB orderbook fetch failures are logged as warnings and do not crash the scheduler.
 - Polymarket market discovery validates resolution text against the expected HKO Daily Extract `Absolute Daily Max (deg. C)` wording. Date changes in the first sentence are allowed. Any missing/changed resolution logic prints `🚨🚨🚨 RESOLUTION RULES WARNING ... 🚨🚨🚨` and persists a critical `risk_events` row.
 - Forecast-change and actual-cross trading events are keyed and processed once. Repeated scheduler ticks no longer create duplicate missed buys for the same HKO event; duplicate open-position attempts are logged as ignored rather than missed.

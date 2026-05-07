@@ -80,6 +80,35 @@ class SchedulerTests(unittest.TestCase):
             ),
         )
 
+    def test_learned_aws_actual_fetchable_minute_repeats_every_ten_minutes(self):
+        learned = [time(19, 58)]
+        state = SchedulerState()
+
+        self.assertIn(
+            time(20, 8),
+            _due_aws_schedules(
+                datetime(2026, 5, 4, 20, 6, 0, tzinfo=HKT),
+                state,
+                learned,
+            ),
+        )
+        self.assertIn(
+            time(20, 8),
+            _due_aws_schedules(
+                datetime(2026, 5, 4, 20, 10, 0, tzinfo=HKT),
+                state,
+                learned,
+            ),
+        )
+        self.assertNotIn(
+            time(20, 8),
+            _due_aws_schedules(
+                datetime(2026, 5, 4, 20, 10, 1, tzinfo=HKT),
+                state,
+                learned,
+            ),
+        )
+
     def test_since_midnight_window_is_one_minute_before_to_two_minutes_after(self):
         before = datetime(2026, 5, 4, 10, 7, 59, tzinfo=HKT)
         start = datetime(2026, 5, 4, 10, 8, 0, tzinfo=HKT)

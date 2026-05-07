@@ -139,10 +139,12 @@ Polling strategy:
 
 - HKO AWS GIS actuals:
   - source is `latestReadings_AWS1_v2.txt`; parse only the `HKO` station row for the trading signal
-  - baseline poll cadence is every 5 minutes, matching the observed feed cadence
+  - baseline observed-reading poll schedule is every 5 minutes, matching the reading timestamps reported in the payload header
   - learned update minutes are stored as `aws_gis_actual` in `hko_source_update_minutes`
-  - near learned AWS update minutes, poll every 10 seconds from 30 seconds before through 30 seconds after the learned minute
-  - every newly observed AWS payload timestamp should be logged as an actual update time
+  - regular observed-reading minutes such as `:00`, `:05`, `:10`, and `:30` are polled aggressively every 10 seconds from 30 seconds before through 30 seconds after the scheduled minute
+  - learned fetchable/publish minutes from HTTP `Last-Modified`, for example a `19:38` file publish for a `19:30` reading, are expanded into the matching 10-minute publish pattern and polled every 10 seconds with a wider 2-minute buffer on each side
+  - AWS actual polling runs in a dedicated worker with its own SQLite connections so market discovery, orderbook refreshes, and trading decisions cannot delay actual ingestion inside active windows
+  - every newly observed AWS payload timestamp should be logged as an actual reading time; HTTP `Last-Modified` should also be logged as a learned fetchable/publish minute when it differs from the payload timestamp
   - if AWS GIS fetch or parsing fails, the scheduler may store an `rhrread` fallback row for observation under `rhrread_actual`, but it must still log `aws_actual fetch failed` and must not mark the AWS polling window complete
 - HKO since-midnight max/min CSV:
   - source updates extremely regularly every 10 minutes, typically near `:00`, `:09`, `:19`, `:29`, `:38`, `:48`, and `:58`
@@ -171,7 +173,7 @@ Polling strategy:
 - Final Daily Extract: since resolution uses finalized data only, final settlement audit is separate from since-midnight trading signals.
 - Resolution-rule guard: every discovered HK highest-temperature event must include the expected HKO Daily Extract resolution wording. The first sentence date may vary, but the remainder must match the expected `Absolute Daily Max (deg. C)`, finalized Daily Extract, one-decimal precision, and no-post-finalization-revisions language. If the normalized text is missing or changed, print a critical terminal warning and persist a `risk_events` row before any trading decisions rely on that market.
 
-Every HKO snapshot should produce a content hash. If the hash changes, the event bus emits `HKO_UPDATE_DETECTED`. OCF forecast event-time precedence is payload `LastModified`, then HTTP `Last-Modified`, then local fetch time. AWS GIS actual event-time precedence is the payload header `Latest readings recorded at ... Hong Kong Time`, then local fetch time.
+Every HKO snapshot should produce a content hash. If the hash changes, the event bus emits `HKO_UPDATE_DETECTED`. OCF forecast event-time precedence is payload `LastModified`, then HTTP `Last-Modified`, then local fetch time. AWS GIS actual event-time precedence for trading is the payload header `Latest readings recorded at ... Hong Kong Time`, then local fetch time. AWS GIS scheduler learning should also use HTTP `Last-Modified` and first-seen timing as publish/fetchability evidence, because the reading timestamp can precede public availability by several minutes.
 
 Rate-limit and failure backoff:
 

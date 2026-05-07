@@ -634,6 +634,10 @@ def main(argv: list[str] | None = None) -> int:
         except LiveTradingError as exc:
             print(f"live scheduler failed: {exc}")
             return 2
+        aws_actual_poll_fetch = lambda: _fetch_current_temperature_for_path(db_path)
+        aws_actual_poll_learned_times = lambda: _list_hko_update_times_for_path(
+            db_path, "aws_gis_actual"
+        )
         run_scheduled_paper_loop(
             db,
             fetch_since_midnight=lambda: _fetch_since_midnight(db),
@@ -652,6 +656,8 @@ def main(argv: list[str] | None = None) -> int:
                 today_hkt=today_hkt,
                 order_cap_usd=Settings.live_scheduler_order_cap_usd,
             ),
+            aws_actual_poll_fetch=aws_actual_poll_fetch,
+            aws_actual_poll_learned_times=aws_actual_poll_learned_times,
         )
         return 0
     if args.command == "live-kill-switch":
@@ -682,6 +688,10 @@ def main(argv: list[str] | None = None) -> int:
         if not args.no_startup_backup:
             backup_path = backup_sqlite_database(db_path)
             print(f"created startup backup {backup_path}")
+        aws_actual_poll_fetch = lambda: _fetch_current_temperature_for_path(db_path)
+        aws_actual_poll_learned_times = lambda: _list_hko_update_times_for_path(
+            db_path, "aws_gis_actual"
+        )
         run_scheduled_paper_loop(
             db,
             fetch_since_midnight=lambda: _fetch_since_midnight(db),
@@ -694,6 +704,8 @@ def main(argv: list[str] | None = None) -> int:
             base_sleep_seconds=args.sleep,
             max_ticks=args.ticks,
             quiet=not args.verbose,
+            aws_actual_poll_fetch=aws_actual_poll_fetch,
+            aws_actual_poll_learned_times=aws_actual_poll_learned_times,
         )
         return 0
     if args.command == "sample-ocf":
@@ -762,6 +774,22 @@ def _fetch_hko(db) -> None:
     _fetch_since_midnight(db)
     _fetch_bulletin(db)
     _fetch_current_temperature(db)
+
+
+def _fetch_current_temperature_for_path(db_path: Path) -> str:
+    worker_db = connect(db_path)
+    try:
+        return _fetch_current_temperature(worker_db)
+    finally:
+        worker_db.close()
+
+
+def _list_hko_update_times_for_path(db_path: Path, source: str):
+    worker_db = connect(db_path)
+    try:
+        return list_hko_update_times(worker_db, source)
+    finally:
+        worker_db.close()
 
 
 def _fetch_since_midnight(db) -> str:
