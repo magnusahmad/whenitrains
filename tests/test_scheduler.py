@@ -30,13 +30,15 @@ class SchedulerTests(unittest.TestCase):
         self.assertIn("bulletin", _due_sources(end))
         self.assertNotIn("bulletin", _due_sources(after))
 
-    def test_aws_actual_window_is_every_five_minutes_for_ten_seconds(self):
-        before = datetime(2026, 5, 4, 0, 4, 59, tzinfo=HKT)
+    def test_aws_actual_window_is_every_five_minutes_with_thirty_second_catchup(self):
+        before = datetime(2026, 5, 4, 0, 4, 29, tzinfo=HKT)
+        early = datetime(2026, 5, 4, 0, 4, 30, tzinfo=HKT)
         start = datetime(2026, 5, 4, 0, 5, 0, tzinfo=HKT)
-        end = datetime(2026, 5, 4, 0, 5, 10, tzinfo=HKT)
-        after = datetime(2026, 5, 4, 0, 5, 11, tzinfo=HKT)
+        end = datetime(2026, 5, 4, 0, 5, 30, tzinfo=HKT)
+        after = datetime(2026, 5, 4, 0, 5, 31, tzinfo=HKT)
 
         self.assertNotIn("aws_actual", _due_sources(before))
+        self.assertIn("aws_actual", _due_sources(early))
         self.assertIn("aws_actual", _due_sources(start))
         self.assertIn("aws_actual", _due_sources(end))
         self.assertNotIn("aws_actual", _due_sources(after))
@@ -203,7 +205,7 @@ class SchedulerTests(unittest.TestCase):
         self.assertTrue(actions.fetch_current_temperature)
 
     def test_current_temperature_not_due_outside_aws_actual_windows(self):
-        now = datetime(2026, 5, 4, 12, 6, 0, tzinfo=HKT)
+        now = datetime(2026, 5, 4, 12, 5, 31, tzinfo=HKT)
         state = SchedulerState(
             last_market_discovery_at=now,
             last_orderbook_fetch_at=now,
@@ -277,6 +279,31 @@ class SchedulerTests(unittest.TestCase):
             text = output.getvalue()
             self.assertIn("paper-scheduler started", text)
             self.assertIn("since_midnight fetch failed: OSError: dns failed", text)
+
+    def test_quiet_scheduler_logs_current_temperature_fetch_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            output = StringIO()
+            now = datetime(2026, 5, 4, 10, 5, 0, tzinfo=HKT)
+            with redirect_stdout(output):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: "",
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=lambda target: None,
+                    fetch_current_temperature=lambda: (_ for _ in ()).throw(
+                        OSError("aws unavailable")
+                    ),
+                    max_ticks=1,
+                    now_fn=lambda: now,
+                    quiet=True,
+                )
+
+            text = output.getvalue()
+            self.assertIn("paper-scheduler started", text)
+            self.assertIn("aws_actual fetch failed: OSError: aws unavailable", text)
 
 
 def _due_sources(now):

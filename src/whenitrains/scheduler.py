@@ -196,6 +196,8 @@ def run_scheduled_paper_loop(
                     notes.append(_source_changed_note("aws_actual", payload))
             elif not quiet:
                 print("; ".join(temp_notes))
+            else:
+                notes.extend(temp_notes)
         tick_fn = run_tick_fn or run_paper_tick
         result = tick_fn(db, today_hkt=now.date())
         if should_print_scheduled_tick(notes, result, quiet):
@@ -277,10 +279,10 @@ def _aws_actual_plans(
                 source="aws_actual",
                 scheduled_at=scheduled,
                 window_start=max(
-                    scheduled - timedelta(seconds=30 if learned else 0), day_start
+                    scheduled - timedelta(seconds=30), day_start
                 ),
                 window_end=min(
-                    scheduled + timedelta(seconds=30 if learned else 10), day_end
+                    scheduled + timedelta(seconds=30), day_end
                 ),
                 cadence_seconds=10,
             )
