@@ -74,7 +74,7 @@ class LiveClobClient(Protocol):
     def allowance_ok(self) -> bool:
         ...
 
-    def buy_fak(self, token_id: str, price: float, shares: float) -> dict:
+    def buy_fak(self, token_id: str, price: float, size_usd: float) -> dict:
         ...
 
     def sell_fak(self, token_id: str, price: float, shares: float) -> dict:
@@ -159,8 +159,10 @@ class PolymarketClobClient:
         except TypeError:
             return BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
 
-    def buy_fak(self, token_id: str, price: float, shares: float) -> dict:
-        return self._post_order(token_id, price, shares, "BUY")
+    def buy_fak(self, token_id: str, price: float, size_usd: float) -> dict:
+        if self._uses_v2_client:
+            return self._post_v2_market_buy(token_id, price, size_usd)
+        return self._post_order(token_id, price, size_usd, "BUY")
 
     def sell_fak(self, token_id: str, price: float, shares: float) -> dict:
         return self._post_order(token_id, price, shares, "SELL")
@@ -230,6 +232,33 @@ class PolymarketClobClient:
                 price=price,
                 size=size,
                 side=Side.BUY if side == "BUY" else Side.SELL,
+            ),
+            options=PartialCreateOrderOptions(
+                tick_size=options.tick_size,
+                neg_risk=options.neg_risk,
+            ),
+            order_type=OrderType.FAK,
+        )
+        return dict(response)
+
+    def _post_v2_market_buy(self, token_id: str, price: float, size_usd: float) -> dict:
+        try:
+            from py_clob_client_v2 import (
+                MarketOrderArgs,
+                OrderType,
+                PartialCreateOrderOptions,
+                Side,
+            )
+        except ImportError as exc:
+            raise LiveTradingError("py-clob-client-v2 order types unavailable") from exc
+        options = self._order_options(token_id)
+        response = self._client.create_and_post_market_order(
+            order_args=MarketOrderArgs(
+                token_id=token_id,
+                amount=round(size_usd, 2),
+                side=Side.BUY,
+                price=price,
+                order_type=OrderType.FAK,
             ),
             options=PartialCreateOrderOptions(
                 tick_size=options.tick_size,
@@ -494,7 +523,7 @@ def execute_live_buy(
 
     request = {"token_id": token_id, "price": quote.limit_price, "size_usd": quote.estimated_cost_usd, "order_type": "FAK"}
     try:
-        response = client.buy_fak(token_id, float(quote.limit_price), quote.estimated_shares)
+        response = client.buy_fak(token_id, float(quote.limit_price), quote.estimated_cost_usd)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
         store_risk_event(db, "live_order_submit_failed", "critical", {"token_id": token_id, "error": str(exc)})
