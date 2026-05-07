@@ -1365,18 +1365,6 @@ INDEX_HTML = r"""<!doctype html>
   }
   .trade-bubble.buy { background: #26a69a; }
   .trade-bubble.sell { background: #ef5350; color: #ffffff; }
-  .signal-bubble {
-    position: absolute;
-    z-index: 9;
-    width: 6px;
-    height: 6px;
-    border-radius: 999px;
-    transform: translate(-50%, -50%);
-    pointer-events: auto;
-    box-shadow: 0 0 0 1px #0d1117, 0 1px 4px rgba(0, 0, 0, 0.35);
-  }
-  .signal-bubble.high { background: #f0b400; }
-  .signal-bubble.low { background: #38bdf8; }
   .empty-overlay {
     color: var(--muted);
     font-size: 13px;
@@ -1612,10 +1600,14 @@ const lowCharts = {
 const d0ForecastSeries = charts[0].chart.addLineSeries({
   color: "#f0b400", lineWidth: 2, lineType: LightweightCharts.LineType.WithSteps,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
+  pointMarkersVisible: true,
+  pointMarkersRadius: 2,
 });
 const l0ForecastLowSeries = lowCharts[0].chart.addLineSeries({
   color: "#38bdf8", lineWidth: 2, lineType: LightweightCharts.LineType.WithSteps,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
+  pointMarkersVisible: true,
+  pointMarkersRadius: 2,
 });
 const d0HourlyForecastSeries = charts[0].chart.addLineSeries({
   color: "#c084fc", lineWidth: 1, lineType: LightweightCharts.LineType.WithSteps,
@@ -2089,8 +2081,6 @@ function markerOnlySeries(chart, markers) {
 function renderTradeBubbles(lead) {
   renderTradeBubblesForChart(charts, `d${lead}-chart`, lead);
   renderTradeBubblesForChart(lowCharts, `l${lead}-chart`, lead);
-  renderSignalBubblesForChart(signalDescriptorsForChart(charts, lead), `d${lead}-chart`, charts[lead].chart);
-  renderSignalBubblesForChart(signalDescriptorsForChart(lowCharts, lead), `l${lead}-chart`, lowCharts[lead].chart);
 }
 
 function renderTradeBubblesForChart(chartMap, containerId, lead) {
@@ -2115,42 +2105,6 @@ function renderTradeBubblesForChart(chartMap, containerId, lead) {
       const signalText = marker.signal ? ` · ${marker.signal}` : "";
       const signalTimeText = marker.signal_time_hkt ? ` · signal ${marker.signal_time_hkt} HKT` : "";
       bubble.title = `${descriptor.name} ${marker.text} @ ${marker.price.toFixed(3)}${marker.size_usd != null ? " · $" + marker.size_usd.toFixed(2) : ""}${signalText}${signalTimeText}`;
-      bubble.style.left = `${x}px`;
-      bubble.style.top = `${y}px`;
-      container.appendChild(bubble);
-    }
-  }
-}
-
-function signalDescriptorsForChart(chartMap, lead) {
-  if (chartMap === charts && lead === 0) {
-    return [{ key: "forecastHigh", series: d0ForecastSeries, name: "Bot signal high", color: "#f0b400", kind: "high", data: d0ForecastData }];
-  }
-  if (chartMap === lowCharts && lead === 0) {
-    return [{ key: "forecastLow", series: l0ForecastLowSeries, name: "Bot signal low", color: "#38bdf8", kind: "low", data: l0ForecastLowData }];
-  }
-  return chartMap[lead].series
-    .filter(s => s.kind === "temp" && s.name && s.name.startsWith("Bot signal"))
-    .map(s => ({ ...s, kind: s.name.includes("low") ? "low" : "high" }));
-}
-
-function renderSignalBubblesForChart(descriptors, containerId, chart) {
-  const container = document.getElementById(containerId);
-  if (!container) return;
-  container.querySelectorAll(".signal-bubble").forEach(el => el.remove());
-  const width = container.clientWidth;
-  const height = container.clientHeight;
-  for (const descriptor of descriptors || []) {
-    if (descriptor.key && !isSeriesVisible(descriptor.key)) continue;
-    if (!descriptor.series || !descriptor.series.priceToCoordinate) continue;
-    for (const point of descriptor.data || []) {
-      if (point == null || point.time == null || point.value == null) continue;
-      const x = chart.timeScale().timeToCoordinate(point.time);
-      const y = descriptor.series.priceToCoordinate(point.value);
-      if (x == null || y == null || x < 0 || y < 0 || x > width || y > height) continue;
-      const bubble = document.createElement("div");
-      bubble.className = `signal-bubble ${descriptor.kind === "low" ? "low" : "high"}`;
-      bubble.title = `${descriptor.name} ${formatValue(point.value, "temp")} · ${fmtHKT(point.time)}`;
       bubble.style.left = `${x}px`;
       bubble.style.top = `${y}px`;
       container.appendChild(bubble);
@@ -2358,6 +2312,8 @@ function renderLeadPanel(panel) {
     lineType: LightweightCharts.LineType.WithSteps,
     priceFormat: { type: "price", precision: 1, minMove: 0.1 },
     priceScaleId: "right",
+    pointMarkersVisible: true,
+    pointMarkersRadius: 2,
   });
   forecast.setData(panel.forecast);
   charts[lead].series.push({ series: forecast, name: "Bot signal high", color: "#f0b400", kind: "temp", data: panel.forecast });
@@ -2367,6 +2323,8 @@ function renderLeadPanel(panel) {
     lineType: LightweightCharts.LineType.WithSteps,
     priceFormat: { type: "price", precision: 1, minMove: 0.1 },
     priceScaleId: "right",
+    pointMarkersVisible: true,
+    pointMarkersRadius: 2,
   });
   forecastLow.setData(panel.forecast_low || []);
   lowCharts[lead].series.push({ series: forecastLow, name: "Bot signal low", color: "#38bdf8", kind: "temp", data: panel.forecast_low || [] });
