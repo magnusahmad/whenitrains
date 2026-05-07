@@ -626,9 +626,31 @@ def execute_live_sell(
         )
         return LiveExecutionResult("rejected", token_id, "SELL", None, 0, 0, "no bid depth")
     shares = float(pos["net_shares"])
-    request = {"token_id": token_id, "price": best_bid, "shares": shares, "order_type": "FAK"}
+    submitted_shares = _floor_decimal(shares, "0.01")
+    if submitted_shares <= 0:
+        store_live_order(
+            db,
+            outcome_id=token_id,
+            label=label,
+            side="SELL",
+            action="SELL",
+            status="rejected",
+            reason="position rounds below sellable share precision",
+            event_type=event_type,
+            event_key=event_key,
+        )
+        return LiveExecutionResult(
+            "rejected",
+            token_id,
+            "SELL",
+            None,
+            0,
+            0,
+            "position rounds below sellable share precision",
+        )
+    request = {"token_id": token_id, "price": best_bid, "shares": submitted_shares, "order_type": "FAK"}
     try:
-        response = client.sell_fak(token_id, best_bid, shares)
+        response = client.sell_fak(token_id, best_bid, submitted_shares)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
         store_risk_event(db, "live_order_submit_failed", "critical", {"token_id": token_id, "error": str(exc)})
@@ -657,7 +679,7 @@ def execute_live_sell(
         status="submitted",
         clob_order_id=clob_order_id,
         order_type="FAK",
-        requested_shares=shares,
+        requested_shares=submitted_shares,
         limit_price=best_bid,
         reason=reason,
         raw_request=request,
@@ -666,7 +688,9 @@ def execute_live_sell(
         event_key=event_key,
     )
     reconcile = client.reconcile_order(clob_order_id, token_id)
-    fill_price, proceeds, sold = _fill_values(reconcile, best_bid, shares * best_bid, shares)
+    fill_price, proceeds, sold = _fill_values(
+        reconcile, best_bid, submitted_shares * best_bid, submitted_shares
+    )
     status = "filled" if sold > 0 else "submitted"
     update_live_order_reconcile(
         db,

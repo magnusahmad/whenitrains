@@ -21,6 +21,7 @@ from whenitrains.storage import (
     live_total_open_exposure,
     migrate,
     set_live_setting,
+    upsert_live_position,
 )
 
 
@@ -301,6 +302,27 @@ class LiveTests(unittest.TestCase):
             pos = get_live_position(db, "yes25")
             self.assertAlmostEqual(pos["net_shares"], 0.0)
             self.assertGreater(pos["realized_pnl"], 0)
+
+    def test_execute_live_sell_floors_submitted_shares_to_exchange_precision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            upsert_live_position(db, "yes25", 12.345, 0.40, 0.0)
+            client = FakeClobClient()
+
+            result = execute_live_sell(
+                db,
+                client,
+                token_id="yes25",
+                bids=[(0.45, 100)],
+                reason="test live sell",
+                label="25C",
+            )
+
+            self.assertEqual(result.status, "filled")
+            self.assertEqual(client.sells, [("yes25", 0.45, 12.34)])
+            pos = get_live_position(db, "yes25")
+            self.assertAlmostEqual(pos["net_shares"], 0.005)
 
     def test_live_dashboard_stats_separate_from_paper(self):
         with tempfile.TemporaryDirectory() as tmp:
