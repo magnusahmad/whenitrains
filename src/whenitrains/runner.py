@@ -32,8 +32,8 @@ from .storage import (
     list_tradeable_forecast_dates,
     observed_min_decreases,
     observed_max_increases,
-    store_paper_decision,
     store_signal,
+    store_trading_decision,
 )
 
 
@@ -136,6 +136,9 @@ def _process_forecast_change_entries_kind(
 ) -> RunnerResult:
     noun = "forecast high" if market_kind == "highest" else "forecast low"
     event_type = "forecast_change" if market_kind == "highest" else "lowest_forecast_change"
+    stale_reason = _ocf_forecast_stale_reason(db, target_date.isoformat())
+    if stale_reason is not None:
+        return RunnerResult(notes=(f"{noun} skipped: {stale_reason}",))
     latest = _effective_forecast_rows(
         db,
         target_date.isoformat(),
@@ -175,7 +178,7 @@ def _process_forecast_change_entries_kind(
     for row in rows:
         prices = latest_two_orderbook_prices(db, row["yes_token_id"])
         if len(prices) < 2 or prices[0]["best_ask"] is None or prices[1]["best_ask"] is None:
-            store_paper_decision(
+            store_trading_decision(
                 db,
                 event_type,
                 row["yes_token_id"],
@@ -282,6 +285,14 @@ def _process_forecast_value_entry_kind(
                 f"> max={Settings.forecast_value_max_lead_days}",
             )
         )
+    stale_reason = _ocf_forecast_stale_reason(db, target_date.isoformat())
+    if stale_reason is not None:
+        return RunnerResult(
+            notes=(
+                f"{label} skipped: "
+                f"{target_date.isoformat()} {stale_reason}",
+            )
+        )
     latest = _latest_effective_forecast_value(db, target_date.isoformat(), market_kind)
     if latest is None:
         return RunnerResult(
@@ -308,7 +319,7 @@ def _process_forecast_value_entry_kind(
         )
     guard_reason = _forecast_value_guard_reason(db, target_date.isoformat(), forecast_row, "YES")
     if guard_reason is not None:
-        store_paper_decision(
+        store_trading_decision(
             db,
             event_type,
             forecast_row["yes_token_id"],
@@ -492,7 +503,7 @@ def process_forecast_position_exits(
         try:
             book = latest_orderbook(db, token_id)
         except ValueError:
-            store_paper_decision(
+            store_trading_decision(
                 db,
                 "forecast_exit",
                 token_id,
@@ -520,7 +531,7 @@ def process_forecast_position_exits(
         else:
             result = execute_paper_sell(db, token_id, book.bids, reason)
         if result.status == "filled":
-            store_paper_decision(
+            store_trading_decision(
                 db,
                 "forecast_exit",
                 token_id,
@@ -535,7 +546,7 @@ def process_forecast_position_exits(
             sells_filled += 1
             notes.append(f"sold forecast-invalidated {outcome['label']} {side}")
         else:
-            store_paper_decision(
+            store_trading_decision(
                 db,
                 "forecast_exit",
                 token_id,
@@ -672,7 +683,7 @@ def _process_actual_min_transition(
         signals += 1
         prices = latest_two_orderbook_prices(db, token_id)
         if len(prices) < 2 or prices[0]["best_ask"] is None or prices[1]["best_ask"] is None:
-            store_paper_decision(
+            store_trading_decision(
                 db,
                 "actual_low_cross",
                 token_id,
@@ -688,8 +699,19 @@ def _process_actual_min_transition(
             continue
         prior = float(prices[1]["best_ask"])
         current = float(prices[0]["best_ask"])
-        if current - prior >= Settings.stale_price_min_move:
-            store_paper_decision(
+        is_invalidated_bucket = side == "NO"
+        stale_move_threshold = (
+            None
+            if is_invalidated_bucket
+            else Settings.actual_new_bucket_stale_price_min_move
+        )
+        max_buy_price = (
+            Settings.actual_invalidated_bucket_max_entry_price
+            if is_invalidated_bucket
+            else Settings.actual_new_bucket_max_entry_price
+        )
+        if stale_move_threshold is not None and current - prior >= stale_move_threshold:
+            store_trading_decision(
                 db,
                 "actual_low_cross",
                 token_id,
@@ -721,7 +743,11 @@ def _process_actual_min_transition(
             ),
         )
         filled = _execute_candidate_buy(
-            db, candidate, event_type="actual_low_cross", event_key=event_key
+            db,
+            candidate,
+            event_type="actual_low_cross",
+            event_key=event_key,
+            max_buy_price=max_buy_price,
         )
         if filled is True:
             buys_filled += 1
@@ -776,7 +802,7 @@ def _process_actual_transition(
             )
         signals += 1
         if _actual_cross_guarded_by_forecast(predicate, side, forecast_max):
-            store_paper_decision(
+            store_trading_decision(
                 db,
                 "actual_cross",
                 token_id,
@@ -792,7 +818,7 @@ def _process_actual_transition(
             continue
         prices = latest_two_orderbook_prices(db, token_id)
         if len(prices) < 2 or prices[0]["best_ask"] is None or prices[1]["best_ask"] is None:
-            store_paper_decision(
+            store_trading_decision(
                 db,
                 "actual_cross",
                 token_id,
@@ -808,8 +834,14 @@ def _process_actual_transition(
             continue
         prior = float(prices[1]["best_ask"])
         current = float(prices[0]["best_ask"])
-        if current - prior >= Settings.stale_price_min_move:
-            store_paper_decision(
+        is_invalidated_bucket = side == "NO"
+        stale_move_threshold = (
+            None
+            if is_invalidated_bucket
+            else Settings.actual_new_bucket_stale_price_min_move
+        )
+        if stale_move_threshold is not None and current - prior >= stale_move_threshold:
+            store_trading_decision(
                 db,
                 "actual_cross",
                 token_id,
@@ -846,14 +878,13 @@ def _process_actual_transition(
             ),
         )
         max_buy_price = (
-            Settings.peak_hour_actual_cross_max_yes_ask
-            if side == "YES"
-            and _actual_cross_is_peak_hour_sure_bet(
+            Settings.actual_invalidated_bucket_max_entry_price
+            if is_invalidated_bucket
+            else Settings.peak_hour_actual_cross_max_yes_ask
+            if _actual_cross_is_peak_hour_sure_bet(
                 db, today_hkt.isoformat(), new["observed_at_hkt"], new_max
             )
-            else Settings.forecast_change_max_entry_price
-            if side == "YES"
-            else None
+            else Settings.actual_new_bucket_max_entry_price
         )
         filled = _execute_candidate_buy(
             db,
@@ -961,7 +992,7 @@ def process_open_position_exits(
         token_id = pos["outcome_id"]
         outcome = find_outcome_by_token(db, token_id)
         if outcome is None:
-            store_paper_decision(
+            store_trading_decision(
                 db, "exit_check", token_id, None, None, "SELL", "missed", "unknown token"
             )
             sells_missed += 1
@@ -993,7 +1024,7 @@ def process_open_position_exits(
         try:
             book = latest_orderbook(db, token_id)
         except ValueError:
-            store_paper_decision(
+            store_trading_decision(
                 db,
                 "exit_check",
                 token_id,
@@ -1006,7 +1037,7 @@ def process_open_position_exits(
             sells_missed += 1
             continue
         if book.best_bid is None:
-            store_paper_decision(
+            store_trading_decision(
                 db,
                 "exit_check",
                 token_id,
@@ -1038,7 +1069,7 @@ def process_open_position_exits(
         else:
             result = execute_paper_sell(db, token_id, book.bids, reason)
         if result.status == "filled":
-            store_paper_decision(
+            store_trading_decision(
                 db,
                 "exit_check",
                 token_id,
@@ -1055,7 +1086,7 @@ def process_open_position_exits(
             )
             sells_filled += 1
         else:
-            store_paper_decision(
+            store_trading_decision(
                 db,
                 "exit_check",
                 token_id,
@@ -1208,6 +1239,40 @@ def _latest_two_effective_forecast_highs(
     db: sqlite3.Connection, forecast_date_hkt: str
 ) -> list[dict]:
     return _effective_forecast_rows(db, forecast_date_hkt, limit=2)
+
+
+def _ocf_forecast_stale_reason(
+    db: sqlite3.Connection,
+    forecast_date_hkt: str,
+    now_utc: datetime | None = None,
+) -> str | None:
+    row = db.execute(
+        """
+        select fetched_at_utc
+        from ocf_forecast_samples
+        where forecast_date_hkt = ?
+        order by fetched_at_utc desc, id desc
+        limit 1
+        """,
+        (forecast_date_hkt,),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        fetched_at = datetime.fromisoformat(row["fetched_at_utc"])
+    except (TypeError, ValueError):
+        return "OCF forecast sample has invalid fetch timestamp"
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+    now = now_utc or datetime.now(timezone.utc)
+    age_minutes = (now - fetched_at.astimezone(timezone.utc)).total_seconds() / 60
+    if age_minutes >= Settings.ocf_forecast_freshness_max_age_minutes:
+        return (
+            "OCF forecast sample stale "
+            f"age={age_minutes:.1f}m >= "
+            f"{Settings.ocf_forecast_freshness_max_age_minutes:.0f}m"
+        )
+    return None
 
 
 def _effective_forecast_rows(
@@ -1446,7 +1511,7 @@ def _execute_candidate_buy(
         else None
     )
     if forecast_guard_reason is not None:
-        store_paper_decision(
+        store_trading_decision(
             db,
             event_type,
             token_id,
@@ -1468,7 +1533,7 @@ def _execute_candidate_buy(
             (token_id,),
         ).fetchone()
     if existing and not allow_existing_position:
-        store_paper_decision(
+        store_trading_decision(
             db,
             event_type,
             token_id,
@@ -1483,7 +1548,7 @@ def _execute_candidate_buy(
     base_order_cap = _LIVE_ORDER_CAP_USD if _LIVE_ORDER_CAP_USD is not None else Settings.max_order_usd
     requested_size = base_order_cap if size_usd is None else min(size_usd, base_order_cap)
     if requested_size <= Settings.dust_order_epsilon_usd:
-        store_paper_decision(
+        store_trading_decision(
             db,
             event_type,
             token_id,
@@ -1498,7 +1563,7 @@ def _execute_candidate_buy(
     try:
         book = latest_orderbook(db, token_id)
     except ValueError:
-        store_paper_decision(
+        store_trading_decision(
             db,
             event_type,
             token_id,
@@ -1510,8 +1575,9 @@ def _execute_candidate_buy(
             event_key=event_key,
         )
         return False
-    if book.best_ask is not None and book.best_ask > Settings.max_entry_price:
-        store_paper_decision(
+    hard_entry_cap = max(Settings.max_entry_price, max_buy_price or 0)
+    if book.best_ask is not None and book.best_ask > hard_entry_cap:
+        store_trading_decision(
             db,
             event_type,
             token_id,
@@ -1522,7 +1588,7 @@ def _execute_candidate_buy(
             "entry price above max",
             {
                 "best_ask": book.best_ask,
-                "max_entry_price": Settings.max_entry_price,
+                "max_entry_price": hard_entry_cap,
                 "impact": candidate.impact.value,
                 "prior_yes_ask": candidate.prior_yes_ask,
                 "current_yes_ask": candidate.current_yes_ask,
@@ -1567,7 +1633,7 @@ def _execute_candidate_buy(
             min_fill_usd=min(requested_size, Settings.min_entry_fill_usd),
         )
     status = "filled" if result.status == "filled" else "missed"
-    store_paper_decision(
+    store_trading_decision(
         db,
         event_type,
         token_id,
@@ -1657,11 +1723,9 @@ def _hourly_forecast_invalidation_reason(
     if predicate.value_c is None:
         return None
     market_kind = _temperature_market_kind_for_row(outcome)
-    relevant = (
-        []
-        if _has_aws_actual_observations(db, date.fromisoformat(outcome["target_date_hkt"]))
-        else _latest_hourly_forecast_values(db, outcome["target_date_hkt"])
-    )
+    if _ocf_forecast_stale_reason(db, outcome["target_date_hkt"]) is not None:
+        return None
+    relevant = _latest_hourly_forecast_values(db, outcome["target_date_hkt"])
     latest = (
         None
         if relevant
@@ -1791,7 +1855,7 @@ def _mark_event_processed(
     reason: str,
     details: dict,
 ) -> None:
-    store_paper_decision(
+    store_trading_decision(
         db,
         event_type,
         None,

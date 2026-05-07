@@ -525,7 +525,9 @@ Rule:
   - directional YES-ask movement with the event is `<= 0.20`, and
   - executable entry ask for the token being bought is `<= 0.70` for D+0/D+1, or `<= 0.20` for D+2 or later.
 - This is intended to avoid buying after the market has already repriced, e.g. `23°C YES` at `0.93` after a downside forecast update.
-- Actual-cross trades remain governed by the broader near-settlement guard and are not constrained by the forecast-change `0.70` cap.
+- Actual-cross new-bucket YES trades use ask movement `< 0.10` and an entry cap of `0.70`, except the high-market peak-hour sure-bet path may buy up to `0.80`.
+- Actual-cross invalidated-bucket trades buy the now-settled side up to `0.99` without requiring stale-price movement lag.
+- Forecast-value, forecast-change, and forecast-based exits now skip when the latest OCF sample for the target date is at least `90` minutes old.
 
 Implementation:
 

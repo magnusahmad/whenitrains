@@ -494,6 +494,95 @@ class RunnerTests(unittest.TestCase):
             }
             self.assertEqual(bought, {"25°C NO", "26°C or higher YES"})
 
+    def test_actual_cross_buys_invalidated_no_even_after_price_moves(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m25",
+                        label="25°C",
+                        predicate=parse_outcome_label("25°C"),
+                        yes_token_id="yes25",
+                        no_token_id="no25",
+                    )
+                ],
+            )
+            _store_forecast(db, 25, "2026-05-04T00:45:00+08:00")
+            _store_observation(db, 25.0)
+            _store_observation(db, 26.0)
+            _store_book_pair(db, "no25", old_ask=0.30, new_ask=0.95)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 1)
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'actual_cross' and action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "filled")
+
+    def test_actual_cross_new_yes_uses_ten_cent_move_and_seventy_cent_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m30",
+                        label="30°C or higher",
+                        predicate=parse_outcome_label("30°C or higher"),
+                        yes_token_id="yes30",
+                        no_token_id="no30",
+                    )
+                ],
+            )
+            _store_forecast(db, 29, "2026-05-04T00:45:00+08:00")
+            _store_observation(db, 29.0)
+            _store_observation(db, 30.0)
+            _store_book_pair(db, "yes30", old_ask=0.60, new_ask=0.69)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 1)
+
+    def test_actual_cross_new_yes_rejects_above_seventy_cents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m30",
+                        label="30°C or higher",
+                        predicate=parse_outcome_label("30°C or higher"),
+                        yes_token_id="yes30",
+                        no_token_id="no30",
+                    )
+                ],
+            )
+            _store_forecast(db, 29, "2026-05-04T00:45:00+08:00")
+            _store_observation(db, 29.0)
+            _store_observation(db, 30.0)
+            _store_book_pair(db, "yes30", old_ask=0.62, new_ask=0.71)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(result.buys_missed, 1)
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'actual_cross' and action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "missed")
+            self.assertEqual(decision["reason"], "no ask depth at or below max price")
+
     def test_actual_cross_does_not_buy_no_for_already_invalidated_lower_bucket(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(

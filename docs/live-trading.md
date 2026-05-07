@@ -25,7 +25,7 @@ The current strategy path already has a useful execution boundary:
 
 - `runner._execute_candidate_buy(...)` validates duplicate positions, remaining budget, max entry price, slippage cap, and minimum fill before calling `execute_paper_buy(...)`.
 - Exit logic calls `execute_paper_sell(...)` after strategy and invalidation checks decide that a position should be sold.
-- Paper execution persists to `paper_orders`, `paper_positions`, and `paper_decisions`.
+- Paper execution persists to `paper_orders` and `paper_positions`; strategy decisions are written through the shared trading-decision path. The current compatibility table is still named `paper_decisions`, but the terminology should be treated as strategy-decision logging so paper and live execution can run side by side.
 
 Live trading should preserve those decision paths and replace the execution adapter. Strategy code should not know Polymarket SDK details.
 

@@ -1149,7 +1149,7 @@ def store_signal(
     db.commit()
 
 
-def store_paper_decision(
+def store_trading_decision(
     db: sqlite3.Connection,
     event_type: str,
     outcome_id: str | None,
@@ -1181,6 +1181,32 @@ def store_paper_decision(
         ),
     )
     db.commit()
+
+
+def store_paper_decision(
+    db: sqlite3.Connection,
+    event_type: str,
+    outcome_id: str | None,
+    label: str | None,
+    side: str | None,
+    action: str,
+    status: str,
+    reason: str,
+    details: dict | None = None,
+    event_key: str | None = None,
+) -> None:
+    store_trading_decision(
+        db,
+        event_type,
+        outcome_id,
+        label,
+        side,
+        action,
+        status,
+        reason,
+        details,
+        event_key,
+    )
 
 
 def has_processed_event(db: sqlite3.Connection, event_key: str) -> bool:

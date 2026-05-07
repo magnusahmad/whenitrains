@@ -9,12 +9,16 @@ class Settings:
     max_order_usd: float = 250.0
     max_daily_drawdown_usd: float = 4000.0
     stale_price_min_move: float = 0.02
+    actual_new_bucket_stale_price_min_move: float = 0.10
+    actual_new_bucket_max_entry_price: float = 0.70
+    actual_invalidated_bucket_max_entry_price: float = 0.99
     take_profit_move: float = 0.20
     max_hold_minutes: float = 10.0
     max_entry_price: float = 0.98
     forecast_change_max_price_move: float = 0.20
     forecast_change_max_entry_price: float = 0.70
     forecast_change_d2_max_entry_price: float = 0.20
+    ocf_forecast_freshness_max_age_minutes: float = 90.0
     max_entry_limit_slippage: float = 0.05
     min_entry_fill_usd: float = 25.0
     dust_order_epsilon_usd: float = 0.01
