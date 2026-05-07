@@ -21,8 +21,15 @@ not exists (
 def _to_unix(iso_ts: str | None) -> int | None:
     if not iso_ts:
         return None
+    text = str(iso_ts)
+    if len(text) == 14 and text.isdigit():
+        try:
+            compact = datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=HKT)
+            return int(compact.timestamp())
+        except ValueError:
+            return None
     try:
-        return int(datetime.fromisoformat(iso_ts).timestamp())
+        return int(datetime.fromisoformat(text).timestamp())
     except ValueError:
         return None
 
@@ -30,10 +37,23 @@ def _to_unix(iso_ts: str | None) -> int | None:
 def _to_hkt_display(iso_ts: str | None) -> str | None:
     if not iso_ts:
         return None
+    text = str(iso_ts)
+    if len(text) == 14 and text.isdigit():
+        try:
+            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=HKT).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
     try:
-        return datetime.fromisoformat(iso_ts).astimezone(HKT).strftime("%Y-%m-%d %H:%M:%S")
+        return datetime.fromisoformat(text).astimezone(HKT).strftime("%Y-%m-%d %H:%M:%S")
     except ValueError:
-        return iso_ts
+        return text
+
+
+def _compact_temp(value) -> str:
+    number = _optional_float(value)
+    if number is None:
+        return "n/a"
+    return f"{number:g}°C"
 
 
 def _ensure_paper_order_exclusions(db: sqlite3.Connection) -> None:
@@ -603,6 +623,7 @@ def paper_order_markers(db: sqlite3.Connection, token_id: str) -> list[dict]:
             if row["simulated_fill_size_usd"] is None
             else float(row["simulated_fill_size_usd"])
         )
+        decision = _nearest_paper_decision_for_order(db, token_id, row)
         markers.append(
             {
                 "time": ts,
@@ -613,9 +634,134 @@ def paper_order_markers(db: sqlite3.Connection, token_id: str) -> list[dict]:
                 "price": fill_price,
                 "size_usd": fill_size,
                 "trade_side": row["side"],
+                "decision_time_hkt": (
+                    _to_hkt_display(decision["created_at_utc"]) if decision else None
+                ),
+                "decision_reason": decision["reason"] if decision else None,
+                "signal": _decision_signal_summary(decision) if decision else None,
+                "signal_time_hkt": _decision_signal_time_hkt(decision) if decision else None,
             }
         )
     return markers
+
+
+def _nearest_paper_decision_for_order(
+    db: sqlite3.Connection, token_id: str, order: sqlite3.Row
+) -> sqlite3.Row | None:
+    action = "SELL" if order["side"] == "SELL" else "BUY"
+    token_side = _token_side_for_order(db, token_id, order["side"])
+    if token_side is None:
+        return None
+    row = db.execute(
+        """
+        select created_at_utc, event_type, reason, details_json, event_key,
+               abs((julianday(created_at_utc) - julianday(?)) * 86400.0) as delta_seconds
+        from paper_decisions
+        where outcome_id = ?
+          and action = ?
+          and status = 'filled'
+          and side = ?
+          and created_at_utc is not null
+        order by delta_seconds asc, id desc
+        limit 1
+        """,
+        (order["created_at_utc"], token_id, action, token_side),
+    ).fetchone()
+    if row is None or float(row["delta_seconds"]) > 10:
+        return None
+    return row
+
+
+def _token_side_for_order(
+    db: sqlite3.Connection, token_id: str, order_side: str | None
+) -> str | None:
+    if order_side == "BUY_YES":
+        return "YES"
+    if order_side == "BUY_NO":
+        return "NO"
+    row = db.execute(
+        """
+        select yes_token_id, no_token_id
+        from outcomes
+        where yes_token_id = ? or no_token_id = ?
+        limit 1
+        """,
+        (token_id, token_id),
+    ).fetchone()
+    if row is None:
+        return None
+    if token_id == row["yes_token_id"]:
+        return "YES"
+    if token_id == row["no_token_id"]:
+        return "NO"
+    return None
+
+
+def _decision_details(decision: sqlite3.Row | None) -> dict:
+    if decision is None:
+        return {}
+    try:
+        parsed = json.loads(decision["details_json"] or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _decision_signal_summary(decision: sqlite3.Row | None) -> str | None:
+    if decision is None:
+        return None
+    details = _decision_details(decision)
+    if details.get("forecast_highest") is not None:
+        return f"signal high {_compact_temp(details['forecast_highest'])}"
+    if details.get("forecast_lowest") is not None:
+        return f"signal low {_compact_temp(details['forecast_lowest'])}"
+    if details.get("forecast_max") is not None:
+        return f"signal high {_compact_temp(details['forecast_max'])}"
+    if details.get("forecast_min") is not None:
+        return f"signal low {_compact_temp(details['forecast_min'])}"
+    if details.get("current_value") is not None:
+        return f"actual signal {_compact_temp(details['current_value'])}"
+    event_value = _event_key_new_value(decision["event_key"])
+    if event_value is not None:
+        label = "signal"
+        if str(decision["event_type"] or "").startswith("lowest"):
+            label = "signal low"
+        elif "forecast" in str(decision["event_type"] or ""):
+            label = "signal high"
+        return f"{label} {_compact_temp(event_value)}"
+    return None
+
+
+def _decision_signal_time_hkt(decision: sqlite3.Row | None) -> str | None:
+    if decision is None:
+        return None
+    timestamp = _event_key_new_timestamp(decision["event_key"])
+    if timestamp is None:
+        return _to_hkt_display(decision["created_at_utc"])
+    return timestamp
+
+
+def _event_key_new_value(event_key: str | None) -> float | None:
+    if not event_key or "->" not in event_key:
+        return None
+    right = event_key.split("->", 1)[1]
+    value_text = right.rsplit(":", 1)[-1]
+    return _optional_float(value_text)
+
+
+def _event_key_new_timestamp(event_key: str | None) -> str | None:
+    if not event_key or "->" not in event_key:
+        return None
+    right = event_key.split("->", 1)[1]
+    if ":" not in right:
+        return None
+    timestamp_text = right.split(":", 1)[0]
+    if len(timestamp_text) != 14 or not timestamp_text.isdigit():
+        return None
+    return (
+        f"{timestamp_text[0:4]}-{timestamp_text[4:6]}-{timestamp_text[6:8]} "
+        f"{timestamp_text[8:10]}:{timestamp_text[10:12]}:{timestamp_text[12:14]}"
+    )
 
 
 def forecast_panel(
@@ -1194,6 +1340,26 @@ INDEX_HTML = r"""<!doctype html>
   }
   .trade-bubble.buy { background: #26a69a; }
   .trade-bubble.sell { background: #ef5350; color: #ffffff; }
+  .signal-bubble {
+    position: absolute;
+    z-index: 9;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #0d1117;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1;
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+    box-shadow: 0 0 0 2px #0d1117, 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  .signal-bubble.high { background: #f0b400; }
+  .signal-bubble.low { background: #38bdf8; }
   .empty-overlay {
     color: var(--muted);
     font-size: 13px;
@@ -1280,8 +1446,8 @@ INDEX_HTML = r"""<!doctype html>
     <h2>
       <span><span class="lead-label">D+0 High</span><span id="d0-date"></span></span>
       <span class="legend">
-        <button type="button" data-series-key="forecastHigh"><i style="background:#f0b400"></i>OCF forecast high</button>
-        <button type="button" data-series-key="hourlyForecast"><i style="background:#c084fc"></i>Hourly forecast</button>
+        <button type="button" data-series-key="forecastHigh"><i style="background:#f0b400"></i>Bot signal high</button>
+        <button type="button" data-series-key="hourlyForecast"><i style="background:#c084fc"></i>Latest hourly forecast</button>
         <button type="button" data-series-key="hourlyActual"><i style="background:#f97316"></i>Hourly actual</button>
         <button type="button" data-series-key="actualMax"><i style="background:#26a69a"></i>Since-midnight max</button>
         <button type="button" data-series-key="currentTemp"><i style="background:#5b9bd5"></i>Current temperature</button>
@@ -1295,8 +1461,8 @@ INDEX_HTML = r"""<!doctype html>
     <h2>
       <span><span class="lead-label">D+0 Low</span><span id="l0-date"></span></span>
       <span class="legend">
-        <button type="button" data-series-key="forecastLow"><i style="background:#38bdf8"></i>OCF forecast low</button>
-        <button type="button" data-series-key="lowHourlyForecast"><i style="background:#c084fc"></i>Hourly forecast</button>
+        <button type="button" data-series-key="forecastLow"><i style="background:#38bdf8"></i>Bot signal low</button>
+        <button type="button" data-series-key="lowHourlyForecast"><i style="background:#c084fc"></i>Latest hourly forecast</button>
         <button type="button" data-series-key="lowHourlyActual"><i style="background:#f97316"></i>Hourly actual</button>
         <button type="button" data-series-key="actualMin"><i style="background:#2dd4bf"></i>Since-midnight min</button>
         <button type="button" data-series-key="lowCurrentTemp"><i style="background:#5b9bd5"></i>Current temperature</button>
@@ -1370,6 +1536,14 @@ const fmtHKT = (sec) => {
   return iso.slice(0, 10) + " " + iso.slice(11, 16) + " HKT";
 };
 const fmtHKTTime = (time) => fmtHKT(time).slice(11, 16);
+const fmtHKTUpdate = (value) => {
+  const text = String(value || "");
+  if (/^\d{14}$/.test(text)) {
+    return `${text.slice(0,4)}-${text.slice(4,6)}-${text.slice(6,8)} ${text.slice(8,10)}:${text.slice(10,12)}:${text.slice(12,14)} HKT`;
+  }
+  if (text.length >= 16) return text.slice(0, 16).replace("T", " ") + " HKT";
+  return "n/a";
+};
 
 function makeChart(elementId, dualAxis=false) {
   const chart = LightweightCharts.createChart(document.getElementById(elementId), {
@@ -1562,6 +1736,10 @@ function fmtMoney(v) {
   const sign = v < 0 ? "-" : "";
   return sign + "$" + Math.abs(v).toFixed(2);
 }
+function fmtTemp(v) {
+  if (v == null || isNaN(v)) return "n/a";
+  return Number(v).toString() + "°C";
+}
 function classForMoney(v) {
   if (v == null || isNaN(v) || v === 0) return "";
   return v > 0 ? "pos" : "neg";
@@ -1572,11 +1750,11 @@ function renderStats(stats) {
   const o = stats.latest_observation || {};
   const cells = [
     { label: "Forecast date",       value: f.forecast_date_hkt || "n/a" },
-    { label: "Forecast high (°C)",  value: f.forecast_max_c != null ? f.forecast_max_c.toFixed(1) : "n/a" },
-    { label: "Forecast low (°C)",   value: f.forecast_min_c != null ? f.forecast_min_c.toFixed(1) : "n/a" },
-    { label: "Forecast updated",    value: f.update_time ? f.update_time.slice(11,16) + " HKT" : "n/a" },
-    { label: "Since-midnight min",  value: o.since_midnight_min_c != null ? o.since_midnight_min_c.toFixed(1) + "°C" : (o.temperature_c != null ? o.temperature_c.toFixed(1) + "°C (cur)" : "n/a") },
-    { label: "Since-midnight max",  value: o.since_midnight_max_c != null ? o.since_midnight_max_c.toFixed(1) + "°C" : (o.temperature_c != null ? o.temperature_c.toFixed(1) + "°C (cur)" : "n/a") },
+    { label: "Bot signal high",     value: fmtTemp(f.forecast_max_c) },
+    { label: "Bot signal low",      value: fmtTemp(f.forecast_min_c) },
+    { label: "Forecast updated",    value: fmtHKTUpdate(f.update_time) },
+    { label: "Since-midnight min",  value: o.since_midnight_min_c != null ? fmtTemp(o.since_midnight_min_c) : (o.temperature_c != null ? fmtTemp(o.temperature_c) + " (cur)" : "n/a") },
+    { label: "Since-midnight max",  value: o.since_midnight_max_c != null ? fmtTemp(o.since_midnight_max_c) : (o.temperature_c != null ? fmtTemp(o.temperature_c) + " (cur)" : "n/a") },
     { label: "Observed at",         value: o.observed_at_hkt ? o.observed_at_hkt.slice(11,16) + " HKT" : "n/a" },
     { label: "Open positions",      value: String(stats.open_positions ?? 0), drilldown: "open" },
     { label: "Realized PnL",        value: fmtMoney(stats.realized_pnl), cls: classForMoney(stats.realized_pnl), drilldown: "realized" },
@@ -1893,6 +2071,8 @@ function markerOnlySeries(chart, markers) {
 function renderTradeBubbles(lead) {
   renderTradeBubblesForChart(charts, `d${lead}-chart`, lead);
   renderTradeBubblesForChart(lowCharts, `l${lead}-chart`, lead);
+  renderSignalBubblesForChart(signalDescriptorsForChart(charts, lead), `d${lead}-chart`, charts[lead].chart);
+  renderSignalBubblesForChart(signalDescriptorsForChart(lowCharts, lead), `l${lead}-chart`, lowCharts[lead].chart);
 }
 
 function renderTradeBubblesForChart(chartMap, containerId, lead) {
@@ -1914,7 +2094,46 @@ function renderTradeBubblesForChart(chartMap, containerId, lead) {
       const bubble = document.createElement("div");
       bubble.className = `trade-bubble ${isSell ? "sell" : "buy"}`;
       bubble.textContent = marker.text;
-      bubble.title = `${descriptor.name} ${marker.text} @ ${marker.price.toFixed(3)}${marker.size_usd != null ? " · $" + marker.size_usd.toFixed(2) : ""}`;
+      const signalText = marker.signal ? ` · ${marker.signal}` : "";
+      const signalTimeText = marker.signal_time_hkt ? ` · signal ${marker.signal_time_hkt} HKT` : "";
+      bubble.title = `${descriptor.name} ${marker.text} @ ${marker.price.toFixed(3)}${marker.size_usd != null ? " · $" + marker.size_usd.toFixed(2) : ""}${signalText}${signalTimeText}`;
+      bubble.style.left = `${x}px`;
+      bubble.style.top = `${y}px`;
+      container.appendChild(bubble);
+    }
+  }
+}
+
+function signalDescriptorsForChart(chartMap, lead) {
+  if (chartMap === charts && lead === 0) {
+    return [{ key: "forecastHigh", series: d0ForecastSeries, name: "Bot signal high", color: "#f0b400", kind: "high", data: d0ForecastData }];
+  }
+  if (chartMap === lowCharts && lead === 0) {
+    return [{ key: "forecastLow", series: l0ForecastLowSeries, name: "Bot signal low", color: "#38bdf8", kind: "low", data: l0ForecastLowData }];
+  }
+  return chartMap[lead].series
+    .filter(s => s.kind === "temp" && s.name && s.name.startsWith("Bot signal"))
+    .map(s => ({ ...s, kind: s.name.includes("low") ? "low" : "high" }));
+}
+
+function renderSignalBubblesForChart(descriptors, containerId, chart) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.querySelectorAll(".signal-bubble").forEach(el => el.remove());
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+  for (const descriptor of descriptors || []) {
+    if (descriptor.key && !isSeriesVisible(descriptor.key)) continue;
+    if (!descriptor.series || !descriptor.series.priceToCoordinate) continue;
+    for (const point of descriptor.data || []) {
+      if (point == null || point.time == null || point.value == null) continue;
+      const x = chart.timeScale().timeToCoordinate(point.time);
+      const y = descriptor.series.priceToCoordinate(point.value);
+      if (x == null || y == null || x < 0 || y < 0 || x > width || y > height) continue;
+      const bubble = document.createElement("div");
+      bubble.className = `signal-bubble ${descriptor.kind === "low" ? "low" : "high"}`;
+      bubble.textContent = descriptor.kind === "low" ? "L" : "H";
+      bubble.title = `${descriptor.name} ${formatValue(point.value, "temp")} · ${fmtHKT(point.time)}`;
       bubble.style.left = `${x}px`;
       bubble.style.top = `${y}px`;
       container.appendChild(bubble);
@@ -1940,9 +2159,15 @@ function showTooltip(state) {
     ...state.values.map(v =>
       `<div class="row"><span class="name"><i style="background:${v.color}"></i>${v.name}</span><span>${formatValue(v.value, v.kind)}</span></div>`
     ),
-    ...state.trades.map(t =>
-      `<div class="row"><span class="name"><i style="background:${t.color}"></i>${t.name}</span><span>${t.text} @ ${t.price.toFixed(3)}${t.size_usd != null ? " · $" + t.size_usd.toFixed(2) : ""}</span></div>`
-    ),
+    ...state.trades.map(t => {
+      const tradeBits = [
+        `${t.text} @ ${t.price.toFixed(3)}`,
+        t.size_usd != null ? "$" + t.size_usd.toFixed(2) : null,
+        t.signal || null,
+        t.signal_time_hkt ? "signal " + t.signal_time_hkt + " HKT" : null,
+      ].filter(Boolean).join(" · ");
+      return `<div class="row"><span class="name"><i style="background:${t.color}"></i>${t.name}</span><span>${tradeBits}</span></div>`;
+    }),
   ].join("");
   tooltip.style.display = "block";
   const pad = 14;
@@ -2000,8 +2225,8 @@ function attachTooltip(chart, containerId, descriptorsFn) {
 }
 
 attachTooltip(charts[0].chart, "d0-chart", () => [
-  { name: "OCF forecast high", color: "#f0b400", kind: "temp", data: visibleData("forecastHigh", d0ForecastData) },
-  { name: "Hourly forecast", color: "#c084fc", kind: "temp", data: visibleData("hourlyForecast", d0HourlyForecastData) },
+  { name: "Bot signal high", color: "#f0b400", kind: "temp", data: visibleData("forecastHigh", d0ForecastData) },
+  { name: "Latest hourly forecast", color: "#c084fc", kind: "temp", data: visibleData("hourlyForecast", d0HourlyForecastData) },
   { name: "Hourly actual", color: "#f97316", kind: "temp", data: visibleData("hourlyActual", d0HourlyActualData) },
   { name: "Actual - forecast", color: "#94a3b8", kind: "delta", data: visibleData("hourlyActual", d0HourlyErrorData) },
   { name: "Since-midnight max", color: "#26a69a", kind: "temp", data: visibleData("actualMax", d0ActualMaxData) },
@@ -2009,8 +2234,8 @@ attachTooltip(charts[0].chart, "d0-chart", () => [
   ...charts[0].series.map(s => ({ name: s.name, color: s.color, kind: "odds", data: visibleData(s.key, s.data), markers: isSeriesVisible(s.key) ? s.markers : [] })),
 ]);
 attachTooltip(lowCharts[0].chart, "l0-chart", () => [
-  { name: "OCF forecast low", color: "#38bdf8", kind: "temp", data: visibleData("forecastLow", l0ForecastLowData) },
-  { name: "Hourly forecast", color: "#c084fc", kind: "temp", data: visibleData("lowHourlyForecast", l0HourlyForecastData) },
+  { name: "Bot signal low", color: "#38bdf8", kind: "temp", data: visibleData("forecastLow", l0ForecastLowData) },
+  { name: "Latest hourly forecast", color: "#c084fc", kind: "temp", data: visibleData("lowHourlyForecast", l0HourlyForecastData) },
   { name: "Hourly actual", color: "#f97316", kind: "temp", data: visibleData("lowHourlyActual", l0HourlyActualData) },
   { name: "Since-midnight min", color: "#2dd4bf", kind: "temp", data: visibleData("actualMin", l0ActualMinData) },
   { name: "Current temperature", color: "#5b9bd5", kind: "temp", data: visibleData("lowCurrentTemp", l0CurrentTempData) },
@@ -2118,7 +2343,7 @@ function renderLeadPanel(panel) {
     priceScaleId: "right",
   });
   forecast.setData(panel.forecast);
-  charts[lead].series.push({ series: forecast, name: "OCF forecast high", color: "#f0b400", kind: "temp", data: panel.forecast });
+  charts[lead].series.push({ series: forecast, name: "Bot signal high", color: "#f0b400", kind: "temp", data: panel.forecast });
   const forecastLow = lowCharts[lead].chart.addLineSeries({
     color: "#38bdf8",
     lineWidth: 2,
@@ -2127,10 +2352,10 @@ function renderLeadPanel(panel) {
     priceScaleId: "right",
   });
   forecastLow.setData(panel.forecast_low || []);
-  lowCharts[lead].series.push({ series: forecastLow, name: "OCF forecast low", color: "#38bdf8", kind: "temp", data: panel.forecast_low || [] });
+  lowCharts[lead].series.push({ series: forecastLow, name: "Bot signal low", color: "#38bdf8", kind: "temp", data: panel.forecast_low || [] });
 
   const legend = [
-    `<span><i style="background:#f0b400"></i>OCF forecast high (right °C)</span>`
+    `<span><i style="background:#f0b400"></i>Bot signal high (right °C)</span>`
   ];
   panel.top_tokens.forEach((item, idx) => {
     const color = oddsColors[idx % oddsColors.length];
@@ -2150,7 +2375,7 @@ function renderLeadPanel(panel) {
   document.getElementById(`d${lead}-legend`).innerHTML = legend.join("");
   bindSeriesToggleButtons(document.getElementById(`d${lead}-legend`));
   const lowLegend = [
-    `<span><i style="background:#38bdf8"></i>OCF forecast low (right °C)</span>`
+    `<span><i style="background:#38bdf8"></i>Bot signal low (right °C)</span>`
   ];
   (panel.low_tokens || []).forEach((item, idx) => {
     const color = oddsColors[idx % oddsColors.length];

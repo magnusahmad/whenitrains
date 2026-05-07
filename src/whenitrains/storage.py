@@ -451,8 +451,8 @@ def store_hko_current_temperature(
             observation.observed_at_hkt.isoformat(),
             observation.station,
             observation.temperature_c,
-            None,
-            None,
+            observation.since_midnight_min_c,
+            observation.since_midnight_max_c,
             json.dumps(observation.raw),
         ),
     )
@@ -1245,10 +1245,10 @@ def latest_two_observed_maxes(db: sqlite3.Connection) -> list[sqlite3.Row]:
     return list(
         db.execute(
             """
-            select observed_at_hkt, since_midnight_max_c, max(id) as id
+            select observed_at_hkt, since_midnight_max_c, station, max(id) as id
             from hko_current_observations
             where since_midnight_max_c is not null
-            group by observed_at_hkt, since_midnight_max_c
+            group by observed_at_hkt, since_midnight_max_c, station
             order by id desc
             limit 2
             """
@@ -1267,11 +1267,11 @@ def observed_max_increases(
     rows = list(
         db.execute(
             f"""
-            select observed_at_hkt, since_midnight_max_c, max(id) as id
+            select observed_at_hkt, since_midnight_max_c, station, max(id) as id
             from hko_current_observations
             where since_midnight_max_c is not null
               {date_filter}
-            group by observed_at_hkt, since_midnight_max_c
+            group by observed_at_hkt, since_midnight_max_c, station
             order by id asc
             """,
             params,
@@ -1295,11 +1295,11 @@ def observed_min_decreases(
     rows = list(
         db.execute(
             f"""
-            select observed_at_hkt, since_midnight_min_c, max(id) as id
+            select observed_at_hkt, since_midnight_min_c, station, max(id) as id
             from hko_current_observations
             where since_midnight_min_c is not null
               {date_filter}
-            group by observed_at_hkt, since_midnight_min_c
+            group by observed_at_hkt, since_midnight_min_c, station
             order by id asc
             """,
             params,
@@ -1317,11 +1317,11 @@ def latest_observed_max_for_date(
 ) -> sqlite3.Row | None:
     return db.execute(
         """
-        select observed_at_hkt, since_midnight_max_c, max(id) as id
+        select observed_at_hkt, since_midnight_max_c, station, max(id) as id
         from hko_current_observations
         where since_midnight_max_c is not null
           and substr(observed_at_hkt, 1, 10) = ?
-        group by observed_at_hkt, since_midnight_max_c
+        group by observed_at_hkt, since_midnight_max_c, station
         order by id desc
         limit 1
         """,
@@ -1334,11 +1334,11 @@ def latest_observed_min_for_date(
 ) -> sqlite3.Row | None:
     return db.execute(
         """
-        select observed_at_hkt, since_midnight_min_c, max(id) as id
+        select observed_at_hkt, since_midnight_min_c, station, max(id) as id
         from hko_current_observations
         where since_midnight_min_c is not null
           and substr(observed_at_hkt, 1, 10) = ?
-        group by observed_at_hkt, since_midnight_min_c
+        group by observed_at_hkt, since_midnight_min_c, station
         order by id desc
         limit 1
         """,

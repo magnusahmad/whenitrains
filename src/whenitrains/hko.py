@@ -22,6 +22,7 @@ FLW_PAGE_URL = "https://www.weather.gov.hk/en/wxinfo/currwx/flw.htm"
 FLW_PAGE_DATA_URL = "https://www.weather.gov.hk/json/DYN_DAT_MINDS_FLW.json"
 OCF_STATION_URL = "https://maps.weather.gov.hk/ocf/dat/HKO.xml"
 OCF_TEXT_URL = "https://maps.weather.gov.hk/ocf/text_e.html?mode=0&station=HKO"
+AWS_GIS_READINGS_URL = "https://www.hko.gov.hk/wxinfo/awsgis/latestReadings_AWS1_v2.txt"
 RHRREAD_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=en"
 
 
@@ -40,6 +41,8 @@ class HkoCurrentTemperature:
     station: str
     temperature_c: float
     raw: dict[str, Any]
+    since_midnight_max_c: float | None = None
+    since_midnight_min_c: float | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +152,57 @@ def parse_rhrread_temperature_json(
                 raw={"payload": payload, "temperature_row": row},
             )
     raise ValueError(f"{station} temperature row not found in rhrread JSON")
+
+
+def parse_aws_gis_current_temperature(
+    text: str, station_code: str = "HKO"
+) -> HkoCurrentTemperature:
+    lines = [line.strip() for line in text.lstrip("\ufeff").splitlines() if line.strip()]
+    if len(lines) < 3:
+        raise ValueError("AWS GIS readings payload is missing rows")
+    observed_at = _parse_aws_gis_header_time(lines[0])
+    reader = csv.DictReader(StringIO("\n".join(lines[1:])))
+    for row in reader:
+        if (row.get("STN") or "").upper() != station_code.upper():
+            continue
+        value = _parse_aws_gis_float(row.get("TEMP"))
+        if value is None:
+            raise ValueError(f"{station_code} temperature missing in AWS GIS readings")
+        return HkoCurrentTemperature(
+            observed_at_hkt=observed_at,
+            station=station_code.upper(),
+            temperature_c=value,
+            raw={"row": row, "header": lines[0]},
+            since_midnight_max_c=_parse_aws_gis_float(row.get("MAXTEMP")),
+            since_midnight_min_c=_parse_aws_gis_float(row.get("MINTEMP")),
+        )
+    raise ValueError(f"{station_code} row not found in AWS GIS readings")
+
+
+def _parse_aws_gis_header_time(header: str) -> datetime:
+    match = re.search(
+        r"recorded at\s+(\d{1,2}):(\d{2})\s+Hong Kong Time\s+"
+        r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})",
+        header,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        raise ValueError("AWS GIS readings timestamp not found")
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    day = int(match.group(3))
+    month = datetime.strptime(match.group(4).title(), "%B").month
+    year = int(match.group(5))
+    return datetime(year, month, day, hour, minute, tzinfo=HKT)
+
+
+def _parse_aws_gis_float(value: str | None) -> float | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped or stripped.upper() in {"M", "N/A", "9999"}:
+        return None
+    return float(stripped.rstrip("*"))
 
 
 def parse_flw_page(text: str) -> HkoForecast:

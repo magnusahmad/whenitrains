@@ -1,6 +1,7 @@
 import unittest
 
 from whenitrains.hko import (
+    parse_aws_gis_current_temperature,
     parse_flw_page,
     parse_flw_page_data_json,
     parse_http_datetime_hkt,
@@ -39,6 +40,20 @@ class HkoParserTests(unittest.TestCase):
         self.assertEqual(obs.station, "Hong Kong Observatory")
         self.assertEqual(obs.observed_at_hkt.isoformat(), "2026-05-05T17:02:00+08:00")
         self.assertEqual(obs.temperature_c, 21.4)
+
+    def test_parse_aws_gis_hko_decimal_temperature(self):
+        payload = """Latest readings recorded at 14:30 Hong Kong Time 7 May 2026
+STN,WINDDIRECTION,WINDSPEED,GUST,TEMP,RH,MAXTEMP,MINTEMP,GRASSTEMP,GRASSMINTEMP,VISIBILITY,PRESSURE,TEMPDIFFERENCE,HEATINDEX,
+HKO,,,,28.9,69,29.3,24.0,,,,1011.0,4.8,27.3,
+SHA,9999,5,12,29.0,68,30.1,23.2,,,,1010.6,5.1,26.1,
+"""
+        obs = parse_aws_gis_current_temperature(payload)
+
+        self.assertEqual(obs.station, "HKO")
+        self.assertEqual(obs.observed_at_hkt.isoformat(), "2026-05-07T14:30:00+08:00")
+        self.assertEqual(obs.temperature_c, 28.9)
+        self.assertEqual(obs.since_midnight_max_c, 29.3)
+        self.assertEqual(obs.since_midnight_min_c, 24.0)
 
     def test_parse_flw_webpage_bulletin_time_and_range(self):
         html = """

@@ -137,7 +137,10 @@ def _process_forecast_change_entries_kind(
     noun = "forecast high" if market_kind == "highest" else "forecast low"
     event_type = "forecast_change" if market_kind == "highest" else "lowest_forecast_change"
     latest = _effective_forecast_rows(
-        db, target_date.isoformat(), limit=2, market_kind=market_kind
+        db,
+        target_date.isoformat(),
+        limit=2,
+        market_kind=market_kind,
     )
     if len(latest) < 2:
         return RunnerResult(notes=(f"need two decimal {noun}s",))
@@ -555,6 +558,13 @@ def process_forecast_position_exits(
 def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerResult:
     transitions = observed_max_increases(db, today_hkt.isoformat())
     min_transitions = observed_min_decreases(db, today_hkt.isoformat())
+    if _has_aws_actual_observations(db, today_hkt):
+        transitions = [
+            (old, new) for old, new in transitions if _is_aws_actual_row(old, new)
+        ]
+        min_transitions = [
+            (old, new) for old, new in min_transitions if _is_aws_actual_row(old, new)
+        ]
     if not transitions and not min_transitions:
         return RunnerResult(notes=("need two observed maxes/mins",))
     aggregate = RunnerResult()
@@ -600,6 +610,27 @@ def _dedupe_notes(notes: list[str]) -> list[str]:
         seen.add(note)
         deduped.append(note)
     return deduped
+
+
+def _has_aws_actual_observations(db: sqlite3.Connection, today_hkt: date) -> bool:
+    return (
+        db.execute(
+            """
+            select 1
+            from hko_current_observations
+            where station = 'HKO'
+              and substr(observed_at_hkt, 1, 10) = ?
+              and (since_midnight_max_c is not null or since_midnight_min_c is not null)
+            limit 1
+            """,
+            (today_hkt.isoformat(),),
+        ).fetchone()
+        is not None
+    )
+
+
+def _is_aws_actual_row(old: sqlite3.Row, new: sqlite3.Row) -> bool:
+    return old["station"] == "HKO" and new["station"] == "HKO"
 
 
 def _process_actual_min_transition(
@@ -710,11 +741,14 @@ def _process_actual_transition(
     old_max = float(old["since_midnight_max_c"])
     new_max = float(new["since_midnight_max_c"])
     latest_forecast = _latest_effective_forecast_high(db, today_hkt.isoformat())
-    if latest_forecast is None:
-        return RunnerResult(notes=("missing current decimal forecast for actual check",))
-    forecast_max = float(latest_forecast["forecast_max_c"])
-    if not (old_max <= forecast_max < new_max):
-        return RunnerResult(notes=("actual max has not crossed above forecast max",))
+    forecast_max = (
+        None if latest_forecast is None else float(latest_forecast["forecast_max_c"])
+    )
+    actual_details = {
+        "old_max": old_max,
+        "new_max": new_max,
+        "forecast_max": forecast_max,
+    }
     event_key = (
         f"actual_cross:{today_hkt.isoformat()}:"
         f"forecast:{forecast_max}:"
@@ -738,9 +772,24 @@ def _process_actual_transition(
                 event_type="actual_cross",
                 event_key=event_key,
                 reason=f"observed max changed {old_max} -> {new_max}",
-                details={"old_max": old_max, "new_max": new_max, "forecast_max": forecast_max},
+                details=actual_details,
             )
         signals += 1
+        if _actual_cross_guarded_by_forecast(predicate, side, forecast_max):
+            store_paper_decision(
+                db,
+                "actual_cross",
+                token_id,
+                row["label"],
+                side,
+                "BUY",
+                "missed",
+                "forecast signal already above crossed bucket",
+                actual_details,
+                event_key=event_key,
+            )
+            buys_missed += 1
+            continue
         prices = latest_two_orderbook_prices(db, token_id)
         if len(prices) < 2 or prices[0]["best_ask"] is None or prices[1]["best_ask"] is None:
             store_paper_decision(
@@ -752,7 +801,7 @@ def _process_actual_transition(
                 "BUY",
                 "missed",
                 f"missing prior/current {side.lower()} ask",
-                {"old_max": old_max, "new_max": new_max, "forecast_max": forecast_max},
+                actual_details,
                 event_key=event_key,
             )
             buys_missed += 1
@@ -770,9 +819,7 @@ def _process_actual_transition(
                 "missed",
                 "price moved with actual cross",
                 {
-                    "old_max": old_max,
-                    "new_max": new_max,
-                    "forecast_max": forecast_max,
+                    **actual_details,
                     "prior_ask": prior,
                     "current_ask": current,
                     "side": side,
@@ -798,8 +845,22 @@ def _process_actual_transition(
                 else "actual max invalidated lower bucket before price moved"
             ),
         )
+        max_buy_price = (
+            Settings.peak_hour_actual_cross_max_yes_ask
+            if side == "YES"
+            and _actual_cross_is_peak_hour_sure_bet(
+                db, today_hkt.isoformat(), new["observed_at_hkt"], new_max
+            )
+            else Settings.forecast_change_max_entry_price
+            if side == "YES"
+            else None
+        )
         filled = _execute_candidate_buy(
-            db, candidate, event_type="actual_cross", event_key=event_key
+            db,
+            candidate,
+            event_type="actual_cross",
+            event_key=event_key,
+            max_buy_price=max_buy_price,
         )
         if filled is True:
             buys_filled += 1
@@ -825,6 +886,45 @@ def _actual_cross_side(predicate, old_max: float, new_max: float) -> str | None:
         if old_max < upper_boundary <= new_max:
             return "NO"
     return None
+
+
+def _actual_cross_guarded_by_forecast(
+    predicate, side: str, forecast_max: float | None
+) -> bool:
+    if side != "YES" or predicate.value_c is None or forecast_max is None:
+        return False
+    return forecast_max >= predicate.value_c + 1
+
+
+def _actual_cross_is_peak_hour_sure_bet(
+    db: sqlite3.Connection,
+    target_date_hkt: str,
+    observed_at_hkt: str,
+    actual_max_c: float,
+) -> bool:
+    relevant = _latest_hourly_forecast_values(db, target_date_hkt)
+    if not relevant:
+        return False
+    observed_hour = _hkt_hour(observed_at_hkt)
+    if observed_hour is None:
+        return False
+    peak = max(value for _, value in relevant)
+    if actual_max_c < peak:
+        return False
+    peak_hours = [hour for hour, value in relevant if value >= peak]
+    if observed_hour not in peak_hours:
+        return False
+    future_values = [value for hour, value in relevant if hour > observed_hour]
+    if not future_values:
+        return False
+    return max(future_values) < peak
+
+
+def _hkt_hour(value: str) -> int | None:
+    try:
+        return datetime.fromisoformat(value).astimezone(HKT).hour
+    except ValueError:
+        return None
 
 
 def _actual_low_cross_side(predicate, old_min: float, new_min: float) -> str | None:
@@ -1116,6 +1216,11 @@ def _effective_forecast_rows(
     limit: int = 1,
     market_kind: str = "highest",
 ) -> list[dict]:
+    aws_rows = _aws_actual_forecast_rows(
+        db, forecast_date_hkt, limit=limit, market_kind=market_kind
+    )
+    if aws_rows:
+        return aws_rows
     rows = db.execute(
         """
         select id, forecast_date_hkt, fetched_at_utc, forecast_min_c, forecast_max_c,
@@ -1144,6 +1249,47 @@ def _effective_forecast_rows(
                 "forecast_max_c": effective_value,
                 "forecast_value_c": effective_value,
                 "update_time": update_time,
+            }
+        )
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _aws_actual_forecast_rows(
+    db: sqlite3.Connection,
+    forecast_date_hkt: str,
+    limit: int,
+    market_kind: str,
+) -> list[dict]:
+    column = "since_midnight_min_c" if market_kind == "lowest" else "since_midnight_max_c"
+    rows = db.execute(
+        f"""
+        select id, observed_at_hkt, {column} as forecast_value_c
+        from hko_current_observations
+        where station = 'HKO'
+          and substr(observed_at_hkt, 1, 10) = ?
+          and {column} is not null
+        order by observed_at_hkt desc, id desc
+        """,
+        (forecast_date_hkt,),
+    )
+    result: list[dict] = []
+    seen_update_times: set[str] = set()
+    for row in rows:
+        update_time = row["observed_at_hkt"]
+        if update_time in seen_update_times:
+            continue
+        seen_update_times.add(update_time)
+        value = float(row["forecast_value_c"])
+        result.append(
+            {
+                "id": f"aws_actual:{row['id']}",
+                "forecast_date_hkt": forecast_date_hkt,
+                "forecast_max_c": value,
+                "forecast_value_c": value,
+                "update_time": update_time,
+                "source_type": "aws_gis_actual",
             }
         )
         if len(result) >= limit:
@@ -1467,6 +1613,8 @@ def _forecast_value_guard_reason(
     predicate = parse_outcome_label(outcome["label"])
     if predicate.value_c is None:
         return None
+    if _has_aws_actual_observations(db, date.fromisoformat(target_date_hkt)):
+        return None
     market_kind = _temperature_market_kind_for_row(outcome)
     if market_kind == "lowest":
         return _lowest_forecast_value_guard_reason(db, target_date_hkt, predicate)
@@ -1509,7 +1657,11 @@ def _hourly_forecast_invalidation_reason(
     if predicate.value_c is None:
         return None
     market_kind = _temperature_market_kind_for_row(outcome)
-    relevant = _latest_hourly_forecast_values(db, outcome["target_date_hkt"])
+    relevant = (
+        []
+        if _has_aws_actual_observations(db, date.fromisoformat(outcome["target_date_hkt"]))
+        else _latest_hourly_forecast_values(db, outcome["target_date_hkt"])
+    )
     latest = (
         None
         if relevant

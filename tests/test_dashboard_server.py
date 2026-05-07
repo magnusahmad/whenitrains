@@ -12,6 +12,7 @@ from whenitrains.dashboard_server import (
     hourly_error_series,
     hourly_forecast_series,
     paper_trade_rows,
+    paper_order_markers,
     pnl_series,
     top_token_price_series,
     top_yes_price_series,
@@ -239,6 +240,42 @@ class DashboardServerTests(unittest.TestCase):
             self.assertEqual(high[0]["value"], 27.7)
             self.assertEqual(low[0]["value"], 23.2)
 
+    def test_forecast_series_parses_compact_hko_update_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            target = date(2026, 5, 6)
+            snapshot = store_raw_snapshot(db, "hko", "ocf", "{}")
+            store_ocf_forecast_samples(
+                db,
+                snapshot.id,
+                [
+                    OcfForecastSample(
+                        forecast_date_hkt=target,
+                        forecast_min_c=24,
+                        forecast_max_c=28,
+                        raw_min_c=24.0,
+                        raw_max_c=28.0,
+                        hourly_temperatures=[
+                            {
+                                "forecast_hour_hkt": "2026-05-06T13:00:00+08:00",
+                                "temperature_c": 27.7,
+                            }
+                        ],
+                        raw={"LastModified": 20260506091143},
+                    )
+                ],
+            )
+
+            high = forecast_series(db, target.isoformat(), value_kind="max")
+            stats = latest_decimal_forecast_stats(db, target.isoformat())
+
+            self.assertEqual(high[0]["value"], 27.7)
+            self.assertEqual(
+                datetime.fromtimestamp(high[0]["time"], tz=HKT).strftime("%Y-%m-%d %H:%M:%S"),
+                "2026-05-06 09:11:43",
+            )
+            self.assertEqual(stats["update_time"], "20260506091143")
+
     def test_dashboard_stats_use_decimal_forecast_high_and_low(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_dashboard_db(Path(tmp) / "test.db")
@@ -373,6 +410,45 @@ class DashboardServerTests(unittest.TestCase):
             self.assertIn("24°C", [item["label"] for item in panel["top_tokens"]])
             self.assertNotIn("29°C", [item["label"] for item in panel["top_tokens"]])
             self.assertNotIn("30°C", [item["label"] for item in panel["top_tokens"]])
+
+    def test_paper_order_markers_include_decision_signal_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_paper_order_result(
+                db,
+                "no27",
+                "BUY_NO",
+                limit_price=0.60,
+                size_usd=100,
+                fill_price=0.55,
+                fill_size_usd=100,
+                status="filled",
+                reason="price has not moved with HKO event",
+            )
+            order = db.execute(
+                "select created_at_utc from paper_orders where outcome_id = 'no27'"
+            ).fetchone()
+            db.execute(
+                """
+                insert into paper_decisions (
+                    created_at_utc, event_type, outcome_id, label, side, action,
+                    status, reason, details_json, event_key
+                )
+                values (?, 'forecast_change', 'no27', '27°C', 'NO', 'BUY',
+                        'filled', 'price has not moved with HKO event', '{}',
+                        'forecast_change:2026-05-06:20260506083143:28.0->20260506091143:27.7')
+                """,
+                (order["created_at_utc"],),
+            )
+            db.commit()
+
+            marker = paper_order_markers(db, "no27")[0]
+
+            self.assertEqual(marker["signal"], "signal high 27.7°C")
+            self.assertEqual(marker["signal_time_hkt"], "2026-05-06 09:11:43")
+            self.assertEqual(
+                marker["decision_reason"], "price has not moved with HKO event"
+            )
 
     def test_paper_trade_rows_returns_open_position_buy_sell_activity(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -575,7 +651,8 @@ class DashboardServerTests(unittest.TestCase):
 
     def test_dashboard_html_has_delayed_crosshair_tooltip(self):
         self.assertIn('id="chart-tooltip"', INDEX_HTML)
-        self.assertIn('Forecast low (°C)', INDEX_HTML)
+        self.assertIn("Bot signal high", INDEX_HTML)
+        self.assertIn("Bot signal low", INDEX_HTML)
         self.assertIn('Since-midnight min', INDEX_HTML)
         self.assertIn("setTimeout(() => showTooltip(tooltipState), 1000)", INDEX_HTML)
         self.assertIn("chart.subscribeCrosshairMove", INDEX_HTML)
@@ -590,12 +667,21 @@ class DashboardServerTests(unittest.TestCase):
         self.assertNotIn("s.setMarkers(markers)", INDEX_HTML)
         self.assertIn("const markerSeries = markerOnlySeries", INDEX_HTML)
         self.assertIn(".trade-bubble.buy", INDEX_HTML)
+        self.assertIn(".signal-bubble.high", INDEX_HTML)
         self.assertIn("function renderTradeBubbles(lead)", INDEX_HTML)
+        self.assertIn("function renderSignalBubblesForChart", INDEX_HTML)
+        self.assertIn("function signalDescriptorsForChart", INDEX_HTML)
+        self.assertIn("Bot signal high", INDEX_HTML)
+        self.assertIn("Bot signal low", INDEX_HTML)
         self.assertIn("subscribeVisibleTimeRangeChange(renderAllTradeBubbles)", INDEX_HTML)
         self.assertIn("nearestTrade(d.markers, param.time)", INDEX_HTML)
         self.assertIn('/api/forecast-panels?side=${encodeURIComponent(tokenSide)}', INDEX_HTML)
         self.assertIn('"#ffb74d", "#4dd0e1"', INDEX_HTML)
-        self.assertIn("Hourly forecast", INDEX_HTML)
+        self.assertIn("Latest hourly forecast", INDEX_HTML)
+        self.assertNotIn("OCF forecast high", INDEX_HTML)
+        self.assertNotIn("OCF forecast low", INDEX_HTML)
+        self.assertIn("marker.signal_time_hkt", INDEX_HTML)
+        self.assertIn("t.signal_time_hkt", INDEX_HTML)
         self.assertIn('name: "Actual - forecast"', INDEX_HTML)
         self.assertNotIn('data-series-key="hourlyError"', INDEX_HTML)
         self.assertIn("pointMarkersVisible: true", INDEX_HTML)
@@ -619,6 +705,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("function installModifierWheelZoom", INDEX_HTML)
         self.assertIn("if (!event.metaKey && !event.ctrlKey) return", INDEX_HTML)
         self.assertIn("const chartTimeToUnixSeconds = (time) =>", INDEX_HTML)
+        self.assertIn("const fmtHKTUpdate = (value) =>", INDEX_HTML)
         self.assertIn("tickMarkFormatter: fmtHKTTime", INDEX_HTML)
         self.assertIn("const cursorX = event.clientX - rect.left", INDEX_HTML)
         self.assertIn("const cursorLogical = chart.timeScale().coordinateToLogical(cursorX)", INDEX_HTML)

@@ -30,6 +30,66 @@ class SchedulerTests(unittest.TestCase):
         self.assertIn("bulletin", _due_sources(end))
         self.assertNotIn("bulletin", _due_sources(after))
 
+    def test_aws_actual_window_is_every_five_minutes_for_ten_seconds(self):
+        before = datetime(2026, 5, 4, 0, 4, 59, tzinfo=HKT)
+        start = datetime(2026, 5, 4, 0, 5, 0, tzinfo=HKT)
+        end = datetime(2026, 5, 4, 0, 5, 10, tzinfo=HKT)
+        after = datetime(2026, 5, 4, 0, 5, 11, tzinfo=HKT)
+
+        self.assertNotIn("aws_actual", _due_sources(before))
+        self.assertIn("aws_actual", _due_sources(start))
+        self.assertIn("aws_actual", _due_sources(end))
+        self.assertNotIn("aws_actual", _due_sources(after))
+
+    def test_learned_aws_actual_time_gets_thirty_second_poll_window(self):
+        learned = [time(14, 30)]
+        state = SchedulerState()
+
+        self.assertNotIn(
+            "aws_actual",
+            {
+                item.source
+                for item in due_hko_sources(
+                    datetime(2026, 5, 4, 14, 29, 29, tzinfo=HKT),
+                    state,
+                    learned_actual_times=learned,
+                )
+            },
+        )
+        self.assertIn(
+            "aws_actual",
+            {
+                item.source
+                for item in due_hko_sources(
+                    datetime(2026, 5, 4, 14, 29, 30, tzinfo=HKT),
+                    state,
+                    learned_actual_times=learned,
+                )
+            },
+        )
+        self.assertIn(
+            "aws_actual",
+            {
+                item.source
+                for item in due_hko_sources(
+                    datetime(2026, 5, 4, 14, 30, 30, tzinfo=HKT),
+                    state,
+                    learned_actual_times=learned,
+                )
+            },
+        )
+        self.assertNotIn(
+            "aws_actual",
+            {
+                item.source
+                for item in due_hko_sources(
+                    datetime(2026, 5, 4, 14, 30, 31, tzinfo=HKT),
+                    state,
+                    learned_actual_times=learned,
+                )
+            },
+        )
+
     def test_since_midnight_window_is_one_minute_before_to_two_minutes_after(self):
         before = datetime(2026, 5, 4, 10, 7, 59, tzinfo=HKT)
         start = datetime(2026, 5, 4, 10, 8, 0, tzinfo=HKT)
@@ -101,14 +161,15 @@ class SchedulerTests(unittest.TestCase):
     def test_orderbooks_and_market_discovery_have_separate_cadence(self):
         now = datetime(2026, 5, 4, 12, 5, tzinfo=HKT)
         state = SchedulerState()
-        actions = scheduler_actions(now, state)
+        actions = scheduler_actions(now, state, learned_actual_times=[time(12, 9)])
         self.assertTrue(actions.discover_market)
         self.assertTrue(actions.fetch_orderbooks)
         self.assertTrue(actions.fetch_current_temperature)
 
         state.last_market_discovery_at = now
         state.last_orderbook_fetch_at = now
-        state.last_current_temperature_fetch_at = now
+        plan = [item for item in due_hko_sources(now, state) if item.source == "aws_actual"][0]
+        mark_source_fetch(state, plan, "new actual", now, changed=True)
         actions = scheduler_actions(now + timedelta(seconds=10), state)
         self.assertFalse(actions.discover_market)
         self.assertFalse(actions.fetch_orderbooks)
@@ -122,13 +183,13 @@ class SchedulerTests(unittest.TestCase):
             last_current_temperature_fetch_at=now - timedelta(seconds=600),
         )
 
-        actions = scheduler_actions(now, state)
+        actions = scheduler_actions(now, state, learned_actual_times=[time(12, 9)])
 
         self.assertFalse(actions.discover_market)
         self.assertTrue(actions.fetch_orderbooks)
         self.assertTrue(actions.fetch_current_temperature)
 
-    def test_current_temperature_waits_during_hko_source_window(self):
+    def test_current_temperature_collection_can_run_during_hko_source_window(self):
         now = datetime(2026, 5, 4, 12, 9, 0, tzinfo=HKT)
         state = SchedulerState(
             last_market_discovery_at=now,
@@ -136,17 +197,16 @@ class SchedulerTests(unittest.TestCase):
             last_current_temperature_fetch_at=now - timedelta(seconds=600),
         )
 
-        actions = scheduler_actions(now, state)
+        actions = scheduler_actions(now, state, learned_actual_times=[time(12, 9)])
 
         self.assertTrue(actions.fetch_since_midnight)
-        self.assertFalse(actions.fetch_current_temperature)
+        self.assertTrue(actions.fetch_current_temperature)
 
-    def test_current_temperature_not_due_before_ten_minutes(self):
-        now = datetime(2026, 5, 4, 12, 5, 0, tzinfo=HKT)
+    def test_current_temperature_not_due_outside_aws_actual_windows(self):
+        now = datetime(2026, 5, 4, 12, 6, 0, tzinfo=HKT)
         state = SchedulerState(
             last_market_discovery_at=now,
             last_orderbook_fetch_at=now,
-            last_current_temperature_fetch_at=now - timedelta(seconds=599),
         )
 
         actions = scheduler_actions(now, state)
@@ -167,6 +227,13 @@ class SchedulerTests(unittest.TestCase):
         trade = RunnerResult(buys_filled=1)
         self.assertTrue(
             should_print_scheduled_tick(["forecast changed"], noop, quiet=True)
+        )
+        self.assertTrue(
+            should_print_scheduled_tick(
+                ["aws_actual changed: Latest readings recorded at 14:30 Hong Kong Time 7 May 2026"],
+                noop,
+                quiet=True,
+            )
         )
         self.assertTrue(
             should_print_scheduled_tick(["fetched orderbooks"], trade, quiet=True)

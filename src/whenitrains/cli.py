@@ -10,12 +10,14 @@ from .backtest import dumps_result_json, render_backtest_result, run_backtest_da
 from .config import Settings
 from .forecast_accuracy import build_forecast_accuracy_report, render_accuracy_report
 from .hko import (
+    AWS_GIS_READINGS_URL,
     FLW_PAGE_DATA_URL,
     FLW_PAGE_URL,
     OCF_STATION_URL,
     RHRREAD_URL,
     SINCE_MIDNIGHT_URL,
     fetch_response,
+    parse_aws_gis_current_temperature,
     parse_flw_page,
     parse_flw_page_data_json,
     parse_http_datetime_hkt,
@@ -598,6 +600,7 @@ def main(argv: list[str] | None = None) -> int:
             fetch_bulletin=lambda: _fetch_bulletin(db),
             fetch_current_temperature=lambda: _fetch_current_temperature(db),
             learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
+            learned_actual_times=lambda: list_hko_update_times(db, "aws_gis_actual"),
             discover_market=lambda target: _discover_markets_for_forecast_dates(db, target),
             fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
             base_sleep_seconds=args.sleep,
@@ -645,6 +648,7 @@ def main(argv: list[str] | None = None) -> int:
             fetch_bulletin=lambda: _fetch_bulletin(db),
             fetch_current_temperature=lambda: _fetch_current_temperature(db),
             learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
+            learned_actual_times=lambda: list_hko_update_times(db, "aws_gis_actual"),
             discover_market=lambda target: _discover_markets_for_forecast_dates(db, target),
             fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
             base_sleep_seconds=args.sleep,
@@ -730,10 +734,25 @@ def _fetch_since_midnight(db) -> str:
 
 
 def _fetch_current_temperature(db) -> str:
-    response = fetch_response(RHRREAD_URL)
-    snapshot = store_raw_snapshot(db, "hko", RHRREAD_URL, response.text, response.headers)
+    try:
+        response = fetch_response(AWS_GIS_READINGS_URL)
+        observation = parse_aws_gis_current_temperature(response.text)
+    except Exception:
+        response = fetch_response(RHRREAD_URL)
+        observation = parse_rhrread_temperature_json(response.text)
+    snapshot = store_raw_snapshot(db, "hko", response.url, response.text, response.headers)
     store_hko_current_temperature(
-        db, snapshot.id, parse_rhrread_temperature_json(response.text)
+        db, snapshot.id, observation
+    )
+    record_hko_update_minute(
+        db,
+        "aws_gis_actual",
+        observation.observed_at_hkt,
+        {
+            "kind": "payload_header",
+            "value": observation.observed_at_hkt.isoformat(),
+            "endpoint": response.url,
+        },
     )
     return response.text
 

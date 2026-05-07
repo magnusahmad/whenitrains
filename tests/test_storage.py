@@ -253,22 +253,26 @@ class StorageTests(unittest.TestCase):
                 snapshot.id,
                 HkoCurrentTemperature(
                     observed_at_hkt=datetime(2026, 5, 5, 17, 2, tzinfo=HKT),
-                    station="Hong Kong Observatory",
+                    station="HKO",
                     temperature_c=21.4,
+                    since_midnight_min_c=19.8,
+                    since_midnight_max_c=23.1,
                     raw={"temperature_row": {"value": 21.4}},
                 ),
             )
 
             row = db.execute(
                 """
-                select observed_at_hkt, station, temperature_c, since_midnight_max_c
+                select observed_at_hkt, station, temperature_c,
+                       since_midnight_min_c, since_midnight_max_c
                 from hko_current_observations
                 """
             ).fetchone()
             self.assertEqual(row["observed_at_hkt"], "2026-05-05T17:02:00+08:00")
-            self.assertEqual(row["station"], "Hong Kong Observatory")
+            self.assertEqual(row["station"], "HKO")
             self.assertEqual(row["temperature_c"], 21.4)
-            self.assertIsNone(row["since_midnight_max_c"])
+            self.assertEqual(row["since_midnight_min_c"], 19.8)
+            self.assertEqual(row["since_midnight_max_c"], 23.1)
 
     def test_latest_orderbook_sorts_executable_prices(self):
         from whenitrains.storage import latest_orderbook

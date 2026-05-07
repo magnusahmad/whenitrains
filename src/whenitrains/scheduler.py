@@ -11,6 +11,7 @@ from .runner import run_paper_tick
 
 
 SINCE_MIDNIGHT_MINUTES = (0, 9, 19, 29, 38, 48, 58)
+AWS_ACTUAL_POLL_MINUTES = tuple(range(0, 60, 5))
 FORECAST_POLL_MINUTES = tuple(range(0, 60, 10))
 FORECAST_CATCHUP_MINUTES = 50
 
@@ -48,8 +49,12 @@ def due_hko_sources(
     now_hkt: datetime,
     state: SchedulerState,
     learned_forecast_times: list[day_time] | tuple[day_time, ...] = (),
+    learned_actual_times: list[day_time] | tuple[day_time, ...] = (),
 ) -> list[SourcePollPlan]:
     due: list[SourcePollPlan] = []
+    for plan in _aws_actual_plans(now_hkt.date(), learned_actual_times):
+        if _is_due(plan, now_hkt, state):
+            due.append(plan)
     for plan in _since_midnight_plans(now_hkt.date()):
         if _is_due(plan, now_hkt, state):
             due.append(plan)
@@ -65,12 +70,15 @@ def scheduler_actions(
     now_hkt: datetime,
     state: SchedulerState,
     learned_forecast_times: list[day_time] | tuple[day_time, ...] = (),
+    learned_actual_times: list[day_time] | tuple[day_time, ...] = (),
     orderbook_interval_seconds: int = 15,
     market_discovery_interval_seconds: int = 300,
-    current_temperature_interval_seconds: int = 600,
 ) -> SchedulerActions:
     sources = {
-        plan.source for plan in due_hko_sources(now_hkt, state, learned_forecast_times)
+        plan.source
+        for plan in due_hko_sources(
+            now_hkt, state, learned_forecast_times, learned_actual_times
+        )
     }
     market_due = (
         state.last_market_discovery_at is None
@@ -85,15 +93,10 @@ def scheduler_actions(
             >= timedelta(seconds=orderbook_interval_seconds)
         )
     )
-    current_temperature_due = not bool(sources) and (
-        state.last_current_temperature_fetch_at is None
-        or now_hkt - state.last_current_temperature_fetch_at
-        >= timedelta(seconds=current_temperature_interval_seconds)
-    )
     return SchedulerActions(
         fetch_since_midnight="since_midnight" in sources,
         fetch_bulletin="bulletin" in sources,
-        fetch_current_temperature=current_temperature_due,
+        fetch_current_temperature="aws_actual" in sources,
         discover_market=market_due,
         fetch_orderbooks=orderbooks_due,
         run_decisions=True,
@@ -142,6 +145,7 @@ def run_scheduled_paper_loop(
     fetch_orderbooks,
     fetch_current_temperature=None,
     learned_forecast_times=None,
+    learned_actual_times=None,
     base_sleep_seconds: float = 1.0,
     max_ticks: int | None = None,
     now_fn=None,
@@ -155,9 +159,11 @@ def run_scheduled_paper_loop(
     while max_ticks is None or tick < max_ticks:
         now = clock()
         learned_times = learned_forecast_times() if learned_forecast_times else []
-        actions = scheduler_actions(now, state, learned_times)
+        learned_actuals = learned_actual_times() if learned_actual_times else []
+        actions = scheduler_actions(now, state, learned_times, learned_actuals)
         plans = {
-            plan.source: plan for plan in due_hko_sources(now, state, learned_times)
+            plan.source: plan
+            for plan in due_hko_sources(now, state, learned_times, learned_actuals)
         }
         notes: list[str] = []
         if actions.fetch_since_midnight:
@@ -180,6 +186,16 @@ def run_scheduled_paper_loop(
             if _try_run_action("orderbooks", lambda: fetch_orderbooks(now.date()), notes):
                 mark_orderbooks_fetched(state, now)
                 notes.append("fetched orderbooks")
+        if actions.fetch_current_temperature and fetch_current_temperature is not None:
+            temp_notes: list[str] = []
+            payload = _try_fetch_source("aws_actual", fetch_current_temperature, temp_notes)
+            if payload is not None:
+                mark_current_temperature_fetched(state, now)
+                plan = plans.get("aws_actual")
+                if plan is not None and mark_source_fetch(state, plan, payload, now):
+                    notes.append(_source_changed_note("aws_actual", payload))
+            elif not quiet:
+                print("; ".join(temp_notes))
         tick_fn = run_tick_fn or run_paper_tick
         result = tick_fn(db, today_hkt=now.date())
         if should_print_scheduled_tick(notes, result, quiet):
@@ -190,12 +206,6 @@ def run_scheduled_paper_loop(
                 f"sells={result.sells_filled}/{result.sells_missed} "
                 f"signals={result.signals} notes={'; '.join(result.notes)}"
             )
-        if actions.fetch_current_temperature and fetch_current_temperature is not None:
-            temp_notes: list[str] = []
-            if _try_fetch_source("current temperature", fetch_current_temperature, temp_notes) is not None:
-                mark_current_temperature_fetched(state, now)
-            elif not quiet:
-                print("; ".join(temp_notes))
         tick += 1
         if max_ticks is None or tick < max_ticks:
             time.sleep(base_sleep_seconds)
@@ -218,6 +228,14 @@ def _try_run_action(action: str, action_fn, notes: list[str]) -> bool:
         return False
 
 
+def _source_changed_note(source: str, payload: str) -> str:
+    if source == "aws_actual":
+        first_line = payload.splitlines()[0].strip() if payload.splitlines() else ""
+        if first_line:
+            return f"aws_actual changed: {first_line}"
+    return f"{source} changed"
+
+
 def _since_midnight_plans(target: date) -> list[SourcePollPlan]:
     plans: list[SourcePollPlan] = []
     day_start = datetime.combine(target, day_time(0, 0), tzinfo=HKT)
@@ -236,6 +254,37 @@ def _since_midnight_plans(target: date) -> list[SourcePollPlan]:
                     cadence_seconds=10,
                 )
             )
+    return plans
+
+
+def _aws_actual_plans(
+    target: date, learned_actual_times: list[day_time] | tuple[day_time, ...] = ()
+) -> list[SourcePollPlan]:
+    plans: list[SourcePollPlan] = []
+    day_start = datetime.combine(target, day_time(0, 0), tzinfo=HKT)
+    day_end = datetime.combine(target, day_time(23, 59, 59), tzinfo=HKT)
+    scheduled_times = {
+        day_time(hour, minute)
+        for hour in range(24)
+        for minute in AWS_ACTUAL_POLL_MINUTES
+    }
+    scheduled_times.update(learned_actual_times)
+    for scheduled_time in sorted(scheduled_times):
+        scheduled = datetime.combine(target, scheduled_time, tzinfo=HKT)
+        learned = scheduled_time in learned_actual_times
+        plans.append(
+            SourcePollPlan(
+                source="aws_actual",
+                scheduled_at=scheduled,
+                window_start=max(
+                    scheduled - timedelta(seconds=30 if learned else 0), day_start
+                ),
+                window_end=min(
+                    scheduled + timedelta(seconds=30 if learned else 10), day_end
+                ),
+                cadence_seconds=10,
+            )
+        )
     return plans
 
 
@@ -321,5 +370,5 @@ def should_print_scheduled_tick(notes: list[str], result, quiet: bool) -> bool:
         return True
     if result.signals:
         return True
-    interesting_actions = {"since_midnight changed", "forecast changed"}
-    return any(note in interesting_actions or " failed:" in note for note in notes)
+    interesting_actions = ("aws_actual changed", "since_midnight changed", "forecast changed")
+    return any(note.startswith(interesting_actions) or " failed:" in note for note in notes)

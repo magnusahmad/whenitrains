@@ -3,7 +3,7 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from whenitrains.hko import HKT, HkoForecast, HkoObservation, OcfForecastSample
+from whenitrains.hko import HKT, HkoCurrentTemperature, HkoForecast, HkoObservation, OcfForecastSample
 from whenitrains.markets import parse_outcome_label
 from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
 from whenitrains.runner import (
@@ -20,6 +20,7 @@ from whenitrains.storage import (
     connect,
     migrate,
     store_hko_forecasts,
+    store_hko_current_temperature,
     store_hko_observation,
     store_ocf_forecast_samples,
     store_orderbook,
@@ -430,7 +431,7 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertIsNotNone(position)
 
-    def test_actual_cross_notes_are_deduped_when_no_cross_occurs(self):
+    def test_actual_cross_notes_are_deduped_when_no_bucket_cross_occurs(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
                 Path(tmp) / "test.db",
@@ -452,7 +453,7 @@ class RunnerTests(unittest.TestCase):
             result = process_actual_entries(db, date(2026, 5, 4))
 
             self.assertEqual(
-                result.notes.count("actual max has not crossed above forecast max"), 1
+                result.notes.count("no actual cross candidates"), 1
             )
 
     def test_actual_cross_buys_no_on_invalidated_lower_exact_bucket(self):
@@ -621,7 +622,7 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(decision["reason"], "entry price above max")
 
-    def test_actual_cross_only_trades_when_actual_exceeds_forecast_max(self):
+    def test_actual_cross_trades_bucket_cross_when_forecast_is_same_bucket(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
                 Path(tmp) / "test.db",
@@ -635,15 +636,160 @@ class RunnerTests(unittest.TestCase):
                     )
                 ],
             )
-            _store_forecast(db, 31, "2026-05-04T00:45:00+08:00")
+            _store_forecast(db, 30.8, "2026-05-04T00:45:00+08:00")
             _store_observation(db, 29.0)
             _store_observation(db, 30.0)
             _store_book_pair(db, "yes30", old_ask=0.40, new_ask=0.405)
 
             result = process_actual_entries(db, date(2026, 5, 4))
 
+            self.assertEqual(result.buys_filled, 1)
+            self.assertEqual(result.signals, 1)
+
+    def test_actual_cross_forecast_guard_skips_yes_below_signal_bucket_but_allows_no(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m28",
+                        label="28°C",
+                        predicate=parse_outcome_label("28°C"),
+                        yes_token_id="yes28",
+                        no_token_id="no28",
+                    ),
+                    Outcome(
+                        market_id="m29",
+                        label="29°C or higher",
+                        predicate=parse_outcome_label("29°C or higher"),
+                        yes_token_id="yes29",
+                        no_token_id="no29",
+                    ),
+                ],
+            )
+            _store_forecast(db, 30.0, "2026-05-04T00:45:00+08:00")
+            _store_observation(db, 28.7)
+            _store_observation(db, 29.2)
+            _store_book_pair(db, "no28", old_ask=0.40, new_ask=0.405)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 1)
+            self.assertEqual(result.buys_missed, 1)
+            self.assertEqual(result.signals, 2)
+            decisions = db.execute(
+                """
+                select outcome_id, side, status, reason
+                from paper_decisions
+                where event_type = 'actual_cross'
+                  and action = 'BUY'
+                order by id
+                """
+            ).fetchall()
+            self.assertEqual(
+                [(row["outcome_id"], row["side"], row["status"], row["reason"]) for row in decisions],
+                [
+                    ("no28", "NO", "filled", "actual max invalidated lower bucket before price moved"),
+                    (
+                        "yes29",
+                        "YES",
+                        "missed",
+                        "forecast signal already above crossed bucket",
+                    ),
+                ],
+            )
+
+    def test_actual_cross_ignores_csdi_when_aws_actuals_are_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m29",
+                        label="29°C or higher",
+                        predicate=parse_outcome_label("29°C or higher"),
+                        yes_token_id="yes29",
+                        no_token_id="no29",
+                    )
+                ],
+            )
+            _store_forecast(db, 29.3, "2026-05-04T00:45:00+08:00")
+            _store_aws_actual(db, high=28.7, minute=0)
+            _store_observation(db, 29.2)
+            _store_book_pair(db, "yes29", old_ask=0.40, new_ask=0.405)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
             self.assertEqual(result.buys_filled, 0)
             self.assertEqual(result.signals, 0)
+
+    def test_actual_cross_yes_allows_eighty_cent_entry_in_peak_hour_sure_bet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m29",
+                        label="29°C or higher",
+                        predicate=parse_outcome_label("29°C or higher"),
+                        yes_token_id="yes29",
+                        no_token_id="no29",
+                    )
+                ],
+            )
+            _store_forecast(db, 29.0, "2026-05-04T00:45:00+08:00")
+            _store_peak_decline_hourly_forecast(db, date(2026, 5, 4), peak=29.0)
+            _store_aws_actual(db, high=28.7, hour=13)
+            _store_aws_actual(db, high=29.2, hour=14)
+            _store_book_pair(db, "yes29", old_ask=0.76, new_ask=0.76)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 1)
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'actual_cross' and action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "filled")
+
+    def test_actual_cross_yes_does_not_raise_entry_threshold_when_peak_repeats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m29",
+                        label="29°C or higher",
+                        predicate=parse_outcome_label("29°C or higher"),
+                        yes_token_id="yes29",
+                        no_token_id="no29",
+                    )
+                ],
+            )
+            _store_forecast(db, 29.0, "2026-05-04T00:45:00+08:00")
+            _store_early_breach_hourly_forecast(db, date(2026, 5, 4), bucket=29.0)
+            _store_aws_actual(db, high=28.7, hour=13)
+            _store_aws_actual(db, high=29.2, hour=14)
+            _store_book_pair(db, "yes29", old_ask=0.76, new_ask=0.76)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(result.buys_missed, 1)
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'actual_cross' and action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "missed")
+            self.assertEqual(decision["reason"], "no ask depth at or below max price")
 
     def test_actual_cross_ignores_previous_day_observation_transition(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -818,6 +964,34 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(decision["event_type"], "forecast_value")
             self.assertEqual(decision["label"], "29°C")
             self.assertEqual(decision["side"], "YES")
+
+    def test_d0_forecast_value_uses_aws_actual_instead_of_ocf(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_threshold_risk_outcomes(),
+            )
+            _store_forecast(db, 30.4, "2026-05-04T09:11:53+08:00")
+            _store_aws_actual(db, high=29.3)
+            _store_book_pair(db, "yes28", old_ask=0.60, new_ask=0.60)
+            _store_book_pair(db, "yes29", old_ask=0.30, new_ask=0.30)
+            _store_book_pair(db, "yes30", old_ask=0.10, new_ask=0.10)
+
+            result = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 1)
+            decision = db.execute(
+                """
+                select event_type, label
+                from paper_decisions
+                where action = 'BUY' and status = 'filled'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["event_type"], "forecast_value")
+            self.assertEqual(decision["label"], "29°C")
 
     def test_low_forecast_value_buys_cheap_bucket_when_favorite_is_higher(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1660,6 +1834,37 @@ def _store_observation(db, high: float, observed_date=date(2026, 5, 4)):
     )
 
 
+def _store_aws_actual(
+    db,
+    high: float,
+    low: float = 21.0,
+    temperature: float | None = None,
+    hour: int = 12,
+    minute: int = 0,
+    observed_date=date(2026, 5, 4),
+):
+    snapshot = store_raw_snapshot(db, "hko", f"aws-actual-{high}", str(high))
+    store_hko_current_temperature(
+        db,
+        snapshot.id,
+        HkoCurrentTemperature(
+            observed_at_hkt=datetime(
+                observed_date.year,
+                observed_date.month,
+                observed_date.day,
+                hour,
+                minute,
+                tzinfo=HKT,
+            ),
+            station="HKO",
+            temperature_c=temperature if temperature is not None else high,
+            since_midnight_max_c=high,
+            since_midnight_min_c=low,
+            raw={},
+        ),
+    )
+
+
 def _store_min_observation(
     db, low: float, hour: int, observed_date=date(2026, 5, 4)
 ):
@@ -1723,6 +1928,44 @@ def _store_late_peak_hourly_forecast(db, forecast_date: date, peak: float):
                     },
                 ],
                 raw={"LastModified": int(f"{forecast_date:%Y%m%d}151153")},
+            )
+        ],
+    )
+
+
+def _store_peak_decline_hourly_forecast(db, forecast_date: date, peak: float):
+    snapshot = store_raw_snapshot(
+        db, "hko", f"ocf-hourly-peak-decline-{forecast_date}", str(peak)
+    )
+    store_ocf_forecast_samples(
+        db,
+        snapshot.id,
+        [
+            OcfForecastSample(
+                forecast_date_hkt=forecast_date,
+                forecast_min_c=None,
+                forecast_max_c=int(peak),
+                raw_min_c=None,
+                raw_max_c=peak,
+                hourly_temperatures=[
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T13:00:00+08:00",
+                        "temperature_c": peak - 0.3,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T14:00:00+08:00",
+                        "temperature_c": peak,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T15:00:00+08:00",
+                        "temperature_c": peak - 0.4,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T16:00:00+08:00",
+                        "temperature_c": peak - 0.8,
+                    },
+                ],
+                raw={"LastModified": int(f"{forecast_date:%Y%m%d}131153")},
             )
         ],
     )
