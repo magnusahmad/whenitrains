@@ -164,7 +164,8 @@ class LiveTests(unittest.TestCase):
 
         options = client._order_options("token")
 
-        self.assertEqual(options, {"tick_size": "0.001", "neg_risk": True})
+        self.assertEqual(options.tick_size, "0.001")
+        self.assertTrue(options.neg_risk)
         self.assertEqual(client._client.market_token_id, "token")
 
     def test_preflight_returns_failure_instead_of_raising_on_timeout(self):

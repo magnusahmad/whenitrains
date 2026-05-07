@@ -201,7 +201,7 @@ class PolymarketClobClient:
             signed = self._client.create_market_order(args)
         return dict(self._client.post_order(signed, OrderType.FAK))
 
-    def _order_options(self, token_id: str) -> dict:
+    def _order_options(self, token_id: str) -> SimpleNamespace:
         try:
             market = self._client.get_market(token_id)
         except Exception:
@@ -216,7 +216,7 @@ class PolymarketClobClient:
         neg_risk = market.get("neg_risk")
         if neg_risk is None:
             neg_risk = market.get("negRisk")
-        return {"tick_size": str(tick_size), "neg_risk": bool(neg_risk)}
+        return SimpleNamespace(tick_size=str(tick_size), neg_risk=bool(neg_risk))
 
 
 def load_live_config(environ: dict[str, str] | None = None) -> LiveConfig:
