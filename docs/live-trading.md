@@ -156,6 +156,8 @@ eval "$(PYTHONPATH=src python3 -m whenitrains.cli live-env-exports --env-file .e
 
 The command prints only the required live exports, shell-quotes values, and fails closed if any required value is missing. Keep `.env` local-only; it is ignored by git.
 
+`live-env-exports` is read-only: it does not create or edit `.env`. Add `POLYMARKET_FUNDER_ADDRESS=<proxy wallet address>` to `.env` before loading exports. The `eval` wrapper only applies the printed exports to the current shell process.
+
 Live mode should require both a CLI flag and env gate:
 
 ```bash
