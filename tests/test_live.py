@@ -11,6 +11,7 @@ from whenitrains.live import (
     execute_live_buy,
     execute_live_sell,
     reconcile_submitted_live_order,
+    rebuild_live_positions_from_filled_orders,
     _floor_decimal,
     _fill_values,
     load_live_config,
@@ -332,6 +333,39 @@ class LiveTests(unittest.TestCase):
             pos = get_live_position(db, "yes25")
             self.assertIsNotNone(pos)
             self.assertAlmostEqual(pos["net_shares"], 12.5)
+
+    def test_rebuild_live_positions_restores_missing_position_from_filled_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            db.execute(
+                """
+                insert into live_orders (
+                    created_at_utc, submitted_at_utc, reconciled_at_utc,
+                    outcome_id, label, side, action, clob_order_id, order_type,
+                    status, requested_size_usd, limit_price, fill_price,
+                    fill_size_usd, fill_shares, reason, raw_request_json,
+                    raw_response_json, raw_reconcile_json
+                )
+                values (
+                    '2026-05-08T01:00:00+00:00',
+                    '2026-05-08T01:00:00+00:00',
+                    '2026-05-08T01:00:01+00:00',
+                    'yes25', '25C', 'BUY_YES', 'BUY', 'buy-1', 'FAK',
+                    'filled', 5.0, 0.40, 0.40, 5.0, 12.5,
+                    'filled live buy', '{}', '{}', '{}'
+                )
+                """
+            )
+            db.commit()
+
+            rebuilt = rebuild_live_positions_from_filled_orders(db)
+
+            self.assertEqual(rebuilt, 1)
+            pos = get_live_position(db, "yes25")
+            self.assertIsNotNone(pos)
+            self.assertAlmostEqual(pos["net_shares"], 12.5)
+            self.assertAlmostEqual(pos["avg_price"], 0.40)
 
     def test_polymarket_reconcile_order_handles_empty_lookup(self):
         client = PolymarketClobClient.__new__(PolymarketClobClient)

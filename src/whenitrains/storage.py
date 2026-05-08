@@ -1090,6 +1090,26 @@ def list_live_orders_by_status(
     )
 
 
+def list_live_orders_for_reconcile(db: sqlite3.Connection) -> list[sqlite3.Row]:
+    return list(
+        db.execute(
+            """
+            select *
+            from live_orders
+            where status in ('submitted', 'unknown_fill')
+               or (
+                   status = 'filled'
+                   and (
+                       coalesce(fill_shares, 0) <= 0
+                       or coalesce(fill_size_usd, 0) <= 0
+                   )
+               )
+            order by id asc
+            """
+        )
+    )
+
+
 def get_live_position(db: sqlite3.Connection, token_id: str) -> sqlite3.Row | None:
     return db.execute(
         "select * from live_positions where outcome_id = ?", (token_id,)

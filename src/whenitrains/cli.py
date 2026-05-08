@@ -52,6 +52,7 @@ from .live import (
     execute_live_sell,
     load_live_config,
     preflight_live,
+    rebuild_live_positions_from_filled_orders,
     reconcile_submitted_live_order,
     store_keychain_secret,
 )
@@ -62,7 +63,6 @@ from .storage import (
     find_outcome_by_label_and_filters,
     latest_orderbook,
     list_hko_update_times,
-    list_live_orders_by_status,
     list_hko_forecast_dates,
     list_outcomes,
     list_outcomes_from_date,
@@ -80,6 +80,7 @@ from .storage import (
     store_risk_event,
     set_live_setting,
     live_setting_enabled,
+    list_live_orders_for_reconcile,
 )
 
 
@@ -532,16 +533,20 @@ def main(argv: list[str] | None = None) -> int:
         try:
             config = load_live_config()
             client = PolymarketClobClient(config)
-            rows = list_live_orders_by_status(db, ("submitted", "unknown_fill"))
+            rows = list_live_orders_for_reconcile(db)
             filled = 0
             for row in rows:
                 result = reconcile_submitted_live_order(db, client, row)
                 if result.status == "filled":
                     filled += 1
+            rebuilt_positions = rebuild_live_positions_from_filled_orders(db)
         except LiveTradingError as exc:
             print(f"live reconcile failed: {exc}")
             return 2
-        print(f"reconciled {len(rows)} submitted live orders; filled={filled}")
+        print(
+            f"reconciled {len(rows)} live orders; filled={filled} "
+            f"rebuilt_positions={rebuilt_positions}"
+        )
         return 0
     if args.command == "live-cancel-order":
         migrate(db)

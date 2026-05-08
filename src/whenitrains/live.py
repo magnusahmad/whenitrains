@@ -856,6 +856,43 @@ def reconcile_submitted_live_order(
     )
 
 
+def rebuild_live_positions_from_filled_orders(db: sqlite3.Connection) -> int:
+    rows = db.execute(
+        """
+        select outcome_id, action, fill_price, fill_size_usd, fill_shares,
+               created_at_utc, id
+        from live_orders
+        where status = 'filled'
+          and coalesce(fill_shares, 0) > 0
+          and coalesce(fill_size_usd, 0) > 0
+        order by created_at_utc asc, id asc
+        """
+    ).fetchall()
+    positions: dict[str, tuple[float, float, float]] = {}
+    for row in rows:
+        token_id = row["outcome_id"]
+        action = row["action"] or ""
+        fill_shares = float(row["fill_shares"])
+        fill_size_usd = float(row["fill_size_usd"])
+        shares, avg_price, realized_pnl = positions.get(token_id, (0.0, 0.0, 0.0))
+        if action == "SELL":
+            sold = min(fill_shares, shares)
+            realized_pnl += fill_size_usd - sold * avg_price
+            shares = max(shares - sold, 0.0)
+        else:
+            new_shares = shares + fill_shares
+            avg_price = (
+                (avg_price * shares + fill_size_usd) / new_shares
+                if new_shares > 0
+                else 0.0
+            )
+            shares = new_shares
+        positions[token_id] = (shares, avg_price, realized_pnl)
+    for token_id, (shares, avg_price, realized_pnl) in positions.items():
+        upsert_live_position(db, token_id, shares, avg_price, realized_pnl)
+    return len(positions)
+
+
 def _order_id(response: dict) -> str | None:
     for key in ("orderID", "orderId", "order_id", "id"):
         value = response.get(key)
