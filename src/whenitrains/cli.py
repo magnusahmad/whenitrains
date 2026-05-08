@@ -620,10 +620,12 @@ def main(argv: list[str] | None = None) -> int:
         if not args.live:
             print("refusing live scheduler without --live")
             return 2
+        print("LIVE TRADING scheduler starting", flush=True)
         if not args.no_startup_backup:
+            print("creating startup backup...", flush=True)
             backup_path = backup_sqlite_database(db_path)
-            print(f"created startup backup {backup_path}")
-        print("LIVE TRADING scheduler")
+            print(f"created startup backup {backup_path}", flush=True)
+        print("loading live config and running preflight...", flush=True)
         try:
             config = load_live_config()
             client = PolymarketClobClient(config)
@@ -658,6 +660,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             aws_actual_poll_fetch=aws_actual_poll_fetch,
             aws_actual_poll_learned_times=aws_actual_poll_learned_times,
+            output_label="live-scheduler",
         )
         return 0
     if args.command == "live-kill-switch":

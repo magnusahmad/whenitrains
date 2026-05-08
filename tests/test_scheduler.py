@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import threading
 from datetime import datetime, time, timedelta
 from io import StringIO
 from pathlib import Path
@@ -294,6 +295,53 @@ class SchedulerTests(unittest.TestCase):
                     max_ticks=0,
                 )
             self.assertIn("paper-scheduler started", output.getvalue())
+
+    def test_scheduler_uses_custom_output_label(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            output = StringIO()
+            with redirect_stdout(output):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: "",
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=lambda target: None,
+                    max_ticks=1,
+                    quiet=False,
+                    output_label="live-scheduler",
+                )
+            text = output.getvalue()
+            self.assertIn("live-scheduler started", text)
+            self.assertIn("live-scheduler actions=", text)
+            self.assertNotIn("paper-scheduler started", text)
+
+    def test_scheduler_stops_when_stop_event_is_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            stop_event = threading.Event()
+            output = StringIO()
+
+            def tick_once(_db, today_hkt):
+                stop_event.set()
+                return RunnerResult()
+
+            with redirect_stdout(output):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: "",
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=lambda target: None,
+                    run_tick_fn=tick_once,
+                    stop_event=stop_event,
+                    output_label="live-scheduler",
+                )
+            text = output.getvalue()
+            self.assertIn("live-scheduler started", text)
+            self.assertIn("live-scheduler stopped", text)
 
     def test_scheduler_logs_fetch_error_and_keeps_running(self):
         with tempfile.TemporaryDirectory() as tmp:

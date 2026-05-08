@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import signal
 import sqlite3
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as day_time, timedelta
 
@@ -139,6 +139,39 @@ def mark_current_temperature_fetched(state: SchedulerState, now_hkt: datetime) -
     state.last_current_temperature_fetch_at = now_hkt
 
 
+def _install_stop_signal_handlers(
+    stop_event: threading.Event, output_label: str
+) -> dict[signal.Signals, object]:
+    previous_handlers: dict[signal.Signals, object] = {}
+    printed = False
+
+    def handle_stop(signum, _frame):
+        nonlocal printed
+        if stop_event.is_set():
+            raise KeyboardInterrupt
+        stop_event.set()
+        if not printed:
+            signame = signal.Signals(signum).name
+            print(f"{output_label} stopping ({signame})", flush=True)
+            printed = True
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous_handlers[sig] = signal.getsignal(sig)
+            signal.signal(sig, handle_stop)
+        except (ValueError, OSError):
+            previous_handlers.pop(sig, None)
+    return previous_handlers
+
+
+def _restore_signal_handlers(previous_handlers: dict[signal.Signals, object]) -> None:
+    for sig, handler in previous_handlers.items():
+        try:
+            signal.signal(sig, handler)
+        except (ValueError, OSError):
+            pass
+
+
 def run_scheduled_paper_loop(
     db: sqlite3.Connection,
     fetch_since_midnight,
@@ -155,13 +188,19 @@ def run_scheduled_paper_loop(
     run_tick_fn=None,
     aws_actual_poll_fetch=None,
     aws_actual_poll_learned_times=None,
+    output_label: str = "paper-scheduler",
+    stop_event: threading.Event | None = None,
 ) -> None:
     state = SchedulerState()
+    scheduler_stop = stop_event or threading.Event()
     stop_aws_actual_polling = threading.Event()
     aws_actual_thread: threading.Thread | None = None
     tick = 0
     clock = now_fn or (lambda: datetime.now(HKT))
-    print("paper-scheduler started")
+    previous_signal_handlers = _install_stop_signal_handlers(
+        scheduler_stop, output_label
+    )
+    print(f"{output_label} started", flush=True)
     if aws_actual_poll_fetch is not None:
         aws_actual_thread = threading.Thread(
             target=_run_aws_actual_poll_loop,
@@ -175,7 +214,9 @@ def run_scheduled_paper_loop(
         )
         aws_actual_thread.start()
     try:
-        while max_ticks is None or tick < max_ticks:
+        while not scheduler_stop.is_set() and (
+            max_ticks is None or tick < max_ticks
+        ):
             now = clock()
             learned_times = learned_forecast_times() if learned_forecast_times else []
             learned_actuals = learned_actual_times() if learned_actual_times else []
@@ -225,19 +266,29 @@ def run_scheduled_paper_loop(
             result = tick_fn(db, today_hkt=now.date())
             if should_print_scheduled_tick(notes, result, quiet):
                 print(
-                    "scheduled-paper "
+                    f"{output_label} "
                     f"actions={','.join(notes) if notes else 'decisions-only'} "
                     f"buys={result.buys_filled}/{result.buys_missed} "
                     f"sells={result.sells_filled}/{result.sells_missed} "
-                    f"signals={result.signals} notes={'; '.join(result.notes)}"
+                    f"signals={result.signals} notes={'; '.join(result.notes)}",
+                    flush=True,
                 )
             tick += 1
-            if max_ticks is None or tick < max_ticks:
-                time.sleep(base_sleep_seconds)
+            if (
+                not scheduler_stop.is_set()
+                and (max_ticks is None or tick < max_ticks)
+            ):
+                scheduler_stop.wait(base_sleep_seconds)
+    except KeyboardInterrupt:
+        scheduler_stop.set()
+        print(f"{output_label} stopping", flush=True)
     finally:
         stop_aws_actual_polling.set()
         if aws_actual_thread is not None:
             aws_actual_thread.join(timeout=5)
+        _restore_signal_handlers(previous_signal_handlers)
+        if scheduler_stop.is_set():
+            print(f"{output_label} stopped", flush=True)
 
 
 def _run_aws_actual_poll_loop(
