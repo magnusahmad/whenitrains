@@ -540,6 +540,21 @@ def _optional_float(value) -> float | None:
         return None
 
 
+def _live_fill_notional_usd(
+    fill_size_usd, fill_price, fill_shares, *, share_limit: float | None = None
+) -> float:
+    fill_size = _optional_float(fill_size_usd)
+    if fill_size is not None and fill_size > 0:
+        return fill_size
+    price = _optional_float(fill_price)
+    shares = _optional_float(fill_shares)
+    if price is None or shares is None:
+        return 0.0
+    if share_limit is not None:
+        shares = min(shares, share_limit)
+    return shares * price
+
+
 def top_token_price_series(
     db: sqlite3.Connection,
     target_date_hkt: str,
@@ -821,7 +836,9 @@ def live_order_markers(db: sqlite3.Connection, token_id: str) -> list[dict]:
                 "shape": "circle",
                 "text": "S" if is_sell else "B",
                 "price": _optional_float(row["fill_price"]),
-                "size_usd": _optional_float(row["fill_size_usd"]),
+                "size_usd": _live_fill_notional_usd(
+                    row["fill_size_usd"], row["fill_price"], row["fill_shares"]
+                ),
                 "trade_side": row["side"],
                 "decision_time_hkt": _to_hkt_display(row["created_at_utc"]),
                 "decision_reason": row["reason"],
@@ -1235,12 +1252,13 @@ def live_pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
         if kind == "order":
             token = row["outcome_id"]
             side = row["side"] or ""
-            price = _optional_float(row["fill_price"]) or 0.0
-            usd = _optional_float(row["fill_size_usd"]) or 0.0
             order_shares = _optional_float(row["fill_shares"]) or 0.0
+            usd = _live_fill_notional_usd(
+                row["fill_size_usd"], row["fill_price"], row["fill_shares"]
+            )
             shares, avg = positions.get(token, (0.0, 0.0))
             if side.startswith("BUY") and order_shares > 0:
-                cost = usd if usd > 0 else order_shares * price
+                cost = usd
                 new_shares = shares + order_shares
                 new_avg = (
                     (avg * shares + cost) / new_shares if new_shares > 0 else 0.0
@@ -1248,7 +1266,12 @@ def live_pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
                 positions[token] = (new_shares, new_avg)
             elif side == "SELL":
                 sold_shares = min(order_shares, shares)
-                proceeds = usd if usd > 0 else sold_shares * price
+                proceeds = _live_fill_notional_usd(
+                    row["fill_size_usd"],
+                    row["fill_price"],
+                    row["fill_shares"],
+                    share_limit=sold_shares,
+                )
                 realized += proceeds - sold_shares * avg
                 remaining = shares - sold_shares
                 positions[token] = (remaining, avg if remaining > 0 else 0.0)
@@ -1428,8 +1451,10 @@ def live_trade_rows(db: sqlite3.Connection, view: str) -> dict:
     result = []
     for row in rows:
         fill_price = _optional_float(row["fill_price"])
-        fill_size = _optional_float(row["fill_size_usd"]) or 0.0
         shares = _optional_float(row["fill_shares"])
+        fill_size = _live_fill_notional_usd(
+            row["fill_size_usd"], row["fill_price"], row["fill_shares"]
+        )
         latest_bid = _latest_bid(db, row["outcome_id"])
         net_shares = _optional_float(row["net_shares"]) or 0.0
         avg_price = _optional_float(row["avg_price"]) or 0.0
@@ -1495,18 +1520,24 @@ def _live_realized_pnl_by_sell_order_id(
     for row in orders:
         token = row["outcome_id"]
         side = row["side"] or ""
-        price = _optional_float(row["fill_price"]) or 0.0
-        usd = _optional_float(row["fill_size_usd"]) or 0.0
         order_shares = _optional_float(row["fill_shares"]) or 0.0
+        usd = _live_fill_notional_usd(
+            row["fill_size_usd"], row["fill_price"], row["fill_shares"]
+        )
         shares, avg = positions.get(token, (0.0, 0.0))
         if side.startswith("BUY") and order_shares > 0:
-            cost = usd if usd > 0 else order_shares * price
+            cost = usd
             new_shares = shares + order_shares
             new_avg = (avg * shares + cost) / new_shares if new_shares > 0 else 0.0
             positions[token] = (new_shares, new_avg)
         elif side == "SELL":
             sold_shares = min(order_shares, shares)
-            proceeds = usd if usd > 0 else sold_shares * price
+            proceeds = _live_fill_notional_usd(
+                row["fill_size_usd"],
+                row["fill_price"],
+                row["fill_shares"],
+                share_limit=sold_shares,
+            )
             realized_by_order_id[int(row["id"])] = proceeds - sold_shares * avg
             remaining = shares - sold_shares
             positions[token] = (remaining, avg if remaining > 0 else 0.0)

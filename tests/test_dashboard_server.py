@@ -1142,6 +1142,91 @@ class DashboardServerTests(unittest.TestCase):
             self.assertTrue(pnl["realized"])
             self.assertEqual(panel["top_tokens"][0]["markers"][0]["text"], "B")
 
+    def test_live_trade_rows_backfill_zero_fill_size_from_price_and_shares(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.11, 400)],
+                    asks=[(0.12, 400)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            db.execute(
+                """
+                insert into live_orders (
+                    created_at_utc, outcome_id, label, side, action, order_type,
+                    status, requested_size_usd, limit_price, fill_price,
+                    fill_size_usd, fill_shares, reason
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "2026-05-06T15:50:07+00:00",
+                    "yes25",
+                    "25°C",
+                    "BUY_YES",
+                    "BUY",
+                    "FAK",
+                    "filled",
+                    20.0,
+                    0.19,
+                    0.19,
+                    0.0,
+                    157.5714,
+                    "forecast bucket priced unrealistically low vs HKO forecast",
+                ),
+            )
+            upsert_live_position(db, "yes25", 157.5714, 0.19, 0.0)
+
+            rows = live_trade_rows(db, "open")["rows"]
+
+            self.assertAlmostEqual(rows[0]["fill_size_usd"], 29.938566)
+            self.assertAlmostEqual(rows[0]["unrealized_pnl"], -12.605712)
+
+    def test_live_realized_rows_backfill_zero_sell_proceeds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            for created_at, side, price, shares in (
+                ("2026-05-06T14:00:00+00:00", "BUY_YES", 0.20, 100.0),
+                ("2026-05-06T15:00:00+00:00", "SELL", 0.26, 25.0),
+            ):
+                db.execute(
+                    """
+                    insert into live_orders (
+                        created_at_utc, outcome_id, label, side, action, order_type,
+                        status, requested_size_usd, limit_price, fill_price,
+                        fill_size_usd, fill_shares, reason
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        created_at,
+                        "yes25",
+                        "25°C",
+                        side,
+                        "SELL" if side == "SELL" else "BUY",
+                        "FAK",
+                        "filled",
+                        20.0,
+                        price,
+                        price,
+                        0.0,
+                        shares,
+                        "position invalidated by hourly forecast",
+                    ),
+                )
+            upsert_live_position(db, "yes25", 75.0, 0.20, 1.5)
+
+            rows = live_trade_rows(db, "realized")["rows"]
+
+            self.assertAlmostEqual(rows[0]["fill_size_usd"], 6.5)
+            self.assertAlmostEqual(rows[0]["realized_pnl"], 1.5)
+
     def test_dashboard_html_has_delayed_crosshair_tooltip(self):
         self.assertIn('id="chart-tooltip"', INDEX_HTML)
         self.assertIn("Bot signal high", INDEX_HTML)
