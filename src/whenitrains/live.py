@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import shlex
 import sqlite3
 import subprocess
 from dataclasses import dataclass
@@ -27,6 +28,16 @@ from .storage import (
 
 class LiveTradingError(RuntimeError):
     pass
+
+
+REQUIRED_LIVE_ENV_NAMES = (
+    "WHENITRAINS_TRADING_MODE",
+    "POLYMARKET_SIGNATURE_TYPE",
+    "POLYMARKET_FUNDER_ADDRESS",
+    "POLYMARKET_API_KEY",
+    "POLYMARKET_API_SECRET",
+    "POLYMARKET_API_PASSPHRASE",
+)
 
 
 @dataclass(frozen=True)
@@ -344,14 +355,7 @@ def load_live_config(environ: dict[str, str] | None = None) -> LiveConfig:
     service = env.get("WHENITRAINS_KEYCHAIN_SERVICE", Settings.live_keychain_service)
     account = env.get("WHENITRAINS_KEYCHAIN_ACCOUNT", Settings.live_keychain_account)
     private_key = read_keychain_secret(service, account)
-    required = {
-        "WHENITRAINS_TRADING_MODE": env.get("WHENITRAINS_TRADING_MODE", ""),
-        "POLYMARKET_SIGNATURE_TYPE": env.get("POLYMARKET_SIGNATURE_TYPE", ""),
-        "POLYMARKET_FUNDER_ADDRESS": env.get("POLYMARKET_FUNDER_ADDRESS", ""),
-        "POLYMARKET_API_KEY": env.get("POLYMARKET_API_KEY", ""),
-        "POLYMARKET_API_SECRET": env.get("POLYMARKET_API_SECRET", ""),
-        "POLYMARKET_API_PASSPHRASE": env.get("POLYMARKET_API_PASSPHRASE", ""),
-    }
+    required = {name: env.get(name, "") for name in REQUIRED_LIVE_ENV_NAMES}
     missing = [name for name, value in required.items() if not value]
     if missing:
         raise LiveTradingError("missing live config: " + ", ".join(missing))
@@ -374,6 +378,45 @@ def load_live_config(environ: dict[str, str] | None = None) -> LiveConfig:
         keychain_service=service,
         keychain_account=account,
     )
+
+
+def read_live_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line.removeprefix("export ").lstrip()
+        if "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        name = name.strip()
+        if name not in REQUIRED_LIVE_ENV_NAMES:
+            continue
+        values[name] = _parse_env_value(value.strip())
+    return values
+
+
+def render_live_env_exports(values: dict[str, str]) -> tuple[list[str], list[str]]:
+    missing = [name for name in REQUIRED_LIVE_ENV_NAMES if not values.get(name)]
+    if missing:
+        return [], missing
+    return [
+        f"export {name}={shlex.quote(values[name])}"
+        for name in REQUIRED_LIVE_ENV_NAMES
+    ], []
+
+
+def _parse_env_value(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        try:
+            parsed = shlex.split(value, posix=True)
+        except ValueError:
+            return value[1:-1]
+        if len(parsed) == 1:
+            return parsed[0]
+    return value
 
 
 def read_keychain_secret(service: str, account: str) -> str:

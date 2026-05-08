@@ -1,10 +1,17 @@
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import date
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from whenitrains.cli import _discover_market, _fetch_current_temperature, _fetch_ocf_forecast
+from whenitrains.cli import (
+    _discover_market,
+    _fetch_current_temperature,
+    _fetch_ocf_forecast,
+    main,
+)
 from whenitrains.hko import (
     AWS_GIS_FORECAST_URL,
     AWS_GIS_READINGS_URL,
@@ -16,6 +23,67 @@ from whenitrains.storage import connect, migrate
 
 
 class CliDiscoveryTests(unittest.TestCase):
+    def test_live_env_exports_prints_shell_safe_required_exports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / "live.env"
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "WHENITRAINS_TRADING_MODE=live",
+                        "POLYMARKET_SIGNATURE_TYPE=1",
+                        "POLYMARKET_FUNDER_ADDRESS=0xfunder",
+                        "POLYMARKET_API_KEY=api key",
+                        "POLYMARKET_API_SECRET=secret'with quote",
+                        "POLYMARKET_API_PASSPHRASE=passphrase",
+                        "IGNORED=value",
+                    ]
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(["live-env-exports", "--env-file", str(env_path)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                stdout.getvalue().splitlines(),
+                [
+                    "export WHENITRAINS_TRADING_MODE=live",
+                    "export POLYMARKET_SIGNATURE_TYPE=1",
+                    "export POLYMARKET_FUNDER_ADDRESS=0xfunder",
+                    "export POLYMARKET_API_KEY='api key'",
+                    """export POLYMARKET_API_SECRET='secret'"'"'with quote'""",
+                    "export POLYMARKET_API_PASSPHRASE=passphrase",
+                ],
+            )
+
+    def test_live_env_exports_fails_closed_when_required_secret_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = Path(tmp) / "live.env"
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "WHENITRAINS_TRADING_MODE=live",
+                        "POLYMARKET_SIGNATURE_TYPE=1",
+                        "POLYMARKET_FUNDER_ADDRESS=0xfunder",
+                        "POLYMARKET_API_KEY=api",
+                        "POLYMARKET_API_PASSPHRASE=passphrase",
+                    ]
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(["live-env-exports", "--env-file", str(env_path)])
+
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(
+                stdout.getvalue().strip(),
+                "missing live env values: POLYMARKET_API_SECRET",
+            )
+
     def test_discover_market_fetches_highest_and_lowest_temperature_events(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

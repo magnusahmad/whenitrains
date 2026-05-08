@@ -52,8 +52,10 @@ from .live import (
     execute_live_sell,
     load_live_config,
     preflight_live,
+    read_live_env_file,
     rebuild_live_positions_from_filled_orders,
     reconcile_submitted_live_order,
+    render_live_env_exports,
     store_keychain_secret,
 )
 from .storage import (
@@ -170,6 +172,8 @@ def main(argv: list[str] | None = None) -> int:
     live_store_key = sub.add_parser("live-store-hot-key")
     live_store_key.add_argument("--service", default=Settings.live_keychain_service)
     live_store_key.add_argument("--account", default=Settings.live_keychain_account)
+    live_env_exports = sub.add_parser("live-env-exports")
+    live_env_exports.add_argument("--env-file", default=".env")
     live_preflight = sub.add_parser("live-preflight")
     live_preflight.add_argument("--live", action="store_true")
     live_auth_smoke = sub.add_parser("live-auth-smoke")
@@ -215,6 +219,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     db_path = Path(args.db)
+    if args.command == "live-env-exports":
+        try:
+            values = read_live_env_file(Path(args.env_file))
+        except OSError as exc:
+            print(f"cannot read live env file: {exc}")
+            return 2
+        lines, missing = render_live_env_exports(values)
+        if missing:
+            print("missing live env values: " + ", ".join(missing))
+            return 2
+        for line in lines:
+            print(line)
+        return 0
+
     if args.command == "backup-db":
         backup_path = backup_sqlite_database(
             db_path,

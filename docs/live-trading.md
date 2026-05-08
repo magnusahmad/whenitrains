@@ -148,6 +148,14 @@ Optional:
 
 The Keychain service/account values are labels chosen by this application. They are not issued by Polymarket. Setup should store the bot private key under the default labels unless the user overrides them.
 
+To load the required live env vars from a non-committed local env file into the current shell:
+
+```bash
+eval "$(PYTHONPATH=src python3 -m whenitrains.cli live-env-exports --env-file .env)"
+```
+
+The command prints only the required live exports, shell-quotes values, and fails closed if any required value is missing. Keep `.env` local-only; it is ignored by git.
+
 Live mode should require both a CLI flag and env gate:
 
 ```bash

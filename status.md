@@ -1,12 +1,12 @@
 # Live Trading Status
 
-Last updated: 2026-05-06 HKT
+Last updated: 2026-05-08 HKT
 
 ## Current State
 
 Live trading scaffolding is implemented behind explicit gates.
 
-The project supports local-first paper trading with live HKO and Polymarket read-only data. Live mode now has additive storage, Keychain hot-key setup, pre-derived credential loading, manual FAK buy/sell, reconcile, cancel-one, cancel-all commands, kill-switch settings, live dashboard reporting, and live tick/scheduler command wiring. Paper trading remains the default.
+The project supports local-first paper trading with live HKO and Polymarket read-only data. Live mode now has additive storage, Keychain hot-key setup, pre-derived credential loading, a `live-env-exports` helper for shell-safe export lines from a local env file, manual FAK buy/sell, reconcile, cancel-one, cancel-all commands, kill-switch settings, live dashboard reporting, and live tick/scheduler command wiring. Paper trading remains the default.
 
 Relevant existing implementation:
 
@@ -31,6 +31,7 @@ Known local tree state at the time this status file was updated:
 - Hot-key storage target: macOS Keychain.
 - Default Keychain service/account: `whenitrains-polymarket` / `bot-private-key`.
 - API credentials: require pre-derived `POLYMARKET_API_KEY`, `POLYMARKET_API_SECRET`, and `POLYMARKET_API_PASSPHRASE` at runtime.
+- Local env workflow: use `live-env-exports --env-file .env` to print shell-safe exports for the required live env vars without dumping unrelated env values.
 - Runtime startup must not create or derive API credentials.
 - Credential creation/derivation, if implemented, belongs in a separate explicit setup command such as `live-create-api-creds`.
 - Signature type: start with `POLYMARKET_SIGNATURE_TYPE=1` for Polymarket proxy-wallet flow unless auth smoke proves otherwise.
@@ -129,6 +130,7 @@ Deliverables:
 - Hot key loaded from macOS Keychain.
 - Default Keychain service/account can be overridden by config.
 - Pre-derived L2 API credentials loaded from env or a non-committed local secret source.
+- Required live env values can be exported from a local env file with `live-env-exports`.
 
 Tests:
 
@@ -137,6 +139,7 @@ Tests:
 - Missing funder/signature type fails closed when required.
 - Fake CLOB balance/allowance failure blocks live mode.
 - Secret values never appear in printed errors.
+- Env export helper prints only required live keys and fails closed when any required value is missing.
 
 Exit criteria:
 
