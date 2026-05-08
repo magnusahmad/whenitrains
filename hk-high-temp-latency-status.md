@@ -16,6 +16,12 @@ Live trading scaffolding is now implemented behind explicit fail-closed gates. P
 
 The paper/live scheduler now performs a startup warmup loop before allowing trading decisions. On process start it may fetch HKO data, discover markets, and fetch orderbooks, but it skips the first trading tick so entries cannot be opened against a partially refreshed local data round.
 
+Dashboard executable PnL now values open positions against only the latest orderbook snapshot. If the latest snapshot has no bid depth, older non-null bids are ignored so stale bids cannot create phantom unrealized gains.
+
+Entry candidates now fail closed when the latest actual max/min has already invalidated the side being considered. This prevents forecast-change entries such as buying same-day `28°C YES` after the since-midnight max is already `29°C+`.
+
+Same-day effective forecast values now combine actuals with remaining-hour forecast values: high uses `max(latest_since_midnight_max, forecast_hourly_max)` and low uses `min(latest_since_midnight_min, forecast_hourly_min)`. This prevents the bot from treating a lower remaining-day forecast as a lower full-day forecast after the actual high has already occurred.
+
 ## API Discovery Findings
 
 ### HKO
@@ -140,6 +146,42 @@ Green result after adding `SchedulerState.trading_warmed_up`:
 ```text
 Ran 1 test in 0.022s
 OK
+```
+
+Stale-bid dashboard valuation red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_dashboard_server.DashboardServerTests.test_paper_trade_rows_do_not_use_stale_bid_after_latest_book_has_no_bid
+```
+
+Red result: paper trade rows used an older `0.50` bid even after the latest orderbook snapshot had no bid.
+
+Green result after making latest-bid valuation use the newest snapshot regardless of bid nullability:
+
+```text
+Ran 1 test in 0.027s
+OK
+```
+
+Actual-invalidation entry guard red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_runner.RunnerTests.test_forecast_change_effective_high_includes_actual_max
+```
+
+Red result: forecast-change logic still treated hourly forecast `29.1 -> 28.8` as an effective high drop even though latest actual max was `29.6`.
+
+Green result after folding same-day actual max into effective high:
+
+```text
+Ran 1 test in 0.019s
+OK
+```
+
+The matching low-side test also passes:
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_runner.RunnerTests.test_lowest_forecast_change_effective_low_includes_actual_min
 ```
 
 CLI smoke checks:

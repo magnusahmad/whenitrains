@@ -588,6 +588,58 @@ class DashboardServerTests(unittest.TestCase):
             self.assertAlmostEqual(payload["rows"][0]["unrealized_pnl"], 20)
             self.assertAlmostEqual(payload["rows"][1]["unrealized_pnl"], 50)
 
+    def test_paper_trade_rows_do_not_use_stale_bid_after_latest_book_has_no_bid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_paper_order_result(
+                db,
+                "yes25",
+                "BUY_YES",
+                limit_price=0.25,
+                size_usd=50,
+                fill_price=0.25,
+                fill_size_usd=50,
+                status="filled",
+                reason="entry",
+            )
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.50, 10)],
+                    asks=[(0.52, 10)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[],
+                    asks=[(0.99, 10)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            db.execute(
+                """
+                insert into paper_positions
+                (outcome_id, net_shares, avg_price, realized_pnl, updated_at_utc)
+                values ('yes25', 200, 0.25, 0, '2026-05-06T10:00:00+00:00')
+                """
+            )
+            db.commit()
+
+            payload = paper_trade_rows(db, "unrealized")
+            stats = dashboard_stats(db)
+
+            self.assertIsNone(payload["rows"][0]["latest_bid"])
+            self.assertEqual(payload["rows"][0]["unrealized_pnl"], 0)
+            self.assertAlmostEqual(stats["executable_unrealized_pnl"], -50)
+
     def test_paper_trade_rows_unrealized_pnl_ignores_closed_float_dust(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_dashboard_db(Path(tmp) / "test.db")

@@ -85,6 +85,42 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(decision["label"], "29°C")
             self.assertEqual(decision["side"], "YES")
 
+    def test_lowest_forecast_change_effective_low_includes_actual_min(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_lowest_market(
+                db,
+                [
+                    Outcome(
+                        market_id="low24",
+                        label="24°C",
+                        predicate=parse_outcome_label("24°C"),
+                        yes_token_id="yes-low24",
+                        no_token_id="no-low24",
+                    )
+                ],
+            )
+            _store_aws_actual(db, high=29.0, low=24.7, hour=13, minute=10)
+            _store_forecast_range(db, low=25.3, high=30, update_time="2026-05-04T12:11:46+08:00")
+            _store_forecast_range(db, low=25.8, high=30, update_time="2026-05-04T13:11:47+08:00")
+            _store_book_pair(db, "yes-low24", old_ask=0.001, new_ask=0.001)
+
+            result = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertIn("forecast low unchanged", result.notes)
+            buy_count = db.execute(
+                """
+                select count(*)
+                from paper_decisions
+                where event_type = 'lowest_forecast_change'
+                  and action = 'BUY'
+                """
+            ).fetchone()
+            self.assertEqual(buy_count[0], 0)
+
     def test_forecast_change_skips_when_market_moved_more_than_twenty_cents(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(Path(tmp) / "test.db")
@@ -114,6 +150,37 @@ class RunnerTests(unittest.TestCase):
                 "select simulated_fill_price from paper_orders where status = 'filled' order by id desc limit 1"
             ).fetchone()
             self.assertEqual(order["simulated_fill_price"], 0.60)
+
+    def test_forecast_change_effective_high_includes_actual_max(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_threshold_risk_outcomes(),
+            )
+            _store_aws_actual(db, high=29.6, hour=13, minute=10)
+            _store_forecast(db, 29.1, "2026-05-04T12:11:46+08:00")
+            _store_forecast(db, 28.8, "2026-05-04T13:11:47+08:00")
+            _store_book_pair(db, "yes28", old_ask=0.001, new_ask=0.001)
+
+            result = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertIn("forecast high unchanged", result.notes)
+            position = db.execute(
+                "select net_shares from paper_positions where outcome_id = 'yes28'"
+            ).fetchone()
+            self.assertIsNone(position)
+            buy_count = db.execute(
+                """
+                select count(*)
+                from paper_decisions
+                where event_type = 'forecast_change'
+                  and action = 'BUY'
+                """
+            ).fetchone()
+            self.assertEqual(buy_count[0], 0)
 
     def test_forecast_change_d2_skips_when_entry_price_is_above_twenty_cents(self):
         with tempfile.TemporaryDirectory() as tmp:

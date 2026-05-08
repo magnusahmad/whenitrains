@@ -1537,13 +1537,13 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
             """
             select best_bid
             from orderbook_snapshots
-            where outcome_id = ? and best_bid is not null
+            where outcome_id = ?
             order by fetched_at_utc desc, id desc
             limit 1
             """,
             (pos["outcome_id"],),
         ).fetchone()
-        bid = float(bid_row["best_bid"]) if bid_row else 0.0
+        bid = float(bid_row["best_bid"]) if bid_row and bid_row["best_bid"] is not None else 0.0
         executable_unrealized += shares * (bid - avg_price)
     open_positions = db.execute(
         "select count(*) from paper_positions where net_shares > 0"
@@ -1594,13 +1594,17 @@ def live_dashboard_stats(db: sqlite3.Connection) -> dict:
             """
             select best_bid
             from orderbook_snapshots
-            where outcome_id = ? and best_bid is not null
+            where outcome_id = ?
             order by fetched_at_utc desc, id desc
             limit 1
             """,
             (pos["outcome_id"],),
         ).fetchone()
-        latest_bid = float(bid_row["best_bid"]) if bid_row else None
+        latest_bid = (
+            float(bid_row["best_bid"])
+            if bid_row and bid_row["best_bid"] is not None
+            else None
+        )
         shares = float(pos["net_shares"])
         avg_price = float(pos["avg_price"])
         cost_basis = shares * avg_price

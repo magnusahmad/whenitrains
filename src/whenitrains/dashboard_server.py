@@ -1475,13 +1475,13 @@ def _latest_bid(db: sqlite3.Connection, token_id: str) -> float | None:
         """
         select best_bid
         from orderbook_snapshots
-        where outcome_id = ? and best_bid is not null
+        where outcome_id = ?
         order by fetched_at_utc desc, id desc
         limit 1
         """,
         (token_id,),
     ).fetchone()
-    return None if row is None else float(row["best_bid"])
+    return None if row is None or row["best_bid"] is None else float(row["best_bid"])
 
 
 INDEX_HTML = r"""<!doctype html>

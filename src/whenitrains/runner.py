@@ -1281,6 +1281,9 @@ def _effective_forecast_rows(
     limit: int = 1,
     market_kind: str = "highest",
 ) -> list[dict]:
+    actual_value = _latest_actual_value_for_effective_forecast(
+        db, forecast_date_hkt, market_kind
+    )
     rows = db.execute(
         """
         select id, forecast_date_hkt, fetched_at_utc, forecast_min_c, forecast_max_c,
@@ -1298,6 +1301,12 @@ def _effective_forecast_rows(
         effective_value = _effective_forecast_value_from_sample(row, market_kind)
         if effective_value is None:
             continue
+        if actual_value is not None:
+            effective_value = (
+                min(actual_value, effective_value)
+                if market_kind == "lowest"
+                else max(actual_value, effective_value)
+            )
         update_time = _forecast_sample_update_time(row)
         if update_time in seen_update_times:
             continue
@@ -1314,6 +1323,20 @@ def _effective_forecast_rows(
         if len(result) >= limit:
             break
     return result
+
+
+def _latest_actual_value_for_effective_forecast(
+    db: sqlite3.Connection, forecast_date_hkt: str, market_kind: str
+) -> float | None:
+    row = (
+        latest_observed_min_for_date(db, forecast_date_hkt)
+        if market_kind == "lowest"
+        else latest_observed_max_for_date(db, forecast_date_hkt)
+    )
+    if row is None:
+        return None
+    column = "since_midnight_min_c" if market_kind == "lowest" else "since_midnight_max_c"
+    return None if row[column] is None else float(row[column])
 
 
 def _highest_temperature_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
@@ -1452,6 +1475,24 @@ def _execute_candidate_buy(
     side = "YES" if candidate.side == "BUY_YES" else "NO"
     token_id = candidate.outcome.yes_token_id if side == "YES" else candidate.outcome.no_token_id
     outcome_row = find_outcome_by_token(db, token_id)
+    actual_guard_reason = (
+        _actual_entry_guard_reason(db, outcome_row, side)
+        if outcome_row is not None
+        else None
+    )
+    if actual_guard_reason is not None:
+        store_trading_decision(
+            db,
+            event_type,
+            token_id,
+            candidate.outcome.label,
+            side,
+            "BUY",
+            "ignored",
+            actual_guard_reason,
+            event_key=event_key,
+        )
+        return None
     forecast_guard_reason = (
         _forecast_value_guard_reason(db, outcome_row["target_date_hkt"], outcome_row, side)
         if outcome_row is not None
@@ -1620,6 +1661,32 @@ def _remaining_position_budget(db: sqlite3.Connection, token_id: str) -> float:
         return cap
     invested = float(position["net_shares"]) * float(position["avg_price"])
     return max(cap - invested, 0.0)
+
+
+def _actual_entry_guard_reason(
+    db: sqlite3.Connection, outcome: sqlite3.Row, side: str
+) -> str | None:
+    target_date_hkt = outcome["target_date_hkt"]
+    market_kind = _temperature_market_kind_for_row(outcome)
+    latest_actual = (
+        latest_observed_min_for_date(db, target_date_hkt)
+        if market_kind == "lowest"
+        else latest_observed_max_for_date(db, target_date_hkt)
+    )
+    if latest_actual is None:
+        return None
+    current_value = (
+        float(latest_actual["since_midnight_min_c"])
+        if market_kind == "lowest"
+        else float(latest_actual["since_midnight_max_c"])
+    )
+    if not _position_invalidated(outcome, side, current_value):
+        return None
+    return (
+        "entry invalidated by observed min"
+        if market_kind == "lowest"
+        else "entry invalidated by observed max"
+    )
 
 
 def _forecast_value_guard_reason(
