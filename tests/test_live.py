@@ -20,6 +20,7 @@ from whenitrains.live import (
 from whenitrains.storage import (
     connect,
     get_live_position,
+    live_setting_enabled,
     live_dashboard_stats,
     live_total_open_exposure,
     migrate,
@@ -119,6 +120,17 @@ class TimeoutPreflightClient:
 
     def allowance_ok(self):
         raise RuntimeError("timeout")
+
+
+class RawBalanceAllowanceClient:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def signer_address(self):
+        return "0xsigner"
+
+    def balance_allowance(self):
+        return self.payload
 
 
 class LiveTests(unittest.TestCase):
@@ -466,6 +478,68 @@ class LiveTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertIn("balance/allowance check failed", result.reason)
 
+    def test_preflight_decodes_sub_dollar_raw_balance_as_micro_usdc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            config = LiveConfig(
+                trading_mode="live",
+                private_key="0xabc",
+                signature_type=3,
+                funder_address="0xfunder",
+                api_key="api",
+                api_secret="secret",
+                api_passphrase="passphrase",
+            )
+            client = RawBalanceAllowanceClient(
+                {
+                    "balance": "7366",
+                    "allowances": {
+                        "0xexchange": (
+                            "115792089237316195423570985008687907853269984665640564039457"
+                            "584007913129639935"
+                        )
+                    },
+                }
+            )
+
+            result = preflight_live(db, client, config, required_balance_usd=3.95)
+
+            self.assertFalse(result.ok)
+            self.assertAlmostEqual(result.balance_usd, 0.007366)
+            self.assertEqual(result.reason, "insufficient balance")
+
+    def test_preflight_uses_required_scheduler_balance_not_manual_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            config = LiveConfig(
+                trading_mode="live",
+                private_key="0xabc",
+                signature_type=3,
+                funder_address="0xfunder",
+                api_key="api",
+                api_secret="secret",
+                api_passphrase="passphrase",
+            )
+            client = RawBalanceAllowanceClient(
+                {
+                    "balance": "10000000",
+                    "allowances": {
+                        "0xexchange": (
+                            "115792089237316195423570985008687907853269984665640564039457"
+                            "584007913129639935"
+                        )
+                    },
+                }
+            )
+
+            result = preflight_live(db, client, config, required_balance_usd=20.0)
+
+            self.assertFalse(result.ok)
+            self.assertAlmostEqual(result.balance_usd, 10.0)
+            self.assertEqual(result.reason, "insufficient balance")
+
     def test_execute_live_buy_blocks_when_kill_switch_enabled(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
@@ -489,6 +563,35 @@ class LiveTests(unittest.TestCase):
 
             self.assertEqual(result.status, "blocked")
             self.assertEqual(client.buys, [])
+
+    def test_execute_live_buy_blocks_future_entries_after_insufficient_balance_error(self):
+        class InsufficientBalanceClient(FakeClobClient):
+            def buy_fak(self, token_id, price, size_usd):
+                raise RuntimeError(
+                    "not enough balance / allowance: the balance is not enough -> "
+                    "balance: 7366, order amount: 3950000"
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+
+            result = execute_live_buy(
+                db,
+                InsufficientBalanceClient(),
+                token_id="yes25",
+                side="YES",
+                size_usd=5,
+                asks=[(0.40, 100)],
+                reason="test live buy",
+                max_price=0.40,
+                min_fill_usd=5,
+                order_cap_usd=5,
+                label="25C",
+            )
+
+            self.assertEqual(result.status, "error")
+            self.assertTrue(live_setting_enabled(db, "block_new_entries"))
 
     def test_execute_live_sell_closes_position_from_fill(self):
         with tempfile.TemporaryDirectory() as tmp:

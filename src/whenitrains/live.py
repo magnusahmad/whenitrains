@@ -19,6 +19,7 @@ from .storage import (
     live_realized_pnl_since,
     live_setting_enabled,
     live_total_open_exposure,
+    set_live_setting,
     store_live_order,
     store_risk_event,
     update_live_order_reconcile,
@@ -460,6 +461,7 @@ def preflight_live(
     client: LiveClobClient,
     config: LiveConfig,
     *,
+    required_balance_usd: float = Settings.live_manual_order_cap_usd,
     kill_switch_path: Path = Settings.live_kill_switch_path,
 ) -> LivePreflightResult:
     if config.trading_mode != "live":
@@ -472,7 +474,9 @@ def preflight_live(
         if hasattr(client, "balance_allowance"):
             payload = client.balance_allowance()
             balance = _balance_from_payload(payload)
-            allowance_ok = _allowance_ok_from_payload(payload)
+            allowance_ok = _allowance_ok_from_payload(
+                payload, required_amount_usd=required_balance_usd
+            )
         else:
             balance = client.balance_usd()
             allowance_ok = client.allowance_ok()
@@ -485,9 +489,14 @@ def preflight_live(
             False,
             f"balance/allowance check failed: {type(exc).__name__}",
         )
-    if balance is not None and balance < Settings.live_manual_order_cap_usd:
+    if balance is not None and balance < required_balance_usd:
         return LivePreflightResult(
-            False, client.signer_address(), config.funder_address, balance, allowance_ok, "insufficient balance"
+            False,
+            client.signer_address(),
+            config.funder_address,
+            balance,
+            allowance_ok,
+            "insufficient balance",
         )
     if not allowance_ok:
         return LivePreflightResult(
@@ -601,7 +610,11 @@ def execute_live_buy(
         response = client.buy_fak(token_id, float(quote.limit_price), quote.estimated_cost_usd)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
-        store_risk_event(db, "live_order_submit_failed", "critical", {"token_id": token_id, "error": str(exc)})
+        details = {"token_id": token_id, "error": str(exc)}
+        if _is_insufficient_balance_or_allowance_error(str(exc)):
+            set_live_setting(db, "block_new_entries", True)
+            details["block_new_entries"] = True
+        store_risk_event(db, "live_order_submit_failed", "critical", details)
         store_live_order(
             db,
             outcome_id=token_id,
@@ -1144,6 +1157,10 @@ def _decode_live_json(value: str | None) -> dict:
 
 
 def _usdc_amount(value) -> float:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and stripped.lstrip("-").isdigit():
+            return int(stripped) / 1_000_000
     amount = float(value or 0)
     if amount >= 1_000_000:
         return amount / 1_000_000
@@ -1159,13 +1176,25 @@ def _balance_from_payload(payload: dict | None) -> float | None:
     return None
 
 
-def _allowance_ok_from_payload(payload: dict | None) -> bool:
+def _allowance_ok_from_payload(
+    payload: dict | None, *, required_amount_usd: float = 0.0
+) -> bool:
     if payload is None:
         return True
+    required = max(required_amount_usd, 0.0)
     allowance = payload.get("allowance")
     if allowance is None:
         allowances = payload.get("allowances")
         if isinstance(allowances, dict):
-            return any(float(value or 0) > 0 for value in allowances.values())
+            return any(_usdc_amount(value) >= required for value in allowances.values())
         return True
-    return float(allowance) > 0
+    return _usdc_amount(allowance) >= required
+
+
+def _is_insufficient_balance_or_allowance_error(message: str) -> bool:
+    normalized = message.lower()
+    return (
+        "not enough balance" in normalized
+        or "insufficient balance" in normalized
+        or "insufficient allowance" in normalized
+    )

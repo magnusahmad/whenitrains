@@ -430,7 +430,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             config = load_live_config()
             client = PolymarketClobClient(config)
-            result = preflight_live(db, client, config)
+            result = preflight_live(
+                db,
+                client,
+                config,
+                required_balance_usd=Settings.live_scheduler_order_cap_usd,
+            )
         except LiveTradingError as exc:
             print(f"live preflight failed: {exc}")
             return 2
@@ -450,7 +455,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             config = load_live_config()
             client = PolymarketClobClient(config)
-            result = preflight_live(db, client, config)
+            result = preflight_live(
+                db,
+                client,
+                config,
+                required_balance_usd=Settings.live_scheduler_order_cap_usd,
+            )
         except LiveTradingError as exc:
             print(f"live auth smoke failed: {exc}")
             return 2
@@ -610,7 +620,12 @@ def main(argv: list[str] | None = None) -> int:
                 _fetch_hko(db)
                 _discover_markets_for_forecast_dates(db, today)
                 _fetch_orderbooks(db)
-            preflight = preflight_live(db, client, config)
+            preflight = preflight_live(
+                db,
+                client,
+                config,
+                required_balance_usd=Settings.live_scheduler_order_cap_usd,
+            )
             if not preflight.ok:
                 print(f"live preflight failed: {preflight.reason}")
                 return 2
@@ -643,7 +658,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             config = load_live_config()
             client = PolymarketClobClient(config)
-            preflight = preflight_live(db, client, config)
+            preflight = preflight_live(
+                db,
+                client,
+                config,
+                required_balance_usd=Settings.live_scheduler_order_cap_usd,
+            )
             if not preflight.ok:
                 print(f"live preflight failed: {preflight.reason}")
                 return 2

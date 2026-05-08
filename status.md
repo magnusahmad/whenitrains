@@ -8,6 +8,8 @@ Live trading scaffolding is implemented behind explicit gates.
 
 The project supports local-first paper trading with live HKO and Polymarket read-only data. Live mode now has additive storage, Keychain hot-key setup, pre-derived credential loading, a `live-env-exports` helper for shell-safe export lines from a local env file, manual FAK buy/sell, reconcile, cancel-one, cancel-all commands, kill-switch settings, live dashboard reporting, and live tick/scheduler command wiring. Paper trading remains the default.
 
+Live preflight now interprets raw pUSD micro-unit balance/allowance payloads from the CLOB, requires enough available balance for the scheduler cap before `live-tick`/`live-scheduler`, and automatically sets `block_new_entries` when the CLOB rejects a live buy for insufficient balance or allowance.
+
 Relevant existing implementation:
 
 - Strategy/decision path: `src/whenitrains/runner.py`
@@ -126,6 +128,7 @@ Deliverables:
 - Wrapper around official Polymarket Python CLOB client.
 - Env-based config loader.
 - Preflight checks for env gate, credentials, host, chain ID, signature type, funder, balance, allowance, and open orders.
+- Scheduler/tick preflight checks the scheduler order cap and decodes raw micro-unit CLOB balance/allowance payloads.
 - Redacted logging for all credential-adjacent failures.
 - Hot key loaded from macOS Keychain.
 - Default Keychain service/account can be overridden by config.
@@ -138,6 +141,7 @@ Tests:
 - Missing private key fails closed.
 - Missing funder/signature type fails closed when required.
 - Fake CLOB balance/allowance failure blocks live mode.
+- CLOB insufficient balance/allowance submit failures set `block_new_entries`.
 - Secret values never appear in printed errors.
 - Env export helper prints only required live keys and fails closed when any required value is missing.
 
