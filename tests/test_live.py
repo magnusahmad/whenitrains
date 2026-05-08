@@ -20,6 +20,7 @@ from whenitrains.live import (
 from whenitrains.storage import (
     connect,
     get_live_position,
+    get_live_setting,
     live_setting_enabled,
     live_dashboard_stats,
     live_total_open_exposure,
@@ -564,7 +565,42 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(result.status, "blocked")
             self.assertEqual(client.buys, [])
 
-    def test_execute_live_buy_blocks_future_entries_after_insufficient_balance_error(self):
+    def test_execute_live_buy_blocks_future_entries_after_three_insufficient_balance_errors(self):
+        class InsufficientBalanceClient(FakeClobClient):
+            def buy_fak(self, token_id, price, size_usd):
+                raise RuntimeError(
+                    "not enough balance / allowance: the balance is not enough -> "
+                    "balance: 7366, order amount: 3950000"
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            client = InsufficientBalanceClient()
+
+            for attempt in range(1, 4):
+                result = execute_live_buy(
+                    db,
+                    client,
+                    token_id=f"yes{attempt}",
+                    side="YES",
+                    size_usd=5,
+                    asks=[(0.40, 100)],
+                    reason="test live buy",
+                    max_price=0.40,
+                    min_fill_usd=5,
+                    order_cap_usd=5,
+                    label=f"{attempt}C",
+                )
+
+                self.assertEqual(result.status, "error")
+                self.assertEqual(
+                    get_live_setting(db, "insufficient_balance_error_count"),
+                    str(attempt),
+                )
+                self.assertEqual(live_setting_enabled(db, "block_new_entries"), attempt == 3)
+
+    def test_execute_live_buy_resets_insufficient_balance_counter_after_success(self):
         class InsufficientBalanceClient(FakeClobClient):
             def buy_fak(self, token_id, price, size_usd):
                 raise RuntimeError(
@@ -576,10 +612,25 @@ class LiveTests(unittest.TestCase):
             db = connect(Path(tmp) / "test.db")
             migrate(db)
 
+            for token_id in ("yes25", "yes26"):
+                execute_live_buy(
+                    db,
+                    InsufficientBalanceClient(),
+                    token_id=token_id,
+                    side="YES",
+                    size_usd=5,
+                    asks=[(0.40, 100)],
+                    reason="test live buy",
+                    max_price=0.40,
+                    min_fill_usd=5,
+                    order_cap_usd=5,
+                    label="25C",
+                )
+
             result = execute_live_buy(
                 db,
-                InsufficientBalanceClient(),
-                token_id="yes25",
+                FakeClobClient(),
+                token_id="yes27",
                 side="YES",
                 size_usd=5,
                 asks=[(0.40, 100)],
@@ -587,11 +638,12 @@ class LiveTests(unittest.TestCase):
                 max_price=0.40,
                 min_fill_usd=5,
                 order_cap_usd=5,
-                label="25C",
+                label="27C",
             )
 
-            self.assertEqual(result.status, "error")
-            self.assertTrue(live_setting_enabled(db, "block_new_entries"))
+            self.assertEqual(result.status, "filled")
+            self.assertEqual(get_live_setting(db, "insufficient_balance_error_count"), "0")
+            self.assertFalse(live_setting_enabled(db, "block_new_entries"))
 
     def test_execute_live_sell_closes_position_from_fill(self):
         with tempfile.TemporaryDirectory() as tmp:

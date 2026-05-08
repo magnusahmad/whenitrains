@@ -16,6 +16,7 @@ from .config import Settings
 from .paper_db import calculate_entry
 from .storage import (
     get_live_position,
+    get_live_setting,
     live_realized_pnl_since,
     live_setting_enabled,
     live_total_open_exposure,
@@ -29,6 +30,10 @@ from .storage import (
 
 class LiveTradingError(RuntimeError):
     pass
+
+
+INSUFFICIENT_BALANCE_BLOCK_THRESHOLD = 3
+INSUFFICIENT_BALANCE_ERROR_COUNT_SETTING = "insufficient_balance_error_count"
 
 
 REQUIRED_LIVE_ENV_NAMES = (
@@ -612,8 +617,13 @@ def execute_live_buy(
         error = f"{type(exc).__name__}: {exc}"
         details = {"token_id": token_id, "error": str(exc)}
         if _is_insufficient_balance_or_allowance_error(str(exc)):
-            set_live_setting(db, "block_new_entries", True)
-            details["block_new_entries"] = True
+            count = _record_insufficient_balance_submit_error(db)
+            details["insufficient_balance_error_count"] = count
+            if count >= INSUFFICIENT_BALANCE_BLOCK_THRESHOLD:
+                set_live_setting(db, "block_new_entries", True)
+                details["block_new_entries"] = True
+        else:
+            _reset_insufficient_balance_submit_errors(db)
         store_risk_event(db, "live_order_submit_failed", "critical", details)
         store_live_order(
             db,
@@ -631,6 +641,7 @@ def execute_live_buy(
             event_key=event_key,
         )
         return LiveExecutionResult("error", token_id, f"BUY_{side}", None, 0, 0, error)
+    _reset_insufficient_balance_submit_errors(db)
     clob_order_id = _order_id(response)
     order_id = store_live_order(
         db,
@@ -1198,3 +1209,21 @@ def _is_insufficient_balance_or_allowance_error(message: str) -> bool:
         or "insufficient balance" in normalized
         or "insufficient allowance" in normalized
     )
+
+
+def _record_insufficient_balance_submit_error(db: sqlite3.Connection) -> int:
+    count = _live_setting_int(db, INSUFFICIENT_BALANCE_ERROR_COUNT_SETTING) + 1
+    set_live_setting(db, INSUFFICIENT_BALANCE_ERROR_COUNT_SETTING, str(count))
+    return count
+
+
+def _reset_insufficient_balance_submit_errors(db: sqlite3.Connection) -> None:
+    if _live_setting_int(db, INSUFFICIENT_BALANCE_ERROR_COUNT_SETTING) != 0:
+        set_live_setting(db, INSUFFICIENT_BALANCE_ERROR_COUNT_SETTING, "0")
+
+
+def _live_setting_int(db: sqlite3.Connection, name: str) -> int:
+    try:
+        return int(get_live_setting(db, name, "0"))
+    except ValueError:
+        return 0
