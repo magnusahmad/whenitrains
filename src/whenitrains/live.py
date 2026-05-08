@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 import subprocess
 from dataclasses import dataclass
@@ -572,7 +573,11 @@ def execute_live_buy(
         event_key=event_key,
     )
     reconcile = _reconcile_payload(
-        client.reconcile_order(clob_order_id, token_id), clob_order_id, token_id
+        client.reconcile_order(clob_order_id, token_id),
+        clob_order_id,
+        token_id,
+        fallback_response=response,
+        action="BUY",
     )
     fill_price, fill_size_usd, fill_shares = _fill_values(
         reconcile,
@@ -697,7 +702,11 @@ def execute_live_sell(
         event_key=event_key,
     )
     reconcile = _reconcile_payload(
-        client.reconcile_order(clob_order_id, token_id), clob_order_id, token_id
+        client.reconcile_order(clob_order_id, token_id),
+        clob_order_id,
+        token_id,
+        fallback_response=response,
+        action="SELL",
     )
     fill_price, proceeds, sold = _fill_values(
         reconcile, best_bid, submitted_shares * best_bid, submitted_shares
@@ -749,6 +758,61 @@ def _apply_live_sell_fill(
     upsert_live_position(db, token_id, remaining, avg, realized)
 
 
+def reconcile_submitted_live_order(
+    db: sqlite3.Connection, client: LiveClobClient, row: sqlite3.Row
+) -> LiveExecutionResult:
+    token_id = row["outcome_id"]
+    side = row["side"]
+    action = row["action"] or ("SELL" if side == "SELL" else "BUY")
+    raw_response = _decode_live_json(row["raw_response_json"])
+    reconcile = _reconcile_payload(
+        client.reconcile_order(row["clob_order_id"], token_id),
+        row["clob_order_id"],
+        token_id,
+        fallback_response=raw_response,
+        action=action,
+    )
+    default_price = float(row["limit_price"] or 0.0) or None
+    if action == "SELL":
+        default_shares = float(row["requested_shares"] or 0.0)
+        default_size_usd = default_shares * float(default_price or 0.0)
+    else:
+        default_size_usd = float(row["requested_size_usd"] or 0.0)
+        default_shares = (
+            default_size_usd / default_price
+            if default_price is not None and default_price > 0
+            else 0.0
+        )
+    fill_price, fill_size_usd, fill_shares = _fill_values(
+        reconcile, default_price, default_size_usd, default_shares
+    )
+    status = "filled" if fill_shares > 0 else str(reconcile.get("status") or row["status"])
+    update_live_order_reconcile(
+        db,
+        int(row["id"]),
+        status=status,
+        fill_price=fill_price,
+        fill_size_usd=fill_size_usd,
+        fill_shares=fill_shares,
+        raw_reconcile=reconcile,
+    )
+    if status == "filled":
+        if action == "SELL":
+            _apply_live_sell_fill(db, token_id, fill_shares, fill_size_usd)
+        else:
+            _apply_live_buy_fill(db, token_id, fill_shares, fill_size_usd)
+    return LiveExecutionResult(
+        status,
+        token_id,
+        side,
+        fill_price,
+        fill_size_usd,
+        fill_shares,
+        row["reason"] or "live reconcile",
+        row["clob_order_id"],
+    )
+
+
 def _order_id(response: dict) -> str | None:
     for key in ("orderID", "orderId", "order_id", "id"):
         value = response.get(key)
@@ -758,10 +822,43 @@ def _order_id(response: dict) -> str | None:
 
 
 def _reconcile_payload(
-    payload: dict | None, order_id: str | None, token_id: str
+    payload: dict | None,
+    order_id: str | None,
+    token_id: str,
+    *,
+    fallback_response: dict | None = None,
+    action: str | None = None,
 ) -> dict:
+    if payload is None or str(payload.get("status") or "").lower() in ("", "unknown"):
+        fallback = _response_fill_payload(fallback_response, action)
+        if fallback is not None:
+            return {"order_id": order_id, "token_id": token_id, **fallback}
     if payload is None:
         return {"order_id": order_id, "token_id": token_id, "status": "unknown"}
+    return payload
+
+
+def _response_fill_payload(response: dict | None, action: str | None) -> dict | None:
+    if not response:
+        return None
+    status = str(response.get("status") or "").lower()
+    if status not in ("filled", "matched"):
+        return None
+    payload = dict(response)
+    payload["status"] = "matched"
+    action = (action or "").upper()
+    making = _optional_float_amount(response, "makingAmount", "making_amount")
+    taking = _optional_float_amount(response, "takingAmount", "taking_amount")
+    if action == "BUY":
+        if taking is not None:
+            payload["fill_shares"] = taking
+        if making is not None:
+            payload["fill_size_usd"] = making
+    elif action == "SELL":
+        if making is not None:
+            payload["fill_shares"] = making
+        if taking is not None:
+            payload["fill_size_usd"] = taking
     return payload
 
 
@@ -794,6 +891,25 @@ def _optional_float(payload: dict, *keys: str) -> float | None:
         if value not in (None, ""):
             return float(value)
     return None
+
+
+def _optional_float_amount(payload: dict, *keys: str) -> float | None:
+    value = _optional_float(payload, *keys)
+    if value is None:
+        return None
+    if abs(value) >= 1_000_000:
+        return value / 1_000_000
+    return value
+
+
+def _decode_live_json(value: str | None) -> dict:
+    if not value:
+        return {}
+    try:
+        payload = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _usdc_amount(value) -> float:

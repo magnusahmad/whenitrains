@@ -52,6 +52,7 @@ from .live import (
     execute_live_sell,
     load_live_config,
     preflight_live,
+    reconcile_submitted_live_order,
     store_keychain_secret,
 )
 from .storage import (
@@ -79,7 +80,6 @@ from .storage import (
     store_risk_event,
     set_live_setting,
     live_setting_enabled,
-    update_live_order_reconcile,
 )
 
 
@@ -533,24 +533,15 @@ def main(argv: list[str] | None = None) -> int:
             config = load_live_config()
             client = PolymarketClobClient(config)
             rows = list_live_orders_by_status(db, ("submitted",))
+            filled = 0
             for row in rows:
-                payload = client.reconcile_order(row["clob_order_id"], row["outcome_id"])
-                fill_price = payload.get("fill_price") or payload.get("avg_price") or payload.get("price")
-                fill_size = payload.get("fill_size_usd") or payload.get("filled_amount") or payload.get("amount_matched") or 0
-                fill_shares = payload.get("fill_shares") or payload.get("filled_shares") or payload.get("size_matched") or 0
-                update_live_order_reconcile(
-                    db,
-                    row["id"],
-                    status=str(payload.get("status") or row["status"]),
-                    fill_price=float(fill_price) if fill_price not in (None, "") else None,
-                    fill_size_usd=float(fill_size or 0),
-                    fill_shares=float(fill_shares or 0),
-                    raw_reconcile=payload,
-                )
+                result = reconcile_submitted_live_order(db, client, row)
+                if result.status == "filled":
+                    filled += 1
         except LiveTradingError as exc:
             print(f"live reconcile failed: {exc}")
             return 2
-        print(f"reconciled {len(rows)} submitted live orders")
+        print(f"reconciled {len(rows)} submitted live orders; filled={filled}")
         return 0
     if args.command == "live-cancel-order":
         migrate(db)
