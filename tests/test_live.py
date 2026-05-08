@@ -26,8 +26,9 @@ from whenitrains.storage import (
 
 
 class FakeClobClient:
-    def __init__(self, fill=True):
+    def __init__(self, fill=True, reconcile_payload="default"):
         self.fill = fill
+        self.reconcile_payload = reconcile_payload
         self.buys = []
         self.sells = []
 
@@ -49,6 +50,8 @@ class FakeClobClient:
         return {"orderID": "sell-1", "status": "matched"}
 
     def reconcile_order(self, order_id, token_id):
+        if self.reconcile_payload != "default":
+            return self.reconcile_payload
         if not self.fill:
             return {"order_id": order_id, "token_id": token_id, "status": "submitted"}
         return {"order_id": order_id, "token_id": token_id, "status": "filled"}
@@ -85,6 +88,12 @@ class V2MarketBuyClient(MarketMetadataClient):
         self.order_options = options
         self.order_type = order_type
         return {"orderID": "order-1", "status": "matched"}
+
+
+class EmptyOrderLookupClient:
+    def get_order(self, order_id):
+        self.order_id = order_id
+        return None
 
 
 class TimeoutPreflightClient:
@@ -156,6 +165,43 @@ class LiveTests(unittest.TestCase):
             self.assertIsNotNone(pos)
             self.assertAlmostEqual(pos["net_shares"], 12.5)
             self.assertAlmostEqual(live_total_open_exposure(db), 5.0)
+
+    def test_execute_live_buy_keeps_submitted_when_reconcile_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            client = FakeClobClient(reconcile_payload=None)
+
+            result = execute_live_buy(
+                db,
+                client,
+                token_id="yes25",
+                side="YES",
+                size_usd=5,
+                asks=[(0.40, 100)],
+                reason="test live buy",
+                max_price=0.40,
+                min_fill_usd=5,
+                order_cap_usd=5,
+                label="25C",
+            )
+
+            self.assertEqual(result.status, "submitted")
+            self.assertIsNone(get_live_position(db, "yes25"))
+            row = db.execute("select status, raw_reconcile_json from live_orders").fetchone()
+            self.assertEqual(row["status"], "submitted")
+            self.assertIn('"status": "unknown"', row["raw_reconcile_json"])
+
+    def test_polymarket_reconcile_order_handles_empty_lookup(self):
+        client = PolymarketClobClient.__new__(PolymarketClobClient)
+        client._client = EmptyOrderLookupClient()
+
+        result = client.reconcile_order("order-1", "yes25")
+
+        self.assertEqual(result["order_id"], "order-1")
+        self.assertEqual(result["token_id"], "yes25")
+        self.assertEqual(result["status"], "unknown")
+        self.assertEqual(client._client.order_id, "order-1")
 
     def test_polymarket_balance_uses_typed_params_and_converts_wei(self):
         client = PolymarketClobClient.__new__(PolymarketClobClient)

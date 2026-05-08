@@ -170,7 +170,9 @@ class PolymarketClobClient:
 
     def reconcile_order(self, order_id: str | None, token_id: str) -> dict:
         if order_id and hasattr(self._client, "get_order"):
-            return dict(self._client.get_order(order_id))
+            payload = self._client.get_order(order_id)
+            if payload is not None:
+                return dict(payload)
         return {"order_id": order_id, "token_id": token_id, "status": "unknown"}
 
     def cancel_order(self, order_id: str) -> dict:
@@ -569,8 +571,15 @@ def execute_live_buy(
         event_type=event_type,
         event_key=event_key,
     )
-    reconcile = client.reconcile_order(clob_order_id, token_id)
-    fill_price, fill_size_usd, fill_shares = _fill_values(reconcile, quote.estimated_avg_price, quote.estimated_cost_usd, quote.estimated_shares)
+    reconcile = _reconcile_payload(
+        client.reconcile_order(clob_order_id, token_id), clob_order_id, token_id
+    )
+    fill_price, fill_size_usd, fill_shares = _fill_values(
+        reconcile,
+        quote.estimated_avg_price,
+        quote.estimated_cost_usd,
+        quote.estimated_shares,
+    )
     status = "filled" if fill_shares > 0 else "submitted"
     update_live_order_reconcile(
         db,
@@ -687,7 +696,9 @@ def execute_live_sell(
         event_type=event_type,
         event_key=event_key,
     )
-    reconcile = client.reconcile_order(clob_order_id, token_id)
+    reconcile = _reconcile_payload(
+        client.reconcile_order(clob_order_id, token_id), clob_order_id, token_id
+    )
     fill_price, proceeds, sold = _fill_values(
         reconcile, best_bid, submitted_shares * best_bid, submitted_shares
     )
@@ -744,6 +755,14 @@ def _order_id(response: dict) -> str | None:
         if value:
             return str(value)
     return None
+
+
+def _reconcile_payload(
+    payload: dict | None, order_id: str | None, token_id: str
+) -> dict:
+    if payload is None:
+        return {"order_id": order_id, "token_id": token_id, "status": "unknown"}
+    return payload
 
 
 def _fill_values(
