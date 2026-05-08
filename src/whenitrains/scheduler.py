@@ -7,7 +7,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as day_time, timedelta
 
-from .hko import HKT
+from .hko import HKT, parse_aws_gis_current_temperature
 from .runner import run_paper_tick
 
 
@@ -137,6 +137,30 @@ def mark_market_discovered(state: SchedulerState, now_hkt: datetime) -> None:
 
 def mark_current_temperature_fetched(state: SchedulerState, now_hkt: datetime) -> None:
     state.last_current_temperature_fetch_at = now_hkt
+
+
+def mark_source_polled(
+    state: SchedulerState, plan: SourcePollPlan, now_hkt: datetime
+) -> None:
+    state.last_source_poll_at[_window_key(plan)] = now_hkt
+
+
+def _aws_actual_payload_observed_at(payload: str) -> datetime | None:
+    try:
+        return parse_aws_gis_current_temperature(payload).observed_at_hkt
+    except Exception:
+        return None
+
+
+def _is_stale_aws_actual_payload(
+    payload: str, latest_observed_at: datetime | None
+) -> bool:
+    observed_at = _aws_actual_payload_observed_at(payload)
+    return (
+        latest_observed_at is not None
+        and observed_at is not None
+        and observed_at < latest_observed_at
+    )
 
 
 def _install_stop_signal_handlers(
@@ -298,6 +322,7 @@ def _run_aws_actual_poll_loop(
     quiet: bool,
 ) -> None:
     state = SchedulerState()
+    latest_observed_at: datetime | None = None
     while not stop_event.is_set():
         now = datetime.now(HKT)
         learned_actuals = learned_actual_times() if learned_actual_times else []
@@ -315,11 +340,22 @@ def _run_aws_actual_poll_loop(
             payload = _try_fetch_source("aws_actual", fetch_current_temperature, notes)
             if payload is not None:
                 mark_current_temperature_fetched(state, now)
-                changed = False
-                for plan in plans:
-                    changed = mark_source_fetch(state, plan, payload, now) or changed
-                if changed:
-                    notes.append(_source_changed_note("aws_actual", payload))
+                observed_at = _aws_actual_payload_observed_at(payload)
+                if _is_stale_aws_actual_payload(payload, latest_observed_at):
+                    for plan in plans:
+                        mark_source_polled(state, plan, now)
+                else:
+                    if observed_at is not None:
+                        latest_observed_at = (
+                            observed_at
+                            if latest_observed_at is None
+                            else max(latest_observed_at, observed_at)
+                        )
+                    changed = False
+                    for plan in plans:
+                        changed = mark_source_fetch(state, plan, payload, now) or changed
+                    if changed:
+                        notes.append(_source_changed_note("aws_actual", payload))
             if not quiet or any(
                 note.startswith("aws_actual changed") or " failed:" in note
                 for note in notes

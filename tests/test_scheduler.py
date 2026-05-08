@@ -10,6 +10,8 @@ from whenitrains.hko import HKT
 from whenitrains.runner import RunnerResult
 from whenitrains.scheduler import (
     SchedulerState,
+    _aws_actual_payload_observed_at,
+    _is_stale_aws_actual_payload,
     due_hko_sources,
     mark_source_fetch,
     scheduler_actions,
@@ -279,6 +281,20 @@ class SchedulerTests(unittest.TestCase):
         self.assertTrue(
             should_print_scheduled_tick(["fetched orderbooks"], trade, quiet=True)
         )
+
+    def test_aws_actual_payload_staleness_is_monotonic(self):
+        payload_1110 = """Latest readings recorded at 11:10 Hong Kong Time 8 May 2026
+STN,TEMP,MAXTEMP,MINTEMP
+HKO,27.1,28.4,24.0
+"""
+        payload_1120 = """Latest readings recorded at 11:20 Hong Kong Time 8 May 2026
+STN,TEMP,MAXTEMP,MINTEMP
+HKO,27.3,28.5,24.0
+"""
+        latest = _aws_actual_payload_observed_at(payload_1120)
+
+        self.assertTrue(_is_stale_aws_actual_payload(payload_1110, latest))
+        self.assertFalse(_is_stale_aws_actual_payload(payload_1120, latest))
 
     def test_scheduler_prints_startup_note(self):
         with tempfile.TemporaryDirectory() as tmp:
