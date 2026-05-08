@@ -12,7 +12,7 @@ Live preflight now interprets raw pUSD micro-unit balance/allowance payloads fro
 
 The dashboard now includes a `/historicals` route for historical HKO accuracy review. It exposes `/api/historicals` with separate max-temperature and min-temperature series: OCF forecast error versus the actual daily extreme timestamp, forecast-bucket YES token prices versus the same lead-hours axis, lead-hour aggregate mean-error stats, and paper PNL histograms grouped by signal reason and D+0/D+1/D+N entry timing.
 
-Live dashboard trade rows now normalize filled order notional from `fill_price * fill_shares` whenever CLOB/API storage has a zero or missing `fill_size_usd`, so the USD column, realized PnL, unrealized PnL, and chart markers use the same cash-flow basis.
+Live dashboard trade rows now normalize filled order notional from `fill_price * fill_shares` whenever CLOB/API storage has a zero or missing `fill_size_usd`, so the USD column, realized PnL, unrealized PnL, and chart markers use the same cash-flow basis. Live dashboard open-position reporting now replays filled live orders instead of trusting persisted `live_positions.avg_price`, and open trade drilldowns show only remaining open buy-lot shares so table uPnL adds up to the summary.
 
 Relevant existing implementation:
 

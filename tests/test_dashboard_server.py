@@ -1188,6 +1188,113 @@ class DashboardServerTests(unittest.TestCase):
             self.assertAlmostEqual(rows[0]["fill_size_usd"], 29.938566)
             self.assertAlmostEqual(rows[0]["unrealized_pnl"], -12.605712)
 
+    def test_live_dashboard_replays_orders_when_position_avg_is_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.24, 400)],
+                    asks=[(0.25, 400)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            db.execute(
+                """
+                insert into live_orders (
+                    created_at_utc, outcome_id, label, side, action, order_type,
+                    status, requested_size_usd, limit_price, fill_price,
+                    fill_size_usd, fill_shares, reason
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "2026-05-06T15:50:07+00:00",
+                    "yes25",
+                    "25°C",
+                    "BUY_YES",
+                    "BUY",
+                    "FAK",
+                    "filled",
+                    20.0,
+                    0.19,
+                    0.19,
+                    0.0,
+                    100.0,
+                    "forecast bucket priced unrealistically low vs HKO forecast",
+                ),
+            )
+            upsert_live_position(db, "yes25", 100.0, 0.0, 0.0)
+
+            stats = live_dashboard_payload(db)
+            rows = live_trade_rows(db, "open")["rows"]
+
+            self.assertAlmostEqual(stats["open_exposure_usd"], 19.0)
+            self.assertAlmostEqual(stats["executable_unrealized_pnl"], 5.0)
+            self.assertAlmostEqual(rows[0]["avg_price"], 0.19)
+            self.assertAlmostEqual(rows[0]["net_shares"], 100.0)
+
+    def test_live_open_rows_omit_buy_lots_consumed_by_sells(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.24, 400)],
+                    asks=[(0.25, 400)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            for created_at, side, price, shares in (
+                ("2026-05-06T14:00:00+00:00", "BUY_YES", 0.36, 50.0),
+                ("2026-05-06T15:00:00+00:00", "SELL", 0.27, 50.0),
+                ("2026-05-06T16:00:00+00:00", "BUY_YES", 0.19, 100.0),
+            ):
+                db.execute(
+                    """
+                    insert into live_orders (
+                        created_at_utc, outcome_id, label, side, action, order_type,
+                        status, requested_size_usd, limit_price, fill_price,
+                        fill_size_usd, fill_shares, reason
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        created_at,
+                        "yes25",
+                        "25°C",
+                        side,
+                        "SELL" if side == "SELL" else "BUY",
+                        "FAK",
+                        "filled",
+                        20.0,
+                        price,
+                        price,
+                        0.0,
+                        shares,
+                        "forecast bucket priced unrealistically low vs HKO forecast",
+                    ),
+                )
+            upsert_live_position(db, "yes25", 100.0, 0.0, -4.5)
+
+            stats = live_dashboard_payload(db)
+            rows = live_trade_rows(db, "open")["rows"]
+
+            self.assertEqual([row["action"] for row in rows], ["BUY_YES"])
+            self.assertAlmostEqual(rows[0]["shares"], 100.0)
+            self.assertAlmostEqual(rows[0]["fill_size_usd"], 19.0)
+            self.assertAlmostEqual(rows[0]["unrealized_pnl"], 5.0)
+            self.assertAlmostEqual(
+                sum(row["unrealized_pnl"] for row in rows),
+                stats["executable_unrealized_pnl"],
+            )
+
     def test_live_realized_rows_backfill_zero_sell_proceeds(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_dashboard_db(Path(tmp) / "test.db")

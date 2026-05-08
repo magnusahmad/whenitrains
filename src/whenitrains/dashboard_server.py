@@ -112,6 +112,102 @@ def active_paper_positions(db: sqlite3.Connection) -> dict[str, dict]:
     return positions
 
 
+def active_live_positions(db: sqlite3.Connection) -> dict[str, dict]:
+    orders = db.execute(
+        """
+        select outcome_id, side, fill_price, fill_size_usd, fill_shares
+        from live_orders
+        where status = 'filled'
+          and fill_price is not null
+          and fill_shares is not null
+        order by created_at_utc asc, id asc
+        """
+    ).fetchall()
+    positions: dict[str, dict] = {}
+    for row in orders:
+        token = row["outcome_id"]
+        side = row["side"] or ""
+        order_shares = _optional_float(row["fill_shares"]) or 0.0
+        if order_shares <= 0:
+            continue
+        pos = positions.setdefault(
+            token,
+            {
+                "outcome_id": token,
+                "net_shares": 0.0,
+                "avg_price": 0.0,
+                "realized_pnl": 0.0,
+            },
+        )
+        shares = float(pos["net_shares"])
+        avg = float(pos["avg_price"])
+        if side.startswith("BUY"):
+            cost = _live_fill_notional_usd(
+                row["fill_size_usd"], row["fill_price"], row["fill_shares"]
+            )
+            new_shares = shares + order_shares
+            pos["net_shares"] = new_shares
+            pos["avg_price"] = (avg * shares + cost) / new_shares if new_shares > 0 else 0.0
+        elif side == "SELL":
+            sold = min(order_shares, shares)
+            proceeds = _live_fill_notional_usd(
+                row["fill_size_usd"],
+                row["fill_price"],
+                row["fill_shares"],
+                share_limit=sold,
+            )
+            pos["realized_pnl"] = float(pos["realized_pnl"]) + proceeds - sold * avg
+            remaining = shares - sold
+            pos["net_shares"] = remaining
+            pos["avg_price"] = avg if remaining > 0 else 0.0
+    return positions
+
+
+def _live_open_buy_shares_by_order_id(
+    db: sqlite3.Connection, tokens: list[str]
+) -> dict[int, float]:
+    if not tokens:
+        return {}
+    placeholders = ",".join("?" for _ in tokens)
+    orders = db.execute(
+        f"""
+        select id, outcome_id, side, fill_shares
+        from live_orders
+        where outcome_id in ({placeholders})
+          and status = 'filled'
+          and fill_price is not null
+          and fill_shares is not null
+        order by created_at_utc asc, id asc
+        """,
+        tuple(tokens),
+    ).fetchall()
+    lots: dict[str, list[dict]] = {}
+    for row in orders:
+        token = row["outcome_id"]
+        side = row["side"] or ""
+        shares = _optional_float(row["fill_shares"]) or 0.0
+        if shares <= 0:
+            continue
+        token_lots = lots.setdefault(token, [])
+        if side.startswith("BUY"):
+            token_lots.append({"id": int(row["id"]), "shares": shares})
+        elif side == "SELL":
+            remaining_sell = shares
+            for lot in token_lots:
+                if remaining_sell <= 1e-8:
+                    break
+                lot_shares = float(lot["shares"])
+                consumed = min(lot_shares, remaining_sell)
+                lot["shares"] = lot_shares - consumed
+                remaining_sell -= consumed
+    return {
+        int(lot["id"]): float(lot["shares"])
+        for token_lots in lots.values()
+        for lot in token_lots
+        if float(lot["shares"]) > 1e-8
+    }
+
+
 def dashboard_stats(db: sqlite3.Connection) -> dict:
     _ensure_paper_order_exclusions(db)
     today_hkt = datetime.now(HKT).date().isoformat()
@@ -184,6 +280,21 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
 def live_dashboard_payload(db: sqlite3.Connection) -> dict:
     base = dashboard_stats(db)
     live = storage_live_dashboard_stats(db)
+    positions = active_live_positions(db)
+    open_positions = [
+        pos for pos in positions.values() if float(pos["net_shares"]) > 1e-8
+    ]
+    open_exposure = sum(
+        float(pos["net_shares"]) * float(pos["avg_price"]) for pos in open_positions
+    )
+    realized_pnl = sum(float(pos["realized_pnl"]) for pos in positions.values())
+    executable_unrealized = 0.0
+    for pos in open_positions:
+        bid = _latest_bid(db, pos["outcome_id"])
+        if bid is not None:
+            executable_unrealized += float(pos["net_shares"]) * (
+                bid - float(pos["avg_price"])
+            )
     counts = {
         **base["counts"],
         "buy_filled": db.execute(
@@ -205,15 +316,14 @@ def live_dashboard_payload(db: sqlite3.Connection) -> dict:
             """
         ).fetchone()[0],
     }
-    open_exposure = float(live.get("open_exposure_usd") or 0.0)
     return {
         **base,
         "mode": "live",
         "counts": counts,
-        "open_positions": live["open_positions"],
-        "realized_pnl": live["realized_pnl"],
-        "executable_unrealized_pnl": live.get("executable_unrealized_pnl", 0.0),
-        "total_profit": live.get("total_pnl", 0.0),
+        "open_positions": len(open_positions),
+        "realized_pnl": realized_pnl,
+        "executable_unrealized_pnl": executable_unrealized,
+        "total_profit": realized_pnl + executable_unrealized,
         "worst_case_open_loss": open_exposure,
         "open_exposure_usd": open_exposure,
         "caps": live.get("caps", {}),
@@ -1400,10 +1510,13 @@ def paper_trade_rows(db: sqlite3.Connection, view: str) -> dict:
 
 def live_trade_rows(db: sqlite3.Connection, view: str) -> dict:
     view = view if view in {"open", "realized", "unrealized"} else "open"
+    active_positions = active_live_positions(db)
     if view in {"open", "unrealized"}:
-        token_rows = db.execute(
-            "select outcome_id from live_positions where net_shares > 0"
-        ).fetchall()
+        tokens = [
+            token
+            for token, pos in active_positions.items()
+            if float(pos["net_shares"]) > 1e-8
+        ]
     else:
         token_rows = db.execute(
             """
@@ -1412,7 +1525,7 @@ def live_trade_rows(db: sqlite3.Connection, view: str) -> dict:
             where side = 'SELL' and status = 'filled'
             """
         ).fetchall()
-    tokens = [row["outcome_id"] for row in token_rows]
+        tokens = [row["outcome_id"] for row in token_rows]
     titles = {
         "open": "Open Live Position Trades",
         "realized": "Realized Live PnL Trades",
@@ -1432,13 +1545,11 @@ def live_trade_rows(db: sqlite3.Connection, view: str) -> dict:
                    when lo.outcome_id = o.yes_token_id then 'YES'
                    when lo.outcome_id = o.no_token_id then 'NO'
                    else null
-               end as token_side,
-               p.net_shares, p.avg_price, p.realized_pnl
+               end as token_side
         from live_orders lo
         left join outcomes o
           on lo.outcome_id = o.yes_token_id or lo.outcome_id = o.no_token_id
         left join markets m on m.id = o.market_id
-        left join live_positions p on p.outcome_id = lo.outcome_id
         where lo.outcome_id in ({placeholders})
           and lo.status = 'filled'
           and (? != 'realized' or lo.side = 'SELL')
@@ -1447,17 +1558,32 @@ def live_trade_rows(db: sqlite3.Connection, view: str) -> dict:
         tuple(tokens) + (view,),
     ).fetchall()
     realized_by_order_id = _live_realized_pnl_by_sell_order_id(db, tokens)
+    open_buy_shares_by_order_id = (
+        _live_open_buy_shares_by_order_id(db, tokens)
+        if view in {"open", "unrealized"}
+        else {}
+    )
 
     result = []
     for row in rows:
+        if view in {"open", "unrealized"} and not str(row["side"] or "").startswith("BUY"):
+            continue
         fill_price = _optional_float(row["fill_price"])
         shares = _optional_float(row["fill_shares"])
+        if view in {"open", "unrealized"}:
+            shares = open_buy_shares_by_order_id.get(int(row["id"]), 0.0)
+            if shares <= 1e-8:
+                continue
         fill_size = _live_fill_notional_usd(
-            row["fill_size_usd"], row["fill_price"], row["fill_shares"]
+            row["fill_size_usd"],
+            row["fill_price"],
+            row["fill_shares"],
+            share_limit=shares if view in {"open", "unrealized"} else None,
         )
         latest_bid = _latest_bid(db, row["outcome_id"])
-        net_shares = _optional_float(row["net_shares"]) or 0.0
-        avg_price = _optional_float(row["avg_price"]) or 0.0
+        active_pos = active_positions.get(row["outcome_id"], {})
+        net_shares = _optional_float(active_pos.get("net_shares")) or 0.0
+        avg_price = _optional_float(active_pos.get("avg_price")) or 0.0
         unrealized = (
             shares * (latest_bid - fill_price)
             if row["side"] != "SELL"
@@ -1470,7 +1596,7 @@ def live_trade_rows(db: sqlite3.Connection, view: str) -> dict:
         realized_pnl = (
             realized_by_order_id.get(int(row["id"]), 0.0)
             if row["side"] == "SELL"
-            else _optional_float(row["realized_pnl"]) or 0.0
+            else _optional_float(active_pos.get("realized_pnl")) or 0.0
         )
         result.append(
             {
