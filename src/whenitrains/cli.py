@@ -532,7 +532,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             config = load_live_config()
             client = PolymarketClobClient(config)
-            rows = list_live_orders_by_status(db, ("submitted",))
+            rows = list_live_orders_by_status(db, ("submitted", "unknown_fill"))
             filled = 0
             for row in rows:
                 result = reconcile_submitted_live_order(db, client, row)

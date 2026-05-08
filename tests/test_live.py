@@ -28,10 +28,17 @@ from whenitrains.storage import (
 
 
 class FakeClobClient:
-    def __init__(self, fill=True, reconcile_payload="default", buy_response=None):
+    def __init__(
+        self,
+        fill=True,
+        reconcile_payload="default",
+        buy_response=None,
+        trades=None,
+    ):
         self.fill = fill
         self.reconcile_payload = reconcile_payload
         self.buy_response = buy_response
+        self.trades = trades or []
         self.buys = []
         self.sells = []
 
@@ -58,6 +65,9 @@ class FakeClobClient:
         if not self.fill:
             return {"order_id": order_id, "token_id": token_id, "status": "submitted"}
         return {"order_id": order_id, "token_id": token_id, "status": "filled"}
+
+    def trades_for_order(self, order_id, token_id):
+        return self.trades
 
 
 class StrictBalanceClient:
@@ -169,7 +179,7 @@ class LiveTests(unittest.TestCase):
             self.assertAlmostEqual(pos["net_shares"], 12.5)
             self.assertAlmostEqual(live_total_open_exposure(db), 5.0)
 
-    def test_execute_live_buy_uses_matched_order_response_when_reconcile_returns_none(self):
+    def test_execute_live_buy_marks_unknown_fill_when_matched_response_omits_amounts(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
             migrate(db)
@@ -189,13 +199,44 @@ class LiveTests(unittest.TestCase):
                 label="25C",
             )
 
+            self.assertEqual(result.status, "unknown_fill")
+            self.assertIsNone(get_live_position(db, "yes25"))
+            row = db.execute("select status, raw_reconcile_json from live_orders").fetchone()
+            self.assertEqual(row["status"], "unknown_fill")
+            self.assertIn('"status": "matched"', row["raw_reconcile_json"])
+
+    def test_execute_live_buy_uses_matched_order_response_amounts_when_reconcile_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            client = FakeClobClient(
+                reconcile_payload=None,
+                buy_response={
+                    "orderID": "buy-1",
+                    "status": "matched",
+                    "makingAmount": "5000000",
+                    "takingAmount": "12500000",
+                },
+            )
+
+            result = execute_live_buy(
+                db,
+                client,
+                token_id="yes25",
+                side="YES",
+                size_usd=5,
+                asks=[(0.40, 100)],
+                reason="test live buy",
+                max_price=0.40,
+                min_fill_usd=5,
+                order_cap_usd=5,
+                label="25C",
+            )
+
             self.assertEqual(result.status, "filled")
             pos = get_live_position(db, "yes25")
             self.assertIsNotNone(pos)
             self.assertAlmostEqual(pos["net_shares"], 12.5)
-            row = db.execute("select status, raw_reconcile_json from live_orders").fetchone()
-            self.assertEqual(row["status"], "filled")
-            self.assertIn('"status": "matched"', row["raw_reconcile_json"])
 
     def test_execute_live_buy_keeps_submitted_when_reconcile_and_response_are_unfilled(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -223,7 +264,7 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(result.status, "submitted")
             self.assertIsNone(get_live_position(db, "yes25"))
 
-    def test_reconcile_submitted_live_order_applies_late_fill_to_position(self):
+    def test_reconcile_submitted_live_order_applies_late_order_fill_to_position(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
             migrate(db)
@@ -246,6 +287,46 @@ class LiveTests(unittest.TestCase):
             row = db.execute("select * from live_orders where id = ?", (order_id,)).fetchone()
 
             result = reconcile_submitted_live_order(db, FakeClobClient(), row)
+
+            self.assertEqual(result.status, "filled")
+            pos = get_live_position(db, "yes25")
+            self.assertIsNotNone(pos)
+            self.assertAlmostEqual(pos["net_shares"], 12.5)
+
+    def test_reconcile_unknown_fill_applies_trade_history_fill_to_position(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            order_id = db.execute(
+                """
+                insert into live_orders (
+                    created_at_utc, submitted_at_utc, outcome_id, label, side, action,
+                    clob_order_id, order_type, status, requested_size_usd, limit_price,
+                    reason, raw_request_json, raw_response_json, raw_reconcile_json
+                )
+                values (
+                    '2026-05-08T01:00:00+00:00', '2026-05-08T01:00:00+00:00',
+                    'yes25', '25C', 'BUY_YES', 'BUY', 'buy-1', 'FAK', 'unknown_fill',
+                    5.0, 0.40, 'late live buy', '{}', ?, '{}'
+                )
+                """,
+                (json.dumps({"orderID": "buy-1", "status": "matched"}),),
+            ).lastrowid
+            db.commit()
+            row = db.execute("select * from live_orders where id = ?", (order_id,)).fetchone()
+            client = FakeClobClient(
+                reconcile_payload={"order_id": "buy-1", "token_id": "yes25", "status": "unknown"},
+                trades=[
+                    {
+                        "taker_order_id": "buy-1",
+                        "asset_id": "yes25",
+                        "size": "12500000",
+                        "price": "0.4",
+                    }
+                ],
+            )
+
+            result = reconcile_submitted_live_order(db, client, row)
 
             self.assertEqual(result.status, "filled")
             pos = get_live_position(db, "yes25")

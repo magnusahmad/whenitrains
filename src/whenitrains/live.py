@@ -85,6 +85,9 @@ class LiveClobClient(Protocol):
     def reconcile_order(self, order_id: str | None, token_id: str) -> dict:
         ...
 
+    def trades_for_order(self, order_id: str | None, token_id: str) -> list[dict]:
+        ...
+
     def cancel_order(self, order_id: str) -> dict:
         ...
 
@@ -175,6 +178,24 @@ class PolymarketClobClient:
             if payload is not None:
                 return dict(payload)
         return {"order_id": order_id, "token_id": token_id, "status": "unknown"}
+
+    def trades_for_order(self, order_id: str | None, token_id: str) -> list[dict]:
+        if not order_id or not hasattr(self._client, "get_trades"):
+            return []
+        try:
+            from py_clob_client_v2 import TradeParams
+            params = TradeParams(asset_id=token_id)
+        except (ImportError, TypeError):
+            params = SimpleNamespace(asset_id=token_id)
+        try:
+            payload = self._client.get_trades(params)
+        except TypeError:
+            payload = self._client.get_trades()
+        return [
+            trade
+            for trade in _coerce_trade_list(payload)
+            if _trade_mentions_order(trade, order_id)
+        ]
 
     def cancel_order(self, order_id: str) -> dict:
         if self._uses_v2_client and hasattr(self._client, "cancel_order"):
@@ -584,8 +605,9 @@ def execute_live_buy(
         quote.estimated_avg_price,
         quote.estimated_cost_usd,
         quote.estimated_shares,
+        allow_default_fill=_allow_default_fill_values(reconcile),
     )
-    status = "filled" if fill_shares > 0 else "submitted"
+    status = _live_reconcile_status(reconcile, fill_shares, "submitted")
     update_live_order_reconcile(
         db,
         order_id,
@@ -709,9 +731,13 @@ def execute_live_sell(
         action="SELL",
     )
     fill_price, proceeds, sold = _fill_values(
-        reconcile, best_bid, submitted_shares * best_bid, submitted_shares
+        reconcile,
+        best_bid,
+        submitted_shares * best_bid,
+        submitted_shares,
+        allow_default_fill=_allow_default_fill_values(reconcile),
     )
-    status = "filled" if sold > 0 else "submitted"
+    status = _live_reconcile_status(reconcile, sold, "submitted")
     update_live_order_reconcile(
         db,
         order_id,
@@ -772,6 +798,17 @@ def reconcile_submitted_live_order(
         fallback_response=raw_response,
         action=action,
     )
+    trade_payload = _trade_fill_payload(
+        client.trades_for_order(row["clob_order_id"], token_id),
+        row["clob_order_id"],
+        action,
+    )
+    if trade_payload is not None:
+        reconcile = {
+            "order_id": row["clob_order_id"],
+            "token_id": token_id,
+            **trade_payload,
+        }
     default_price = float(row["limit_price"] or 0.0) or None
     if action == "SELL":
         default_shares = float(row["requested_shares"] or 0.0)
@@ -784,9 +821,15 @@ def reconcile_submitted_live_order(
             else 0.0
         )
     fill_price, fill_size_usd, fill_shares = _fill_values(
-        reconcile, default_price, default_size_usd, default_shares
+        reconcile,
+        default_price,
+        default_size_usd,
+        default_shares,
+        allow_default_fill=_allow_default_fill_values(reconcile),
     )
-    status = "filled" if fill_shares > 0 else str(reconcile.get("status") or row["status"])
+    status = _live_reconcile_status(
+        reconcile, fill_shares, str(row["status"] or "submitted")
+    )
     update_live_order_reconcile(
         db,
         int(row["id"]),
@@ -838,6 +881,23 @@ def _reconcile_payload(
     return payload
 
 
+def _live_reconcile_status(
+    payload: dict, fill_shares: float, default_status: str
+) -> str:
+    if fill_shares > 0:
+        return "filled"
+    status = str(payload.get("status") or default_status)
+    if status.lower() == "unknown":
+        return default_status
+    if status.lower() in ("filled", "matched"):
+        return "unknown_fill"
+    return status
+
+
+def _allow_default_fill_values(payload: dict) -> bool:
+    return payload.get("fill_source") != "order_response"
+
+
 def _response_fill_payload(response: dict | None, action: str | None) -> dict | None:
     if not response:
         return None
@@ -846,6 +906,7 @@ def _response_fill_payload(response: dict | None, action: str | None) -> dict | 
         return None
     payload = dict(response)
     payload["status"] = "matched"
+    payload["fill_source"] = "order_response"
     action = (action or "").upper()
     making = _optional_float_amount(response, "makingAmount", "making_amount")
     taking = _optional_float_amount(response, "takingAmount", "taking_amount")
@@ -862,19 +923,109 @@ def _response_fill_payload(response: dict | None, action: str | None) -> dict | 
     return payload
 
 
+def _trade_fill_payload(
+    trades: list[dict], order_id: str | None, action: str | None
+) -> dict | None:
+    related = [
+        trade
+        for trade in trades
+        if not order_id or _trade_mentions_order(trade, order_id)
+    ]
+    if not related:
+        return None
+    action = (action or "").upper()
+    total_shares = 0.0
+    total_usd = 0.0
+    for trade in related:
+        size = _trade_matched_size(trade, order_id)
+        price = _optional_float(trade, "price", "fill_price", "avg_price")
+        if size is None or size <= 0 or price is None or price <= 0:
+            continue
+        total_shares += size
+        total_usd += size * price
+    if total_shares <= 0 or total_usd <= 0:
+        return None
+    return {
+        "status": "matched",
+        "fill_source": "trade_history",
+        "fill_shares": total_shares,
+        "fill_size_usd": total_usd,
+        "fill_price": total_usd / total_shares,
+        "trades": related,
+    }
+
+
+def _trade_matched_size(trade: dict, order_id: str | None) -> float | None:
+    for maker_order in trade.get("maker_orders") or trade.get("makerOrders") or []:
+        if not isinstance(maker_order, dict):
+            continue
+        if order_id and not _value_matches_order(maker_order, order_id):
+            continue
+        value = _optional_float_amount(
+            maker_order,
+            "matched_amount",
+            "matchedAmount",
+            "size",
+            "amount",
+        )
+        if value is not None:
+            return value
+    return _optional_float_amount(trade, "size", "matched_amount", "matchedAmount", "amount")
+
+
+def _coerce_trade_list(payload) -> list[dict]:
+    if isinstance(payload, list):
+        return [trade for trade in payload if isinstance(trade, dict)]
+    if isinstance(payload, dict):
+        for key in ("trades", "data", "results"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [trade for trade in value if isinstance(trade, dict)]
+    return []
+
+
+def _trade_mentions_order(trade: dict, order_id: str) -> bool:
+    if _value_matches_order(trade, order_id):
+        return True
+    for maker_order in trade.get("maker_orders") or trade.get("makerOrders") or []:
+        if isinstance(maker_order, dict) and _value_matches_order(maker_order, order_id):
+            return True
+    return False
+
+
+def _value_matches_order(payload: dict, order_id: str) -> bool:
+    for key in (
+        "order_id",
+        "orderID",
+        "orderId",
+        "id",
+        "hash",
+        "taker_order_id",
+        "takerOrderId",
+        "taker_order_hash",
+        "maker_order_id",
+        "makerOrderId",
+    ):
+        if str(payload.get(key) or "").lower() == order_id.lower():
+            return True
+    return False
+
+
 def _fill_values(
     payload: dict,
     default_price: float | None,
     default_size_usd: float,
     default_shares: float,
+    *,
+    allow_default_fill: bool = True,
 ) -> tuple[float | None, float, float]:
     filled = payload.get("filled") or payload.get("status") in ("filled", "matched")
     shares = _optional_float(payload, "fill_shares", "filled_shares", "size_matched", "matched_size")
     size_usd = _optional_float(payload, "fill_size_usd", "filled_amount", "amount_matched", "matched_amount")
     price = _optional_float(payload, "fill_price", "avg_price", "price")
-    if filled and shares is None:
+    if filled and allow_default_fill and shares is None:
         shares = default_shares
-    if filled and size_usd is None:
+    if filled and allow_default_fill and size_usd is None:
         size_usd = default_size_usd
     if filled and (size_usd is None or size_usd <= 0) and shares is not None and default_price is not None:
         size_usd = shares * default_price
