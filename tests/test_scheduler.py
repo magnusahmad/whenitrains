@@ -333,6 +333,37 @@ HKO,27.3,28.5,24.0
             self.assertIn("live-scheduler actions=", text)
             self.assertNotIn("paper-scheduler started", text)
 
+    def test_scheduler_skips_trading_on_startup_warmup_tick(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            calls = []
+            output = StringIO()
+            now = datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT)
+
+            def tick_fn(_db, today_hkt):
+                calls.append(today_hkt)
+                return RunnerResult(buys_filled=1)
+
+            with redirect_stdout(output):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: "",
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=lambda target: None,
+                    run_tick_fn=tick_fn,
+                    max_ticks=2,
+                    now_fn=lambda: now,
+                    quiet=False,
+                    base_sleep_seconds=0,
+                )
+
+            self.assertEqual(calls, [now.date()])
+            text = output.getvalue()
+            self.assertIn("startup warmup: trading skipped", text)
+            self.assertIn("buys=1/0", text)
+
     def test_scheduler_stops_when_stop_event_is_set(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

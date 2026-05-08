@@ -1,6 +1,6 @@
 # HK High Temp Latency Status
 
-Last updated: 2026-05-07 HKT
+Last updated: 2026-05-08 HKT
 
 ## Current State
 
@@ -13,6 +13,8 @@ Milestones 1-5 are implemented for local paper trading:
 - Milestone 5: Paper trader with executable-depth fills, position tracking, risk rejects, and CLI-ready local storage.
 
 Live trading scaffolding is now implemented behind explicit fail-closed gates. Paper trading remains the default. Live mode has additive storage, Keychain hot-key setup, pre-derived credential loading, manual FAK buy/sell/cancel/reconcile commands, kill-switch settings, live tick/scheduler wiring, and a live dashboard route. Real-auth smoke and real-money trading remain pending credentials, dependency validation, and explicit user approval.
+
+The paper/live scheduler now performs a startup warmup loop before allowing trading decisions. On process start it may fetch HKO data, discover markets, and fetch orderbooks, but it skips the first trading tick so entries cannot be opened against a partially refreshed local data round.
 
 ## API Discovery Findings
 
@@ -122,6 +124,21 @@ Current green run after adding the paper runner, dashboard, missed-decision logg
 
 ```text
 Ran 151 tests in 0.690s
+OK
+```
+
+Startup warmup guard red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_scheduler.SchedulerTests.test_scheduler_skips_trading_on_startup_warmup_tick
+```
+
+Red result: scheduler called the trading tick twice across two scheduler loops, including the first loop.
+
+Green result after adding `SchedulerState.trading_warmed_up`:
+
+```text
+Ran 1 test in 0.022s
 OK
 ```
 

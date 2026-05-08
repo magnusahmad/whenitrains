@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time as day_time, timedelta
 
 from .hko import HKT, parse_aws_gis_current_temperature
-from .runner import run_paper_tick
+from .runner import RunnerResult, run_paper_tick
 
 
 SINCE_MIDNIGHT_MINUTES = (0, 9, 19, 29, 38, 48, 58)
@@ -35,6 +35,7 @@ class SchedulerState:
     last_orderbook_fetch_at: datetime | None = None
     last_market_discovery_at: datetime | None = None
     last_current_temperature_fetch_at: datetime | None = None
+    trading_warmed_up: bool = False
 
 
 @dataclass(frozen=True)
@@ -286,8 +287,12 @@ def run_scheduled_paper_loop(
                 if _try_run_action("orderbooks", lambda: fetch_orderbooks(now.date()), notes):
                     mark_orderbooks_fetched(state, now)
                     notes.append("fetched orderbooks")
-            tick_fn = run_tick_fn or run_paper_tick
-            result = tick_fn(db, today_hkt=now.date())
+            if state.trading_warmed_up:
+                tick_fn = run_tick_fn or run_paper_tick
+                result = tick_fn(db, today_hkt=now.date())
+            else:
+                state.trading_warmed_up = True
+                result = RunnerResult(notes=("startup warmup: trading skipped",))
             if should_print_scheduled_tick(notes, result, quiet):
                 print(
                     f"{output_label} "
