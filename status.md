@@ -10,6 +10,8 @@ The project supports local-first paper trading with live HKO and Polymarket read
 
 Live preflight now interprets raw pUSD micro-unit balance/allowance payloads from the CLOB, requires enough available balance for the scheduler cap before `live-tick`/`live-scheduler`, and automatically sets `block_new_entries` after three consecutive CLOB live-buy rejections for insufficient balance or allowance.
 
+The dashboard now includes a `/historicals` route for historical HKO accuracy review. It exposes `/api/historicals` with separate max-temperature and min-temperature series: OCF forecast error versus the actual daily extreme timestamp, forecast-bucket YES token prices versus the same lead-hours axis, lead-hour aggregate mean-error stats, and paper PNL histograms grouped by signal reason and D+0/D+1/D+N entry timing.
+
 Relevant existing implementation:
 
 - Strategy/decision path: `src/whenitrains/runner.py`
@@ -19,6 +21,7 @@ Relevant existing implementation:
 - Scheduler: `src/whenitrains/scheduler.py`
 - CLI: `src/whenitrains/cli.py`
 - Live execution: `src/whenitrains/live.py`
+- Dashboard and historicals route: `src/whenitrains/dashboard_server.py`
 
 Known local tree state at the time this status file was updated:
 
@@ -48,6 +51,12 @@ Known local tree state at the time this status file was updated:
 - Kill switch controls: persistent local state plus `data/KILL_SWITCH` emergency file plus explicit command flags.
 - Emergency file only blocks new entries unless exit behavior is separately enabled.
 - Live reporting: `/live` route and `/api/live/stats` exist in the dashboard server.
+- Historical reporting: `/historicals` is read-only and uses existing observation, OCF sample, orderbook, outcome, paper decision, and paper order tables.
+- Historical max-temp accuracy uses the highest stored HKO current-temperature reading for a date as the actual max, and the earliest timestamp with that max reading as the actual max time.
+- Historical min-temp accuracy uses the lowest stored HKO current-temperature reading for a date as the actual min, and the earliest timestamp with that min reading as the actual min time.
+- Forecast token price uses the matching highest-temperature or lowest-temperature market YES token whose predicate bucket matches `floor(forecast_c)`, priced from the latest best ask at or before the forecast issue time.
+- Historical lead-hour charts exclude forecast observations published after the actual daily extreme has already occurred.
+- PNL historical grouping attributes closed paper-trade lots to the nearest filled paper decision reason when available, otherwise the buy order reason.
 
 For v1, total open exposure means confirmed cost basis across all open live positions:
 
@@ -291,6 +300,32 @@ Exit criteria:
 
 - Operator can see live state and recover from ambiguous order status.
 
+### L11: Historical HKO Accuracy Dashboard
+
+Status: implemented
+
+Deliverables:
+
+- `/historicals` HTML dashboard route.
+- `/api/historicals` JSON payload.
+- Max and min forecast error points by hours before the actual daily extreme timestamp.
+- Max and min forecast bucket YES token prices by hours before the actual daily extreme timestamp.
+- Max and min lead-hour aggregate mean-error stats.
+- Max and min PNL performance histograms by signal reason and D+0/D+1/D+N entry timing.
+
+Tests:
+
+- Historical payload verifies OCF max forecast error against the final actual max and max timestamp.
+- Historical payload verifies OCF min forecast error against the final actual min and min timestamp.
+- Historical payload verifies max and min forecast bucket token-price matching at or before forecast issue time.
+- Historical payload verifies closed paper PNL percent gain/loss grouping by signal reason and day offset.
+- Historical HTML verifies route-specific API and chart containers.
+- Full unit suite remains green.
+
+Exit criteria:
+
+- `/historicals` loads successfully in the dashboard and visual checks show charts/stats without obvious layout problems.
+
 ## Test Matrix
 
 Required before any real order:
@@ -326,14 +361,21 @@ No known product decisions remain before real-auth smoke. Real credentials, depe
 Command:
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
 ```
 
 Result:
 
 ```text
-Ran 100 tests in 0.708s
+Ran 208 tests in 2.938s
 OK
+```
+
+Dashboard visual check:
+
+```text
+Opened http://127.0.0.1:8766/historicals with Browser Use against data/whenitrains.sqlite3.
+The historical stats and SVG charts rendered with separate max/min sections, numeric hours-before-extreme axes ending at `0h`, scatter-plus-median-trend price/error views, and vertical PNL histogram SVGs. Browser screenshot capture timed out on one long-page capture, but DOM inspection confirmed both max and min sections and the histogram SVGs were present.
 ```
 
 Fail-closed CLI smoke:

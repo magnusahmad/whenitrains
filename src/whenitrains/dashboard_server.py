@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1572,6 +1574,449 @@ def _latest_bid(db: sqlite3.Connection, token_id: str) -> float | None:
     return None if row is None or row["best_bid"] is None else float(row["best_bid"])
 
 
+def historicals_payload(db: sqlite3.Connection) -> dict:
+    max_accuracy = historical_accuracy_points(db, "max")
+    min_accuracy = historical_accuracy_points(db, "min")
+    max_payload = _historical_temperature_payload(db, "max", max_accuracy)
+    min_payload = _historical_temperature_payload(db, "min", min_accuracy)
+    return {
+        "summary": max_payload["summary"],
+        "accuracy_points": max_payload["accuracy_points"],
+        "forecast_price_points": max_payload["forecast_price_points"],
+        "pnl_histograms": historical_pnl_histograms(db),
+        "error_by_lead_hour": max_payload["error_by_lead_hour"],
+        "series": {
+            "max": {
+                **max_payload,
+                "pnl_histograms": historical_pnl_histograms(db, "max"),
+            },
+            "min": {
+                **min_payload,
+                "pnl_histograms": historical_pnl_histograms(db, "min"),
+            },
+        },
+    }
+
+
+def _historical_temperature_payload(
+    db: sqlite3.Connection, kind: str, accuracy_points: list[dict]
+) -> dict:
+    return {
+        "kind": kind,
+        "label": "Maximum" if kind == "max" else "Minimum",
+        "summary": historical_summary(accuracy_points),
+        "accuracy_points": accuracy_points,
+        "forecast_price_points": historical_forecast_price_points(
+            db, accuracy_points, kind
+        ),
+        "error_by_lead_hour": historical_error_by_lead_hour(accuracy_points),
+    }
+
+
+def historical_accuracy_points(db: sqlite3.Connection, kind: str = "max") -> list[dict]:
+    kind = "min" if kind == "min" else "max"
+    actuals = _actual_extreme_by_date(db, kind)
+    rows = db.execute(
+        """
+        with latest_by_update as (
+            select max(id) as id
+            from ocf_forecast_samples
+            where forecast_date_hkt is not null
+            group by forecast_date_hkt,
+                     coalesce(json_extract(raw_daily_forecast, '$.LastModified'), fetched_at_utc)
+        )
+        select forecast_date_hkt, fetched_at_utc, raw_min_c, raw_max_c,
+               hourly_temperatures_json, raw_daily_forecast
+        from ocf_forecast_samples
+        where id in (select id from latest_by_update)
+        order by forecast_date_hkt asc, fetched_at_utc asc, id asc
+        """
+    ).fetchall()
+    points = []
+    seen: set[tuple[str, int]] = set()
+    for row in rows:
+        target = row["forecast_date_hkt"]
+        actual = actuals.get(target)
+        if actual is None:
+            continue
+        forecast_value = _effective_sample_extreme(row, kind)
+        issue_dt = _parse_hko_timestamp(_forecast_sample_update_time(row))
+        if forecast_value is None or issue_dt is None:
+            continue
+        actual_dt = actual["actual_time"]
+        hours_before = (actual_dt - issue_dt).total_seconds() / 3600.0
+        if hours_before < 0:
+            continue
+        issue_ts = int(issue_dt.timestamp())
+        key = (target, issue_ts)
+        if key in seen:
+            continue
+        seen.add(key)
+        actual_value = float(actual["actual_c"])
+        points.append(
+            {
+                "kind": kind,
+                "target_date": target,
+                "issue_time": issue_dt.isoformat(),
+                "issue_time_unix": issue_ts,
+                "actual_time": actual_dt.isoformat(),
+                "actual_time_unix": int(actual_dt.timestamp()),
+                "actual_max_time": actual_dt.isoformat() if kind == "max" else None,
+                "actual_max_time_unix": int(actual_dt.timestamp()) if kind == "max" else None,
+                "hours_before": round(hours_before, 3),
+                "hours_before_max": round(hours_before, 3) if kind == "max" else None,
+                "forecast_c": forecast_value,
+                "forecast_max_c": forecast_value if kind == "max" else None,
+                "forecast_min_c": forecast_value if kind == "min" else None,
+                "actual_c": actual_value,
+                "actual_max_c": actual_value if kind == "max" else None,
+                "actual_min_c": actual_value if kind == "min" else None,
+                "error_c": round(forecast_value - actual_value, 3),
+                "abs_error_c": round(abs(forecast_value - actual_value), 3),
+                "lead_day": _lead_day_label(issue_dt, target),
+            }
+        )
+    return sorted(points, key=lambda p: (p["target_date"], p["issue_time_unix"]))
+
+
+def _actual_extreme_by_date(db: sqlite3.Connection, kind: str) -> dict[str, dict]:
+    rows = db.execute(
+        """
+        select substr(observed_at_hkt, 1, 10) as target_date,
+               observed_at_hkt, temperature_c
+        from hko_current_observations
+        where observed_at_hkt is not null
+          and temperature_c is not null
+        order by observed_at_hkt asc, id asc
+        """
+    ).fetchall()
+    actuals: dict[str, dict] = {}
+    for row in rows:
+        observed = _parse_hko_timestamp(row["observed_at_hkt"])
+        temp = _optional_float(row["temperature_c"])
+        if observed is None or temp is None or row["target_date"] is None:
+            continue
+        current = actuals.get(row["target_date"])
+        if current is None or (
+            temp < current["actual_c"] if kind == "min" else temp > current["actual_c"]
+        ):
+            actuals[row["target_date"]] = {
+                "actual_c": temp,
+                "actual_time": observed,
+            }
+    return actuals
+
+
+def _effective_sample_extreme(row: sqlite3.Row, kind: str) -> float | None:
+    values = _hourly_values_from_json(
+        row["forecast_date_hkt"], row["hourly_temperatures_json"]
+    )
+    if values:
+        return float(min(values) if kind == "min" else max(values))
+    return _optional_float(row["raw_min_c"] if kind == "min" else row["raw_max_c"])
+
+
+def _parse_hko_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = str(value)
+    if len(text) == 14 and text.isdigit():
+        try:
+            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=HKT)
+        except ValueError:
+            return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=HKT)
+    return parsed.astimezone(HKT)
+
+
+def historical_summary(points: list[dict]) -> dict:
+    errors = [float(point["error_c"]) for point in points]
+    actual_days = {point["target_date"] for point in points}
+    if not errors:
+        return {
+            "forecast_sample_count": 0,
+            "actual_day_count": 0,
+            "mean_error_c": None,
+            "mae_c": None,
+            "rmse_c": None,
+            "min_error_c": None,
+            "max_error_c": None,
+        }
+    return {
+        "forecast_sample_count": len(errors),
+        "actual_day_count": len(actual_days),
+        "mean_error_c": round(sum(errors) / len(errors), 3),
+        "mae_c": round(sum(abs(error) for error in errors) / len(errors), 3),
+        "rmse_c": round(
+            math.sqrt(sum(error * error for error in errors) / len(errors)), 3
+        ),
+        "min_error_c": round(min(errors), 3),
+        "max_error_c": round(max(errors), 3),
+    }
+
+
+def historical_error_by_lead_hour(points: list[dict]) -> list[dict]:
+    buckets: dict[int, list[float]] = defaultdict(list)
+    for point in points:
+        buckets[int(math.floor(float(point["hours_before"])))].append(
+            float(point["error_c"])
+        )
+    result = []
+    for hour in sorted(buckets):
+        values = buckets[hour]
+        result.append(
+            {
+                "hour_before_max": hour,
+                "count": len(values),
+                "mean_error_c": round(sum(values) / len(values), 3),
+                "mae_c": round(sum(abs(v) for v in values) / len(values), 3),
+                "min_error_c": round(min(values), 3),
+                "max_error_c": round(max(values), 3),
+            }
+        )
+    return result
+
+
+def historical_forecast_price_points(
+    db: sqlite3.Connection, accuracy_points: list[dict], kind: str = "max"
+) -> list[dict]:
+    points = []
+    market_prefix = (
+        "lowest-temperature-in-hong-kong-on-"
+        if kind == "min"
+        else "highest-temperature-in-hong-kong-on-"
+    )
+    for point in accuracy_points:
+        bucket = math.floor(float(point["forecast_c"]))
+        outcome = db.execute(
+            """
+            select o.label, o.yes_token_id
+            from outcomes o
+            join markets m on m.id = o.market_id
+            where m.target_date_hkt = ?
+              and m.slug like ?
+              and cast(o.predicate_value_c as integer) = ?
+              and o.yes_token_id is not null
+            order by o.predicate_value_c asc, o.label asc
+            limit 1
+            """,
+            (point["target_date"], f"{market_prefix}%", bucket),
+        ).fetchone()
+        if outcome is None:
+            continue
+        issue = _parse_hko_timestamp(point["issue_time"])
+        if issue is None:
+            continue
+        price = _latest_ask_at_or_before(db, outcome["yes_token_id"], issue)
+        if price is None:
+            continue
+        points.append(
+            {
+                "target_date": point["target_date"],
+                "issue_time": point["issue_time"],
+                "issue_time_unix": point["issue_time_unix"],
+                "actual_time": point["actual_time"],
+                "actual_max_time": point["actual_max_time"],
+                "hours_before": point["hours_before"],
+                "hours_before_max": point["hours_before_max"],
+                "forecast_c": point["forecast_c"],
+                "forecast_max_c": point["forecast_max_c"],
+                "forecast_min_c": point["forecast_min_c"],
+                "label": outcome["label"],
+                "token_id": outcome["yes_token_id"],
+                "price": price,
+                "lead_day": point["lead_day"],
+            }
+        )
+    return sorted(points, key=lambda p: (p["target_date"], p["issue_time_unix"]))
+
+
+def _latest_ask_at_or_before(
+    db: sqlite3.Connection, token_id: str, issue_time_hkt: datetime
+) -> float | None:
+    row = db.execute(
+        """
+        select best_ask
+        from orderbook_snapshots
+        where outcome_id = ?
+          and best_ask is not null
+          and julianday(fetched_at_utc) <= julianday(?)
+        order by fetched_at_utc desc, id desc
+        limit 1
+        """,
+        (token_id, issue_time_hkt.astimezone(timezone.utc).isoformat()),
+    ).fetchone()
+    return None if row is None else float(row["best_ask"])
+
+
+def historical_pnl_histograms(
+    db: sqlite3.Connection, kind: str | None = None
+) -> list[dict]:
+    _ensure_paper_order_exclusions(db)
+    market_clause = ""
+    params: tuple[str, ...] = ()
+    if kind == "max":
+        market_clause = "and m.slug like ?"
+        params = ("highest-temperature-in-hong-kong-on-%",)
+    elif kind == "min":
+        market_clause = "and m.slug like ?"
+        params = ("lowest-temperature-in-hong-kong-on-%",)
+    rows = db.execute(
+        f"""
+        select po.id, po.created_at_utc, po.outcome_id, po.side,
+               po.simulated_fill_price, po.simulated_fill_size_usd, po.reason,
+               o.label, m.target_date_hkt, m.slug
+        from paper_orders po
+        left join outcomes o
+          on po.outcome_id = o.yes_token_id or po.outcome_id = o.no_token_id
+        left join markets m on m.id = o.market_id
+        where po.status = 'filled'
+          and po.simulated_fill_price is not null
+          and po.simulated_fill_size_usd is not null
+          and po.created_at_utc is not null
+          and {ACTIVE_PAPER_ORDER_FILTER}
+          {market_clause}
+        order by po.created_at_utc asc, po.id asc
+        """,
+        params,
+    ).fetchall()
+    positions: dict[str, list[dict]] = defaultdict(list)
+    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for row in rows:
+        token = row["outcome_id"]
+        side = row["side"] or ""
+        price = _optional_float(row["simulated_fill_price"])
+        size = _optional_float(row["simulated_fill_size_usd"])
+        if price is None or price <= 0 or size is None:
+            continue
+        shares = size / price
+        if side.startswith("BUY"):
+            buy_dt = _parse_hko_timestamp(row["created_at_utc"])
+            positions[token].append(
+                {
+                    "remaining_shares": shares,
+                    "price": price,
+                    "cost": size,
+                    "reason": _paper_decision_reason_for_order(db, token, row)
+                    or row["reason"]
+                    or "unknown",
+                    "lead_day": (
+                        _lead_day_label(buy_dt, row["target_date_hkt"])
+                        if buy_dt
+                        else "n/a"
+                    ),
+                    "created_at_hkt": _to_hkt_display(row["created_at_utc"]),
+                    "label": row["label"] or token,
+                    "kind": _market_kind_from_slug(row["slug"]),
+                }
+            )
+            continue
+        if side != "SELL":
+            continue
+        shares_to_sell = shares
+        proceeds_left = size
+        for lot in positions[token]:
+            if shares_to_sell <= 1e-9:
+                break
+            lot_shares = min(float(lot["remaining_shares"]), shares_to_sell)
+            if lot_shares <= 1e-9:
+                continue
+            lot_cost = lot_shares * float(lot["price"])
+            lot_proceeds = proceeds_left * (lot_shares / shares_to_sell)
+            pct_gain = (
+                ((lot_proceeds - lot_cost) / lot_cost) * 100.0 if lot_cost else 0.0
+            )
+            groups[(lot["reason"], lot["lead_day"])].append(
+                {
+                    "pct_gain": round(pct_gain, 3),
+                    "pnl_usd": round(lot_proceeds - lot_cost, 3),
+                    "cost_usd": round(lot_cost, 3),
+                    "proceeds_usd": round(lot_proceeds, 3),
+                    "label": lot["label"],
+                    "buy_time_hkt": lot["created_at_hkt"],
+                    "sell_time_hkt": _to_hkt_display(row["created_at_utc"]),
+                }
+            )
+            lot["remaining_shares"] = float(lot["remaining_shares"]) - lot_shares
+            shares_to_sell -= lot_shares
+            proceeds_left -= lot_proceeds
+    return [
+        {
+            "reason": reason,
+            "lead_day": lead_day,
+            "kind": trades[0].get("kind"),
+            "count": len(trades),
+            "mean_pct_gain": round(sum(t["pct_gain"] for t in trades) / len(trades), 3),
+            "histogram": _histogram([t["pct_gain"] for t in trades]),
+            "trades": trades,
+        }
+        for (reason, lead_day), trades in sorted(groups.items())
+        if trades
+    ]
+
+
+def _market_kind_from_slug(slug: str | None) -> str | None:
+    text = str(slug or "")
+    if text.startswith("lowest-temperature-in-hong-kong-on-"):
+        return "min"
+    if text.startswith("highest-temperature-in-hong-kong-on-"):
+        return "max"
+    return None
+
+
+def _paper_decision_reason_for_order(
+    db: sqlite3.Connection, token_id: str, order: sqlite3.Row
+) -> str | None:
+    decision = _nearest_paper_decision_for_order(db, token_id, order)
+    return decision["reason"] if decision else None
+
+
+def _lead_day_label(timestamp_hkt: datetime | None, target_date_hkt: str | None) -> str:
+    if timestamp_hkt is None or not target_date_hkt:
+        return "n/a"
+    try:
+        target = date.fromisoformat(target_date_hkt)
+    except ValueError:
+        return "n/a"
+    days = (target - timestamp_hkt.astimezone(HKT).date()).days
+    return f"D+{max(0, days)}"
+
+
+def _histogram(values: list[float]) -> list[dict]:
+    edges = [-100, -50, -25, -10, 0, 10, 25, 50, 100]
+    labels = [
+        "<-100%",
+        "-100..-50%",
+        "-50..-25%",
+        "-25..-10%",
+        "-10..0%",
+        "0..10%",
+        "10..25%",
+        "25..50%",
+        "50..100%",
+        ">100%",
+    ]
+    counts = [0 for _ in labels]
+    for value in values:
+        placed = False
+        if value < edges[0]:
+            counts[0] += 1
+            continue
+        for idx in range(len(edges) - 1):
+            if edges[idx] <= value < edges[idx + 1]:
+                counts[idx + 1] += 1
+                placed = True
+                break
+        if not placed:
+            counts[-1] += 1
+    return [{"bucket": label, "count": count} for label, count in zip(labels, counts)]
+
+
 INDEX_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
@@ -2874,6 +3319,360 @@ setInterval(() => loadAll(), 15000);
 """
 
 
+HISTORICALS_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>whenitrains HKO historical accuracy</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --accent: #f0b400;
+    --price: #4dd0e1;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  h1 { margin: 0; font-size: 15px; font-weight: 650; }
+  a { color: var(--price); text-decoration: none; }
+  .meta { color: var(--muted); font-size: 12px; }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .stat { background: var(--panel); padding: 10px 14px; }
+  .stat .label {
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .stat .value {
+    margin-top: 2px;
+    font-size: 18px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 12px 16px;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+  .section { min-width: 0; overflow: hidden; }
+  .section.full { grid-column: 1 / -1; }
+  .section h2 {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    overflow-wrap: anywhere;
+  }
+  .chart {
+    width: min(100%, calc(100vw - 32px));
+    height: 420px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .chart svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .axis {
+    stroke: #30363d;
+    stroke-width: 1;
+  }
+  .grid-line {
+    stroke: #21262d;
+    stroke-width: 1;
+  }
+  .tick-label {
+    fill: var(--muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .chart-label {
+    fill: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+  }
+  .trend {
+    fill: none;
+    stroke-width: 2;
+  }
+  .point {
+    opacity: 0.58;
+  }
+  .bars {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 10px;
+  }
+  .hist {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+  }
+  .hist h3 { margin: 0 0 8px; font-size: 12px; }
+  .hist svg { width: 100%; height: 180px; display: block; }
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: 1fr; }
+    header { align-items: flex-start; flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>whenitrains · HKO historical accuracy</h1>
+      <div class="meta" id="last-update">loading...</div>
+    </div>
+    <a href="/">Paper dashboard</a>
+  </header>
+  <div class="stats" id="stats"></div>
+  <main class="grid">
+    <section class="section">
+      <h2>Max temperature forecast error by hours before actual max</h2>
+      <div id="max-forecast-accuracy-chart" class="chart"></div>
+    </section>
+    <section class="section">
+      <h2>Max temperature token price by hours before actual max</h2>
+      <div id="max-price-lead-chart" class="chart"></div>
+    </section>
+    <section class="section full">
+      <h2>Max temperature mean error by lead-hour bucket</h2>
+      <div id="max-lead-hour-chart" class="chart"></div>
+    </section>
+    <section class="section full">
+      <h2>Max temperature PNL histograms by signal reason and day offset</h2>
+      <div id="max-pnl-histograms" class="bars"></div>
+    </section>
+    <section class="section">
+      <h2>Min temperature forecast error by hours before actual min</h2>
+      <div id="min-forecast-accuracy-chart" class="chart"></div>
+    </section>
+    <section class="section">
+      <h2>Min temperature token price by hours before actual min</h2>
+      <div id="min-price-lead-chart" class="chart"></div>
+    </section>
+    <section class="section full">
+      <h2>Min temperature mean error by lead-hour bucket</h2>
+      <div id="min-lead-hour-chart" class="chart"></div>
+    </section>
+    <section class="section full">
+      <h2>Min temperature PNL histograms by signal reason and day offset</h2>
+      <div id="min-pnl-histograms" class="bars"></div>
+    </section>
+  </main>
+<script>
+const fmt = (value, suffix="") => value == null ? "n/a" : `${Number(value).toFixed(2)}${suffix}`;
+async function fetchJSON(url) {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  return response.json();
+}
+function stat(label, value) {
+  return `<div class="stat"><div class="label">${label}</div><div class="value">${value}</div></div>`;
+}
+function escapeHTML(value) {
+  return String(value ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+function niceTicks(maxValue, count=5) {
+  const max = Math.max(1, Math.ceil(maxValue));
+  const rawStep = max / Math.max(1, count - 1);
+  const pow = 10 ** Math.floor(Math.log10(rawStep));
+  const scaled = rawStep / pow;
+  const step = (scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10) * pow;
+  const ticks = [];
+  for (let value = Math.ceil(max / step) * step; value >= 0; value -= step) {
+    ticks.push(Math.max(0, value));
+  }
+  if (!ticks.includes(0)) ticks.push(0);
+  return [...new Set(ticks)].sort((a, b) => b - a);
+}
+function binnedMedian(points, xKey, yKey, binHours=1) {
+  const buckets = new Map();
+  for (const point of points) {
+    const x = Number(point[xKey]);
+    const y = Number(point[yKey]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const bucket = Math.max(0, Math.round(x / binHours) * binHours);
+    const existing = buckets.get(bucket) || { x: bucket, values: [] };
+    existing.values.push(y);
+    buckets.set(bucket, existing);
+  }
+  return [...buckets.values()]
+    .map(bucket => {
+      const values = bucket.values.sort((a, b) => a - b);
+      const mid = Math.floor(values.length / 2);
+      const median = values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
+      return { x: bucket.x, y: median };
+    })
+    .sort((a, b) => b.x - a.x);
+}
+function renderScatterChart(id, points, options) {
+  const root = document.getElementById(id);
+  const viewportWidth = Math.max(300, window.innerWidth ? window.innerWidth - 32 : 960);
+  const width = Math.max(300, Math.min(root.getBoundingClientRect().width || viewportWidth, viewportWidth));
+  const height = 420;
+  const pad = { left: 52, right: 58, top: 18, bottom: 46 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const clean = points
+    .map(point => ({
+      x: Number(point[options.xKey]),
+      y: Number(point[options.yKey]),
+      label: point.label || point.target_date || "",
+      target: point.target_date || "",
+    }))
+    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (!clean.length) {
+    root.innerHTML = `<div class="empty-overlay">No data yet.</div>`;
+    return;
+  }
+  const maxX = Math.max(...clean.map(point => point.x), 1);
+  const yValues = clean.map(point => point.y);
+  const yMin = options.yMin ?? Math.min(0, ...yValues);
+  const yMax = options.yMax ?? Math.max(0, ...yValues);
+  const ySpan = yMax === yMin ? 1 : yMax - yMin;
+  const x = value => pad.left + ((maxX - value) / maxX) * plotW;
+  const y = value => pad.top + ((yMax - value) / ySpan) * plotH;
+  const xTicks = niceTicks(maxX);
+  const yTicks = Array.from({ length: 5 }, (_, idx) => yMin + (ySpan * idx / 4));
+  const trend = binnedMedian(clean, "x", "y", options.binHours || 1);
+  const trendPath = trend.map((point, idx) => `${idx === 0 ? "M" : "L"}${x(point.x).toFixed(1)},${y(point.y).toFixed(1)}`).join(" ");
+  root.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHTML(options.title)}">
+    ${xTicks.map(tick => {
+      const anchor = tick === 0 ? "end" : tick === xTicks[0] ? "start" : "middle";
+      return `<line class="grid-line" x1="${x(tick)}" y1="${pad.top}" x2="${x(tick)}" y2="${pad.top + plotH}"></line><text class="tick-label" x="${x(tick)}" y="${height - 18}" text-anchor="${anchor}">${tick}h</text>`;
+    }).join("")}
+    ${yTicks.map(tick => `<line class="grid-line" x1="${pad.left}" y1="${y(tick)}" x2="${pad.left + plotW}" y2="${y(tick)}"></line><text class="tick-label" x="${pad.left - 8}" y="${y(tick) + 4}" text-anchor="end">${options.formatY(tick)}</text>`).join("")}
+    <line class="axis" x1="${pad.left}" y1="${pad.top + plotH}" x2="${pad.left + plotW}" y2="${pad.top + plotH}"></line>
+    <line class="axis" x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${pad.top + plotH}"></line>
+    <text class="chart-label" x="${pad.left}" y="${height - 4}" text-anchor="start">hours before actual max</text>
+    ${trendPath ? `<path class="trend" d="${trendPath}" stroke="${options.trendColor || options.color}"></path>` : ""}
+    ${clean.map(point => `<circle class="point" cx="${x(point.x)}" cy="${y(point.y)}" r="3" fill="${options.color}"><title>${escapeHTML(point.target)} ${point.x.toFixed(1)}h: ${options.formatY(point.y)} ${escapeHTML(point.label)}</title></circle>`).join("")}
+  </svg>`;
+}
+function renderHistograms(id, groups) {
+  const root = document.getElementById(id);
+  if (!groups.length) {
+    root.innerHTML = `<div class="hist meta">No closed paper-trade PNL groups yet.</div>`;
+    return;
+  }
+  root.innerHTML = groups.map(group => {
+    const maxCount = Math.max(1, ...group.histogram.map(b => b.count));
+    const width = 360;
+    const height = 180;
+    const pad = { left: 30, right: 10, top: 10, bottom: 42 };
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+    const barW = plotW / group.histogram.length;
+    const bars = group.histogram.map((bucket, idx) => {
+      const barH = plotH * bucket.count / maxCount;
+      const x = pad.left + idx * barW + 2;
+      const y = pad.top + plotH - barH;
+      return `<rect x="${x}" y="${y}" width="${Math.max(1, barW - 4)}" height="${barH}" fill="#f0b400"><title>${escapeHTML(bucket.bucket)}: ${bucket.count}</title></rect>
+        <text class="tick-label" transform="translate(${x + barW / 2 - 2},${height - 8}) rotate(-45)" text-anchor="end">${escapeHTML(bucket.bucket)}</text>`;
+    }).join("");
+    return `<article class="hist">
+      <h3>${escapeHTML(group.reason)} · ${group.lead_day} · ${group.count} trades · avg ${fmt(group.mean_pct_gain, "%")}</h3>
+      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHTML(group.reason)} ${group.lead_day} PNL histogram">
+        <line class="axis" x1="${pad.left}" y1="${pad.top + plotH}" x2="${pad.left + plotW}" y2="${pad.top + plotH}"></line>
+        <line class="axis" x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${pad.top + plotH}"></line>
+        <text class="tick-label" x="${pad.left - 8}" y="${pad.top + 4}" text-anchor="end">${maxCount}</text>
+        <text class="tick-label" x="${pad.left - 8}" y="${pad.top + plotH + 4}" text-anchor="end">0</text>
+        ${bars}
+      </svg>
+    </article>`;
+  }).join("");
+}
+function renderTemperatureSeries(prefix, series, color) {
+  renderScatterChart(`${prefix}-forecast-accuracy-chart`, series.accuracy_points || [], {
+    title: `${series.label} forecast error by lead hours`,
+    xKey: "hours_before",
+    yKey: "error_c",
+    color,
+    trendColor: "#ffffff",
+    formatY: value => `${Number(value).toFixed(1)}C`,
+  });
+  renderScatterChart(`${prefix}-price-lead-chart`, series.forecast_price_points || [], {
+    title: `${series.label} token price by lead hours`,
+    xKey: "hours_before",
+    yKey: "price",
+    yMin: 0,
+    yMax: 1,
+    color: "#4dd0e1",
+    trendColor: "#ffffff",
+    binHours: 3,
+    formatY: value => `${Math.round(Number(value) * 100)}%`,
+  });
+  renderScatterChart(`${prefix}-lead-hour-chart`, series.error_by_lead_hour || [], {
+    title: `${series.label} mean error by lead-hour bucket`,
+    xKey: "hour_before_max",
+    yKey: "mean_error_c",
+    color: "#c084fc",
+    trendColor: "#ffffff",
+    formatY: value => `${Number(value).toFixed(1)}C`,
+  });
+  renderHistograms(`${prefix}-pnl-histograms`, series.pnl_histograms || []);
+}
+async function refresh() {
+  const payload = await fetchJSON("/api/historicals");
+  const maxSummary = payload.series.max.summary;
+  const minSummary = payload.series.min.summary;
+  document.getElementById("last-update").textContent = `loaded ${new Date().toLocaleTimeString()}`;
+  document.getElementById("stats").innerHTML = [
+    stat("Max samples", maxSummary.forecast_sample_count),
+    stat("Max actual days", maxSummary.actual_day_count),
+    stat("Max MAE", fmt(maxSummary.mae_c, "C")),
+    stat("Max RMSE", fmt(maxSummary.rmse_c, "C")),
+    stat("Min samples", minSummary.forecast_sample_count),
+    stat("Min actual days", minSummary.actual_day_count),
+    stat("Min MAE", fmt(minSummary.mae_c, "C")),
+    stat("Min RMSE", fmt(minSummary.rmse_c, "C")),
+  ].join("");
+  renderTemperatureSeries("max", payload.series.max, "#f0b400");
+  renderTemperatureSeries("min", payload.series.min, "#38bdf8");
+}
+refresh().catch(error => {
+  document.getElementById("last-update").textContent = `error: ${error.message}`;
+});
+</script>
+</body>
+</html>
+"""
+
+
 def _resolve_target_date(db: sqlite3.Connection, requested: str | None) -> str:
     if requested:
         return requested
@@ -2995,6 +3794,9 @@ def _build_handler(db_path: Path):
                 if path == "/live":
                     self._send_html(LIVE_HTML)
                     return
+                if path == "/historicals":
+                    self._send_html(HISTORICALS_HTML)
+                    return
                 db = connect(db_path)
                 try:
                     if path == "/api/stats":
@@ -3002,6 +3804,9 @@ def _build_handler(db_path: Path):
                         return
                     if path == "/api/live/stats":
                         self._send_json(live_dashboard_payload(db))
+                        return
+                    if path == "/api/historicals":
+                        self._send_json(historicals_payload(db))
                         return
                     if path == "/api/forecast-vs-actual":
                         requested = query.get("date", [None])[0]

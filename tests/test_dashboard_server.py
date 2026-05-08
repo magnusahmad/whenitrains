@@ -4,6 +4,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from whenitrains.dashboard_server import (
+    HISTORICALS_HTML,
     INDEX_HTML,
     LIVE_HTML,
     bucketed_orderbook_ask_points,
@@ -20,6 +21,7 @@ from whenitrains.dashboard_server import (
     top_yes_price_series,
     latest_decimal_forecast_stats,
     latest_market_token_price_rows,
+    historicals_payload,
     live_dashboard_payload,
     live_pnl_series,
     live_trade_rows,
@@ -49,6 +51,141 @@ from whenitrains.storage import (
 
 
 class DashboardServerTests(unittest.TestCase):
+    def test_historicals_payload_measures_ocf_accuracy_against_final_max_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            _seed_historical_accuracy_day(db)
+
+            payload = historicals_payload(db)
+            max_payload = payload["series"]["max"]
+
+            self.assertEqual(max_payload["summary"]["forecast_sample_count"], 2)
+            self.assertEqual(max_payload["summary"]["actual_day_count"], 1)
+            self.assertAlmostEqual(max_payload["summary"]["mean_error_c"], 0.0)
+            self.assertAlmostEqual(max_payload["summary"]["mae_c"], 0.5)
+            self.assertEqual(
+                [round(point["hours_before"], 1) for point in max_payload["accuracy_points"]],
+                [3.0, 1.0],
+            )
+            self.assertEqual(
+                [point["forecast_c"] for point in max_payload["accuracy_points"]],
+                [27.0, 28.0],
+            )
+            self.assertEqual(
+                [point["actual_c"] for point in max_payload["accuracy_points"]],
+                [27.5, 27.5],
+            )
+            self.assertEqual(
+                [point["error_c"] for point in max_payload["accuracy_points"]],
+                [-0.5, 0.5],
+            )
+
+    def test_historicals_payload_measures_ocf_accuracy_against_final_min_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            _seed_historical_accuracy_day(db)
+
+            payload = historicals_payload(db)
+            min_payload = payload["series"]["min"]
+
+            self.assertEqual(min_payload["summary"]["forecast_sample_count"], 2)
+            self.assertEqual(
+                [round(point["hours_before"], 1) for point in min_payload["accuracy_points"]],
+                [4.0, 2.0],
+            )
+            self.assertEqual(
+                [point["forecast_c"] for point in min_payload["accuracy_points"]],
+                [24.0, 23.0],
+            )
+            self.assertEqual(
+                [point["actual_c"] for point in min_payload["accuracy_points"]],
+                [23.5, 23.5],
+            )
+            self.assertEqual(
+                [point["error_c"] for point in min_payload["accuracy_points"]],
+                [0.5, -0.5],
+            )
+
+    def test_historicals_payload_matches_forecast_bucket_token_price_by_lead_hours(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            _seed_historical_accuracy_day(db)
+            _set_latest_orderbook_time(db, "yes27", "2026-05-06T01:55:00+00:00", 0.34)
+            _set_latest_orderbook_time(db, "yes28", "2026-05-06T03:55:00+00:00", 0.47)
+            _set_latest_orderbook_time(db, "lowyes24", "2026-05-06T01:55:00+00:00", 0.31)
+            _set_latest_orderbook_time(db, "lowyes23", "2026-05-06T03:55:00+00:00", 0.46)
+
+            payload = historicals_payload(db)
+
+            prices = payload["series"]["max"]["forecast_price_points"]
+            self.assertEqual(
+                [(round(p["hours_before"], 1), p["label"], p["price"]) for p in prices],
+                [(3.0, "27°C", 0.34), (1.0, "28°C", 0.47)],
+            )
+            low_prices = payload["series"]["min"]["forecast_price_points"]
+            self.assertEqual(
+                [(round(p["hours_before"], 1), p["label"], p["price"]) for p in low_prices],
+                [(4.0, "24°C", 0.31), (2.0, "23°C", 0.46)],
+            )
+
+    def test_historicals_payload_groups_pnl_histograms_by_reason_and_lead_day(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            _insert_historical_order(
+                db,
+                created_at="2026-05-05T03:00:00+00:00",
+                token_id="yes25",
+                side="BUY_YES",
+                fill_price=0.40,
+                fill_size=40,
+                reason="price has not moved with HKO event",
+                decision_reason="forecast change",
+            )
+            _insert_historical_order(
+                db,
+                created_at="2026-05-06T04:00:00+00:00",
+                token_id="yes25",
+                side="SELL",
+                fill_price=0.52,
+                fill_size=52,
+                reason="exit",
+            )
+            _insert_historical_order(
+                db,
+                created_at="2026-05-06T02:00:00+00:00",
+                token_id="no26",
+                side="BUY_NO",
+                fill_price=0.50,
+                fill_size=50,
+                reason="forecast bucket ask below threshold",
+                decision_reason="cheap forecast bucket",
+            )
+            _insert_historical_order(
+                db,
+                created_at="2026-05-06T06:00:00+00:00",
+                token_id="no26",
+                side="SELL",
+                fill_price=0.25,
+                fill_size=25,
+                reason="exit",
+            )
+
+            payload = historicals_payload(db)
+
+            groups = {
+                (group["reason"], group["lead_day"]): group
+                for group in payload["pnl_histograms"]
+            }
+            self.assertAlmostEqual(
+                groups[("forecast change", "D+1")]["trades"][0]["pct_gain"], 30.0
+            )
+            self.assertAlmostEqual(
+                groups[("cheap forecast bucket", "D+0")]["trades"][0]["pct_gain"],
+                -50.0,
+            )
+            self.assertEqual(groups[("forecast change", "D+1")]["count"], 1)
+            self.assertEqual(groups[("cheap forecast bucket", "D+0")]["count"], 1)
+
     def test_top_yes_price_series_returns_current_top_three_for_target_date(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_dashboard_db(Path(tmp) / "test.db")
@@ -1094,6 +1231,16 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn('/api/live/trades?view=${encodeURIComponent(view)}', LIVE_HTML)
         self.assertIn('fetchJSON("/api/live/stats")', LIVE_HTML)
 
+    def test_historicals_html_contains_route_specific_api_and_charts(self):
+        self.assertIn("HKO historical accuracy", HISTORICALS_HTML)
+        self.assertIn('fetchJSON("/api/historicals")', HISTORICALS_HTML)
+        self.assertIn("max-forecast-accuracy-chart", HISTORICALS_HTML)
+        self.assertIn("max-price-lead-chart", HISTORICALS_HTML)
+        self.assertIn("max-pnl-histograms", HISTORICALS_HTML)
+        self.assertIn("min-forecast-accuracy-chart", HISTORICALS_HTML)
+        self.assertIn("min-price-lead-chart", HISTORICALS_HTML)
+        self.assertIn("min-pnl-histograms", HISTORICALS_HTML)
+
 
 def _seed_dashboard_db(path: Path):
     db = connect(path)
@@ -1117,7 +1264,131 @@ def _seed_dashboard_db(path: Path):
             ],
         ),
     )
+    store_polymarket_event(
+        db,
+        TemperatureMarket(
+            event_id="low-event",
+            event_slug="lowest-temperature-in-hong-kong-on-2026-05-06",
+            title="Lowest temperature in Hong Kong on 2026-05-06?",
+            target_date=date(2026, 5, 6),
+            outcomes=[
+                Outcome(
+                    market_id=f"lowm{temp}",
+                    label=f"{temp}°C",
+                    predicate=parse_outcome_label(f"{temp}°C"),
+                    yes_token_id=f"lowyes{temp}",
+                    no_token_id=f"lowno{temp}",
+                )
+                for temp in [22, 23, 24, 25, 26]
+            ],
+        ),
+    )
     return db
+
+
+def _seed_historical_accuracy_day(db):
+    snapshot = store_raw_snapshot(db, "hko", "ocf", "{}")
+    for modified, max_temp, min_temp in [
+        (20260506100000, 27.0, 24.0),
+        (20260506120000, 28.0, 23.0),
+    ]:
+        store_ocf_forecast_samples(
+            db,
+            snapshot.id,
+            [
+                OcfForecastSample(
+                    forecast_date_hkt=date(2026, 5, 6),
+                    forecast_min_c=round(min_temp),
+                    forecast_max_c=round(max_temp),
+                    raw_min_c=min_temp,
+                    raw_max_c=max_temp,
+                    hourly_temperatures=[
+                        {
+                            "forecast_hour_hkt": "2026-05-06T09:00:00+08:00",
+                            "temperature_c": min_temp,
+                        },
+                        {
+                            "forecast_hour_hkt": "2026-05-06T13:00:00+08:00",
+                            "temperature_c": max_temp,
+                        }
+                    ],
+                    raw={"LastModified": modified},
+                )
+            ],
+        )
+    actual_snapshot = store_raw_snapshot(db, "hko", "rhrread", "{}")
+    for observed_at, temp in [
+        (datetime(2026, 5, 6, 9, 0, tzinfo=HKT), 25.0),
+        (datetime(2026, 5, 6, 12, 0, tzinfo=HKT), 26.8),
+        (datetime(2026, 5, 6, 13, 0, tzinfo=HKT), 27.5),
+        (datetime(2026, 5, 6, 14, 0, tzinfo=HKT), 23.5),
+    ]:
+        store_hko_current_temperature(
+            db,
+            actual_snapshot.id,
+            HkoCurrentTemperature(
+                observed_at_hkt=observed_at,
+                station="Hong Kong Observatory",
+                temperature_c=temp,
+                raw={},
+            ),
+        )
+
+
+def _set_latest_orderbook_time(db, token_id: str, fetched_at: str, price: float):
+    store_orderbook(
+        db,
+        token_id,
+        OrderBook(
+            token_id,
+            bids=[(price - 0.02, 10)],
+            asks=[(price, 10)],
+            tick_size=0.01,
+            min_order_size=5,
+        ),
+    )
+    db.execute(
+        """
+        update orderbook_snapshots
+        set fetched_at_utc = ?
+        where id = (select max(id) from orderbook_snapshots)
+        """,
+        (fetched_at,),
+    )
+    db.commit()
+
+
+def _insert_historical_order(
+    db,
+    created_at: str,
+    token_id: str,
+    side: str,
+    fill_price: float,
+    fill_size: float,
+    reason: str,
+    decision_reason: str | None = None,
+):
+    db.execute(
+        """
+        insert into paper_orders
+        (created_at_utc, outcome_id, side, limit_price, size_usd,
+         simulated_fill_price, simulated_fill_size_usd, status, reason)
+        values (?, ?, ?, ?, ?, ?, ?, 'filled', ?)
+        """,
+        (created_at, token_id, side, fill_price, fill_size, fill_price, fill_size, reason),
+    )
+    if decision_reason is not None:
+        token_side = "NO" if side == "BUY_NO" else "YES"
+        db.execute(
+            """
+            insert into paper_decisions
+            (created_at_utc, event_type, outcome_id, label, side, action,
+             status, reason, details_json)
+            values (?, 'test_signal', ?, ?, ?, 'BUY', 'filled', ?, '{}')
+            """,
+            (created_at, token_id, token_id, token_side, decision_reason),
+        )
+    db.commit()
 
 
 if __name__ == "__main__":
