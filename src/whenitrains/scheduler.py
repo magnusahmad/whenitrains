@@ -251,18 +251,32 @@ def run_scheduled_paper_loop(
                 for plan in due_hko_sources(now, state, learned_times, learned_actuals)
             }
             notes: list[str] = []
+            data_failed = False
             if actions.fetch_since_midnight:
                 payload = _try_fetch_source("since_midnight", fetch_since_midnight, notes)
-                if payload is not None and mark_source_fetch(
-                    state, plans["since_midnight"], payload, now
-                ):
+                if payload is None:
+                    data_failed = True
+                elif mark_source_fetch(state, plans["since_midnight"], payload, now):
                     notes.append("since_midnight changed")
             if actions.fetch_bulletin:
                 payload = _try_fetch_source("forecast", fetch_bulletin, notes)
-                if payload is not None and mark_source_fetch(
-                    state, plans["bulletin"], payload, now
-                ):
+                if payload is None:
+                    data_failed = True
+                elif mark_source_fetch(state, plans["bulletin"], payload, now):
                     notes.append("forecast changed")
+            if (
+                aws_actual_poll_fetch is not None
+                and not state.trading_warmed_up
+                and state.last_current_temperature_fetch_at is None
+            ):
+                temp_notes: list[str] = []
+                payload = _try_fetch_source("aws_actual", aws_actual_poll_fetch, temp_notes)
+                if payload is None:
+                    data_failed = True
+                    notes.extend(temp_notes)
+                else:
+                    mark_current_temperature_fetched(state, now)
+                    notes.append(_source_changed_note("aws_actual", payload))
             if (
                 actions.fetch_current_temperature
                 and fetch_current_temperature is not None
@@ -275,19 +289,30 @@ def run_scheduled_paper_loop(
                     plan = plans.get("aws_actual")
                     if plan is not None and mark_source_fetch(state, plan, payload, now):
                         notes.append(_source_changed_note("aws_actual", payload))
-                elif not quiet:
-                    print("; ".join(temp_notes))
                 else:
+                    data_failed = True
                     notes.extend(temp_notes)
             if actions.discover_market:
                 if _try_run_action("market discovery", lambda: discover_market(now.date()), notes):
                     mark_market_discovered(state, now)
                     notes.append("discovered market")
+                else:
+                    data_failed = True
             if actions.fetch_orderbooks:
                 if _try_run_action("orderbooks", lambda: fetch_orderbooks(now.date()), notes):
                     mark_orderbooks_fetched(state, now)
                     notes.append("fetched orderbooks")
-            if state.trading_warmed_up:
+                else:
+                    data_failed = True
+            if data_failed:
+                result = RunnerResult(
+                    notes=(
+                        "decisions skipped: data fetch failed"
+                        if state.trading_warmed_up
+                        else "startup warmup blocked: data fetch failed",
+                    )
+                )
+            elif state.trading_warmed_up:
                 tick_fn = run_tick_fn or run_paper_tick
                 result = tick_fn(db, today_hkt=now.date())
             else:

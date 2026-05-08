@@ -344,6 +344,34 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()[0]
             self.assertEqual(buy_count, 1)
 
+    def test_forecast_change_missing_orderbooks_is_retryable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_forecast(db, 28, "2026-05-04T00:45:00+08:00")
+            _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
+
+            first = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+            processed_count = db.execute(
+                """
+                select count(*)
+                from paper_decisions
+                where event_type = 'forecast_change'
+                  and action = 'EVENT'
+                  and status = 'processed'
+                """
+            ).fetchone()[0]
+            _store_book_pair(db, "yes29", old_ask=0.40, new_ask=0.405)
+
+            second = process_forecast_entries(
+                db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(first.buys_filled, 0)
+            self.assertEqual(processed_count, 0)
+            self.assertEqual(second.buys_filled, 1)
+
     def test_forecast_change_duplicate_hko_update_is_processed_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(Path(tmp) / "test.db")
@@ -497,6 +525,42 @@ class RunnerTests(unittest.TestCase):
                 "select net_shares from paper_positions where outcome_id = 'yes30'"
             ).fetchone()
             self.assertIsNotNone(position)
+
+    def test_actual_cross_missing_orderbooks_is_retryable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m30",
+                        label="30°C or higher",
+                        predicate=parse_outcome_label("30°C or higher"),
+                        yes_token_id="yes30",
+                        no_token_id="no30",
+                    )
+                ],
+            )
+            _store_forecast(db, 29, "2026-05-04T00:45:00+08:00")
+            _store_observation(db, 29.0)
+            _store_observation(db, 30.0)
+
+            first = process_actual_entries(db, date(2026, 5, 4))
+            processed_count = db.execute(
+                """
+                select count(*)
+                from paper_decisions
+                where event_type = 'actual_cross'
+                  and action = 'EVENT'
+                  and status = 'processed'
+                """
+            ).fetchone()[0]
+            _store_book_pair(db, "yes30", old_ask=0.40, new_ask=0.405)
+
+            second = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(first.buys_filled, 0)
+            self.assertEqual(processed_count, 0)
+            self.assertEqual(second.buys_filled, 1)
 
     def test_actual_cross_notes_are_deduped_when_no_bucket_cross_occurs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -855,7 +919,7 @@ class RunnerTests(unittest.TestCase):
                 ],
             )
 
-    def test_actual_cross_ignores_csdi_when_aws_actuals_are_available(self):
+    def test_actual_cross_falls_back_to_csdi_when_aws_has_no_max_transition(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
                 Path(tmp) / "test.db",
@@ -872,6 +936,31 @@ class RunnerTests(unittest.TestCase):
             _store_forecast(db, 29.3, "2026-05-04T00:45:00+08:00")
             _store_aws_actual(db, high=28.7, minute=0)
             _store_observation(db, 29.2)
+            _store_book_pair(db, "yes29", old_ask=0.40, new_ask=0.405)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 1)
+            self.assertEqual(result.signals, 1)
+
+    def test_actual_cross_prefers_aws_max_transitions_when_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m29",
+                        label="29°C or higher",
+                        predicate=parse_outcome_label("29°C or higher"),
+                        yes_token_id="yes29",
+                        no_token_id="no29",
+                    )
+                ],
+            )
+            _store_forecast(db, 29.3, "2026-05-04T00:45:00+08:00")
+            _store_observation(db, 29.2)
+            _store_aws_actual(db, high=28.7, minute=0)
+            _store_aws_actual(db, high=28.8, minute=5)
             _store_book_pair(db, "yes29", old_ask=0.40, new_ask=0.405)
 
             result = process_actual_entries(db, date(2026, 5, 4))
@@ -1609,6 +1698,43 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(decision["label"], "29°C")
             self.assertEqual(decision["side"], "YES")
+
+    def test_actual_low_cross_missing_orderbooks_is_retryable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_lowest_market(
+                db,
+                [
+                    Outcome(
+                        market_id="low29",
+                        label="29°C",
+                        predicate=parse_outcome_label("29°C"),
+                        yes_token_id="yes-low29",
+                        no_token_id="no-low29",
+                    )
+                ],
+            )
+            _store_forecast_range(db, low=29, high=33, update_time="2026-05-04T09:00:00+08:00")
+            _store_min_observation(db, low=30.2, hour=7)
+            _store_min_observation(db, low=29.4, hour=8)
+
+            first = process_actual_entries(db, date(2026, 5, 4))
+            processed_count = db.execute(
+                """
+                select count(*)
+                from paper_decisions
+                where event_type = 'actual_low_cross'
+                  and action = 'EVENT'
+                  and status = 'processed'
+                """
+            ).fetchone()[0]
+            _store_book_pair(db, "yes-low29", old_ask=0.25, new_ask=0.25)
+
+            second = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(first.buys_filled, 0)
+            self.assertEqual(processed_count, 0)
+            self.assertEqual(second.buys_filled, 1)
 
     def test_forecast_value_buy_only_sweeps_depth_up_to_threshold(self):
         with tempfile.TemporaryDirectory() as tmp:

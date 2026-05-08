@@ -364,6 +364,101 @@ HKO,27.3,28.5,24.0
             self.assertIn("startup warmup: trading skipped", text)
             self.assertIn("buys=1/0", text)
 
+    def test_scheduler_does_not_warm_up_until_startup_fetches_succeed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            calls = []
+            output = StringIO()
+            now = datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT)
+
+            with redirect_stdout(output):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: "",
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=lambda target: (_ for _ in ()).throw(
+                        OSError("orderbooks unavailable")
+                    ),
+                    run_tick_fn=lambda _db, today_hkt: calls.append(today_hkt) or RunnerResult(buys_filled=1),
+                    max_ticks=2,
+                    now_fn=lambda: now,
+                    quiet=False,
+                    base_sleep_seconds=0,
+                )
+
+            self.assertEqual(calls, [])
+            text = output.getvalue()
+            self.assertIn("orderbooks failed: OSError: orderbooks unavailable", text)
+            self.assertIn("startup warmup blocked: data fetch failed", text)
+
+    def test_scheduler_skips_decisions_when_due_orderbook_refresh_fails_after_warmup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            calls = []
+            output = StringIO()
+            times = iter(
+                [
+                    datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT),
+                    datetime(2026, 5, 4, 12, 0, 16, tzinfo=HKT),
+                ]
+            )
+            orderbook_calls = 0
+
+            def fetch_orderbooks(_target):
+                nonlocal orderbook_calls
+                orderbook_calls += 1
+                if orderbook_calls == 2:
+                    raise OSError("orderbooks unavailable")
+
+            with redirect_stdout(output):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: "",
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=fetch_orderbooks,
+                    run_tick_fn=lambda _db, today_hkt: calls.append(today_hkt) or RunnerResult(buys_filled=1),
+                    max_ticks=2,
+                    now_fn=lambda: next(times),
+                    quiet=False,
+                    base_sleep_seconds=0,
+                )
+
+            self.assertEqual(calls, [])
+            text = output.getvalue()
+            self.assertIn("startup warmup: trading skipped", text)
+            self.assertIn("decisions skipped: data fetch failed", text)
+
+    def test_scheduler_startup_warmup_fetches_actual_when_background_poller_is_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            calls = []
+            actual_fetches = []
+            output = StringIO()
+            now = datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT)
+
+            with redirect_stdout(output):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: "",
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=lambda target: None,
+                    run_tick_fn=lambda _db, today_hkt: calls.append(today_hkt) or RunnerResult(buys_filled=1),
+                    aws_actual_poll_fetch=lambda: actual_fetches.append("fetch") or "actual payload",
+                    max_ticks=2,
+                    now_fn=lambda: now,
+                    quiet=False,
+                    base_sleep_seconds=0,
+                )
+
+            self.assertGreaterEqual(len(actual_fetches), 1)
+            self.assertEqual(calls, [now.date()])
+
     def test_scheduler_stops_when_stop_event_is_set(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

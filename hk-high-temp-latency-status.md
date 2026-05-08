@@ -22,6 +22,14 @@ Entry candidates now fail closed when the latest actual max/min has already inva
 
 Same-day effective forecast values now combine actuals with remaining-hour forecast values: high uses `max(latest_since_midnight_max, forecast_hourly_max)` and low uses `min(latest_since_midnight_min, forecast_hourly_min)`. This prevents the bot from treating a lower remaining-day forecast as a lower full-day forecast after the actual high has already occurred.
 
+Scheduler readiness now fails closed on the current loop: if a due HKO fetch, market discovery, orderbook refresh, or startup actual warmup fetch fails, decisions are skipped for that loop. Startup warmup does not complete until the startup data path succeeds, and schedulers using the background AWS actual poller perform a synchronous startup actual fetch before trading is enabled.
+
+Forecast-change and actual-cross events are retryable when orderbook prerequisites are missing. A decision row with an event key no longer counts as processed unless it is an explicit `EVENT` / `processed` marker, and those markers are written only after the event has enough market data to make a terminal trade/no-trade decision.
+
+Actual-cross source preference now applies per value transition. AWS actual transitions are preferred when AWS provides a max/min transition; otherwise the runner falls back to the since-midnight observation stream instead of suppressing usable CSDI transitions merely because any AWS row exists.
+
+Past-date unresolved local positions remain a documented residual risk. The real market should eventually resolve, but local paper/live state still needs a reconcile/settlement path to reflect that resolution in risk and dashboard state if the scheduler missed the same-day exit window.
+
 ## API Discovery Findings
 
 ### HKO
@@ -182,6 +190,53 @@ The matching low-side test also passes:
 
 ```bash
 PYTHONPATH=src python3 -m unittest tests.test_runner.RunnerTests.test_lowest_forecast_change_effective_low_includes_actual_min
+```
+
+Scheduler readiness red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest \
+  tests.test_scheduler.SchedulerTests.test_scheduler_does_not_warm_up_until_startup_fetches_succeed \
+  tests.test_scheduler.SchedulerTests.test_scheduler_skips_decisions_when_due_orderbook_refresh_fails_after_warmup \
+  tests.test_scheduler.SchedulerTests.test_scheduler_startup_warmup_fetches_actual_when_background_poller_is_enabled
+```
+
+Green result after adding per-loop data-failure gating and synchronous startup actual warmup:
+
+```text
+Ran 3 tests in 0.063s
+OK
+```
+
+Retryable event prerequisite red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest \
+  tests.test_runner.RunnerTests.test_forecast_change_missing_orderbooks_is_retryable \
+  tests.test_runner.RunnerTests.test_actual_cross_missing_orderbooks_is_retryable \
+  tests.test_runner.RunnerTests.test_actual_low_cross_missing_orderbooks_is_retryable
+```
+
+Green result after delaying processed markers until orderbook prerequisites are available:
+
+```text
+Ran 3 tests
+OK
+```
+
+AWS/CSDI transition preference red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest \
+  tests.test_runner.RunnerTests.test_actual_cross_falls_back_to_csdi_when_aws_has_no_max_transition \
+  tests.test_runner.RunnerTests.test_actual_cross_prefers_aws_max_transitions_when_available
+```
+
+Green result after preferring AWS only when it provides a same-value transition:
+
+```text
+Ran 2 tests in 0.017s
+OK
 ```
 
 CLI smoke checks:

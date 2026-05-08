@@ -160,13 +160,6 @@ def _process_forecast_change_entries_kind(
     )
     if has_processed_event(db, event_key):
         return RunnerResult(notes=(f"{noun} change already processed",))
-    _mark_event_processed(
-        db,
-        event_type=event_type,
-        event_key=event_key,
-        reason=f"{noun} changed {old_value} -> {new_value}",
-        details={f"old_{market_kind}": old_value, f"new_{market_kind}": new_value},
-    )
     exit_result = process_forecast_position_exits(
         db, target_date, new_value, event_key=event_key, market_kind=market_kind
     )
@@ -175,9 +168,11 @@ def _process_forecast_change_entries_kind(
     outcomes = [_outcome_from_row(row) for row in rows]
     prior_yes_asks: dict[str, float] = {}
     current_yes_asks: dict[str, float] = {}
+    missing_orderbooks = False
     for row in rows:
         prices = latest_two_orderbook_prices(db, row["yes_token_id"])
         if len(prices) < 2 or prices[0]["best_ask"] is None or prices[1]["best_ask"] is None:
+            missing_orderbooks = True
             store_trading_decision(
                 db,
                 event_type,
@@ -203,6 +198,19 @@ def _process_forecast_change_entries_kind(
         max_move=Settings.forecast_change_max_price_move,
     )
     if not candidates:
+        if missing_orderbooks:
+            return RunnerResult(
+                sells_filled=exit_result.sells_filled,
+                sells_missed=exit_result.sells_missed,
+                notes=(f"{noun} waiting for orderbooks",) + exit_result.notes,
+            )
+        _mark_event_processed(
+            db,
+            event_type=event_type,
+            event_key=event_key,
+            reason=f"{noun} changed {old_value} -> {new_value}",
+            details={f"old_{market_kind}": old_value, f"new_{market_kind}": new_value},
+        )
         no_candidates_note = (
             "no stale forecast candidates"
             if market_kind == "highest"
@@ -215,6 +223,13 @@ def _process_forecast_change_entries_kind(
             notes=(no_candidates_note,) + exit_result.notes,
         )
 
+    _mark_event_processed(
+        db,
+        event_type=event_type,
+        event_key=event_key,
+        reason=f"{noun} changed {old_value} -> {new_value}",
+        details={f"old_{market_kind}": old_value, f"new_{market_kind}": new_value},
+    )
     store_signal(
         db,
         market_id=target_date.isoformat(),
@@ -569,13 +584,16 @@ def process_forecast_position_exits(
 def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerResult:
     transitions = observed_max_increases(db, today_hkt.isoformat())
     min_transitions = observed_min_decreases(db, today_hkt.isoformat())
-    if _has_aws_actual_observations(db, today_hkt):
-        transitions = [
-            (old, new) for old, new in transitions if _is_aws_actual_row(old, new)
-        ]
-        min_transitions = [
-            (old, new) for old, new in min_transitions if _is_aws_actual_row(old, new)
-        ]
+    aws_transitions = [
+        (old, new) for old, new in transitions if _is_aws_actual_row(old, new)
+    ]
+    aws_min_transitions = [
+        (old, new) for old, new in min_transitions if _is_aws_actual_row(old, new)
+    ]
+    if aws_transitions:
+        transitions = aws_transitions
+    if aws_min_transitions:
+        min_transitions = aws_min_transitions
     if not transitions and not min_transitions:
         return RunnerResult(notes=("need two observed maxes/mins",))
     aggregate = RunnerResult()
@@ -623,23 +641,6 @@ def _dedupe_notes(notes: list[str]) -> list[str]:
     return deduped
 
 
-def _has_aws_actual_observations(db: sqlite3.Connection, today_hkt: date) -> bool:
-    return (
-        db.execute(
-            """
-            select 1
-            from hko_current_observations
-            where station = 'HKO'
-              and substr(observed_at_hkt, 1, 10) = ?
-              and (since_midnight_max_c is not null or since_midnight_min_c is not null)
-            limit 1
-            """,
-            (today_hkt.isoformat(),),
-        ).fetchone()
-        is not None
-    )
-
-
 def _is_aws_actual_row(old: sqlite3.Row, new: sqlite3.Row) -> bool:
     return old["station"] == "HKO" and new["station"] == "HKO"
 
@@ -666,20 +667,13 @@ def _process_actual_min_transition(
     buys_filled = 0
     buys_missed = 0
     signals = 0
+    event_marked = False
     for row in _lowest_temperature_rows(list_outcomes_for_date(db, today_hkt.isoformat())):
         predicate = parse_outcome_label(row["label"])
         side = _actual_low_cross_side(predicate, old_min, new_min)
         if side is None:
             continue
         token_id = row["yes_token_id"] if side == "YES" else row["no_token_id"]
-        if signals == 0:
-            _mark_event_processed(
-                db,
-                event_type="actual_low_cross",
-                event_key=event_key,
-                reason=f"observed min changed {old_min} -> {new_min}",
-                details={"old_min": old_min, "new_min": new_min, "forecast_min": forecast_min},
-            )
         signals += 1
         prices = latest_two_orderbook_prices(db, token_id)
         if len(prices) < 2 or prices[0]["best_ask"] is None or prices[1]["best_ask"] is None:
@@ -710,6 +704,15 @@ def _process_actual_min_transition(
             if is_invalidated_bucket
             else Settings.actual_new_bucket_max_entry_price
         )
+        if not event_marked:
+            _mark_event_processed(
+                db,
+                event_type="actual_low_cross",
+                event_key=event_key,
+                reason=f"observed min changed {old_min} -> {new_min}",
+                details={"old_min": old_min, "new_min": new_min, "forecast_min": forecast_min},
+            )
+            event_marked = True
         if stale_move_threshold is not None and current - prior >= stale_move_threshold:
             store_trading_decision(
                 db,
@@ -786,22 +789,24 @@ def _process_actual_transition(
     buys_filled = 0
     buys_missed = 0
     signals = 0
+    event_marked = False
     for row in _highest_temperature_rows(list_outcomes_for_date(db, today_hkt.isoformat())):
         predicate = parse_outcome_label(row["label"])
         side = _actual_cross_side(predicate, old_max, new_max)
         if side is None:
             continue
         token_id = row["yes_token_id"] if side == "YES" else row["no_token_id"]
-        if signals == 0:
-            _mark_event_processed(
-                db,
-                event_type="actual_cross",
-                event_key=event_key,
-                reason=f"observed max changed {old_max} -> {new_max}",
-                details=actual_details,
-            )
         signals += 1
         if _actual_cross_guarded_by_forecast(predicate, side, forecast_max):
+            if not event_marked:
+                _mark_event_processed(
+                    db,
+                    event_type="actual_cross",
+                    event_key=event_key,
+                    reason=f"observed max changed {old_max} -> {new_max}",
+                    details=actual_details,
+                )
+                event_marked = True
             store_trading_decision(
                 db,
                 "actual_cross",
@@ -840,6 +845,15 @@ def _process_actual_transition(
             if is_invalidated_bucket
             else Settings.actual_new_bucket_stale_price_min_move
         )
+        if not event_marked:
+            _mark_event_processed(
+                db,
+                event_type="actual_cross",
+                event_key=event_key,
+                reason=f"observed max changed {old_max} -> {new_max}",
+                details=actual_details,
+            )
+            event_marked = True
         if stale_move_threshold is not None and current - prior >= stale_move_threshold:
             store_trading_decision(
                 db,

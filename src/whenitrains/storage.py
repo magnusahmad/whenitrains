@@ -1303,6 +1303,8 @@ def has_processed_event(db: sqlite3.Connection, event_key: str) -> bool:
             """
             select 1 from paper_decisions
             where event_key = ?
+              and action = 'EVENT'
+              and status = 'processed'
             limit 1
             """,
             (event_key,),
