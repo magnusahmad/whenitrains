@@ -140,7 +140,7 @@ class LiveTests(unittest.TestCase):
     def test_load_live_config_requires_prederived_credentials_and_keychain_key(self):
         env = {
             "WHENITRAINS_TRADING_MODE": "live",
-            "POLYMARKET_SIGNATURE_TYPE": "1",
+            "POLYMARKET_SIGNATURE_TYPE": "3",
             "POLYMARKET_FUNDER_ADDRESS": "0xfunder",
             "POLYMARKET_API_KEY": "api",
             "POLYMARKET_API_SECRET": "secret",
@@ -149,7 +149,7 @@ class LiveTests(unittest.TestCase):
         with patch("whenitrains.live.read_keychain_secret", return_value="0xabc"):
             config = load_live_config(env)
 
-        self.assertEqual(config.signature_type, 1)
+        self.assertEqual(config.signature_type, 3)
         self.assertEqual(config.private_key, "0xabc")
         self.assertEqual(config.api_key, "api")
 

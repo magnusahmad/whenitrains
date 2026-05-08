@@ -34,7 +34,7 @@ Known local tree state at the time this status file was updated:
 - Local env workflow: use `live-env-exports --env-file .env` to print shell-safe exports for the required live env vars without dumping unrelated env values.
 - Runtime startup must not create or derive API credentials.
 - Credential creation/derivation, if implemented, belongs in a separate explicit setup command such as `live-create-api-creds`.
-- Signature type: start with `POLYMARKET_SIGNATURE_TYPE=1` for Polymarket proxy-wallet flow unless auth smoke proves otherwise.
+- Signature type: use `POLYMARKET_SIGNATURE_TYPE=3` for this Polymarket proxy-wallet flow.
 - Funder: Polymarket proxy wallet address.
 - Manual real-money smoke cap: `5 USD`.
 - Initial live scheduler order cap: `20 USD`.

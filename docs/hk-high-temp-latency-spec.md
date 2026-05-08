@@ -720,7 +720,7 @@ Live mode:
   - `WHENITRAINS_KEYCHAIN_SERVICE`
   - `WHENITRAINS_KEYCHAIN_ACCOUNT`
 - Default Keychain service/account: `whenitrains-polymarket` / `bot-private-key`.
-- Start with `POLYMARKET_SIGNATURE_TYPE=1` for the dedicated Polymarket proxy-wallet path unless real-auth smoke proves the account requires another type.
+- Use `POLYMARKET_SIGNATURE_TYPE=3` for the dedicated Polymarket proxy-wallet path.
 
 Never log secrets. Never store private keys in SQLite.
 

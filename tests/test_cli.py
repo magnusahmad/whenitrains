@@ -30,7 +30,7 @@ class CliDiscoveryTests(unittest.TestCase):
                 "\n".join(
                     [
                         "WHENITRAINS_TRADING_MODE=live",
-                        "POLYMARKET_SIGNATURE_TYPE=1",
+                        "POLYMARKET_SIGNATURE_TYPE=3",
                         "POLYMARKET_FUNDER_ADDRESS=0xfunder",
                         "POLYMARKET_API_KEY=api key",
                         "POLYMARKET_API_SECRET=secret'with quote",
@@ -50,7 +50,7 @@ class CliDiscoveryTests(unittest.TestCase):
                 stdout.getvalue().splitlines(),
                 [
                     "export WHENITRAINS_TRADING_MODE=live",
-                    "export POLYMARKET_SIGNATURE_TYPE=1",
+                    "export POLYMARKET_SIGNATURE_TYPE=3",
                     "export POLYMARKET_FUNDER_ADDRESS=0xfunder",
                     "export POLYMARKET_API_KEY='api key'",
                     """export POLYMARKET_API_SECRET='secret'"'"'with quote'""",
@@ -65,7 +65,7 @@ class CliDiscoveryTests(unittest.TestCase):
                 "\n".join(
                     [
                         "WHENITRAINS_TRADING_MODE=live",
-                        "POLYMARKET_SIGNATURE_TYPE=1",
+                        "POLYMARKET_SIGNATURE_TYPE=3",
                         "POLYMARKET_FUNDER_ADDRESS=0xfunder",
                         "POLYMARKET_API_KEY=api",
                         "POLYMARKET_API_PASSPHRASE=passphrase",

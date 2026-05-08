@@ -103,7 +103,7 @@ Wallet strategy:
 
 - Use a dedicated Polymarket proxy wallet for bot trading.
 - Use the proxy wallet funder address shown by Polymarket as `POLYMARKET_FUNDER_ADDRESS`.
-- Use `POLYMARKET_SIGNATURE_TYPE=1` for the Polymarket proxy-wallet path unless a later auth smoke proves the account requires type `2`.
+- Use `POLYMARKET_SIGNATURE_TYPE=3` for this Polymarket proxy-wallet path.
 - Keep Ledger or another hardware wallet as the treasury/root of trust.
 - Fund the bot proxy wallet only with the current live risk budget plus a small operational buffer.
 - Do not require the Ledger during automated trading. The bot needs hot signing authority for unattended order creation.
@@ -132,7 +132,7 @@ Required live env:
 
 - `WHENITRAINS_TRADING_MODE=live`
 - Keychain item containing `POLYMARKET_PRIVATE_KEY`
-- `POLYMARKET_SIGNATURE_TYPE=1`
+- `POLYMARKET_SIGNATURE_TYPE=3`
 - `POLYMARKET_FUNDER_ADDRESS`
 - `POLYMARKET_API_KEY`
 - `POLYMARKET_API_SECRET`
