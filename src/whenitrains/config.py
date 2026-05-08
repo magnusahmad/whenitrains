@@ -16,7 +16,7 @@ class Settings:
     max_hold_minutes: float = 10.0
     max_entry_price: float = 0.98
     forecast_change_max_price_move: float = 0.20
-    forecast_change_max_entry_price: float = 0.70
+    forecast_change_max_entry_price: float = 0.40
     forecast_change_d2_max_entry_price: float = 0.20
     ocf_forecast_freshness_max_age_minutes: float = 90.0
     max_entry_limit_slippage: float = 0.05

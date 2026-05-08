@@ -714,11 +714,17 @@ Sizing update:
 
 ## Forecast-Change Repricing Guard - May 5, 2026
 
+May 8 update:
+
+- Lowered the forecast-change executable entry cap for D+0/D+1 from `0.70` to `0.40` after local historical orderbook review found no D+1/D+2 forecast bucket asks reaching `0.70`.
+- D+2 or later remains capped at `0.20`.
+- Added D+1 regression coverage for rejecting a `0.41` entry and allowing a `0.40` entry.
+
 Rule:
 
 - Forecast-change latency entries now require both:
   - directional YES-ask movement with the event is `<= 0.20`, and
-  - executable entry ask for the token being bought is `<= 0.70` for D+0/D+1, or `<= 0.20` for D+2 or later.
+  - executable entry ask for the token being bought is `<= 0.40` for D+0/D+1, or `<= 0.20` for D+2 or later.
 - This is intended to avoid buying after the market has already repriced, e.g. `23°C YES` at `0.93` after a downside forecast update.
 - Actual-cross new-bucket YES trades use ask movement `< 0.10` and an entry cap of `0.70`, except the high-market peak-hour sure-bet path may buy up to `0.80`.
 - Actual-cross invalidated-bucket trades buy the now-settled side up to `0.99` without requiring stale-price movement lag.
@@ -727,7 +733,7 @@ Rule:
 Implementation:
 
 - Added `Settings.forecast_change_max_price_move = 0.20`.
-- Added `Settings.forecast_change_max_entry_price = 0.70`.
+- Added `Settings.forecast_change_max_entry_price = 0.40`.
 - Added `Settings.forecast_change_d2_max_entry_price = 0.20`.
 - Forecast-change candidate generation skips outcomes whose directional move exceeds `0.20`.
 - Forecast-change order execution only sweeps ask depth at or below the lead-time-specific cap.

@@ -35,7 +35,7 @@ class RunnerTests(unittest.TestCase):
             db = _seed_market(Path(tmp) / "test.db")
             _store_forecast(db, 28, "2026-05-04T00:45:00+08:00")
             _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
-            _store_book_pair(db, "yes29", old_ask=0.40, new_ask=0.405)
+            _store_book_pair(db, "yes29", old_ask=0.39, new_ask=0.395)
             _store_book_pair(db, "no29", old_ask=0.60, new_ask=0.60)
 
             result = process_forecast_entries(db, date(2026, 5, 4), today_hkt=date(2026, 5, 4))
@@ -68,7 +68,7 @@ class RunnerTests(unittest.TestCase):
             )
             _store_forecast_range(db, low=30, high=33, update_time="2026-05-04T00:45:00+08:00")
             _store_forecast_range(db, low=29, high=33, update_time="2026-05-04T01:45:00+08:00")
-            _store_book_pair(db, "yes-low29", old_ask=0.40, new_ask=0.405)
+            _store_book_pair(db, "yes-low29", old_ask=0.39, new_ask=0.395)
 
             result = process_forecast_entries(db, date(2026, 5, 4), today_hkt=date(2026, 5, 4))
 
@@ -140,7 +140,7 @@ class RunnerTests(unittest.TestCase):
             db = _seed_market(Path(tmp) / "test.db")
             _store_forecast(db, 28, "2026-05-04T00:45:00+08:00")
             _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
-            _store_book_pair(db, "yes29", old_ask=0.40, new_ask=0.60)
+            _store_book_pair(db, "yes29", old_ask=0.20, new_ask=0.40)
             _store_book_pair(db, "no29", old_ask=0.60, new_ask=0.60)
 
             result = process_forecast_entries(db, date(2026, 5, 4), today_hkt=date(2026, 5, 4))
@@ -149,7 +149,7 @@ class RunnerTests(unittest.TestCase):
             order = db.execute(
                 "select simulated_fill_price from paper_orders where status = 'filled' order by id desc limit 1"
             ).fetchone()
-            self.assertEqual(order["simulated_fill_price"], 0.60)
+            self.assertEqual(order["simulated_fill_price"], 0.40)
 
     def test_forecast_change_effective_high_includes_actual_max(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -217,6 +217,71 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(decision["status"], "missed")
             self.assertEqual(decision["reason"], "no ask depth at or below max price")
+
+    def test_forecast_change_d1_skips_when_entry_price_is_above_forty_cents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target_date = date(2026, 5, 5)
+            db = _seed_market(Path(tmp) / "test.db", target_date=target_date)
+            _store_forecast(
+                db,
+                28,
+                "2026-05-04T00:45:00+08:00",
+                forecast_date=target_date,
+            )
+            _store_forecast(
+                db,
+                29,
+                "2026-05-04T01:45:00+08:00",
+                forecast_date=target_date,
+            )
+            _store_book_pair(db, "yes29", old_ask=0.39, new_ask=0.41)
+            _store_book_pair(db, "no29", old_ask=0.61, new_ask=0.61)
+
+            result = process_forecast_entries(
+                db, target_date, today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(result.buys_missed, 1)
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "missed")
+            self.assertEqual(decision["reason"], "no ask depth at or below max price")
+
+    def test_forecast_change_d1_buys_when_entry_price_is_at_forty_cents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target_date = date(2026, 5, 5)
+            db = _seed_market(Path(tmp) / "test.db", target_date=target_date)
+            _store_forecast(
+                db,
+                28,
+                "2026-05-04T00:45:00+08:00",
+                forecast_date=target_date,
+            )
+            _store_forecast(
+                db,
+                29,
+                "2026-05-04T01:45:00+08:00",
+                forecast_date=target_date,
+            )
+            _store_book_pair(db, "yes29", old_ask=0.39, new_ask=0.40)
+            _store_book_pair(db, "no29", old_ask=0.61, new_ask=0.61)
+
+            result = process_forecast_entries(
+                db, target_date, today_hkt=date(2026, 5, 4)
+            )
+
+            self.assertEqual(result.buys_filled, 1)
+            order = db.execute(
+                "select simulated_fill_price from paper_orders where status = 'filled' order by id desc limit 1"
+            ).fetchone()
+            self.assertEqual(order["simulated_fill_price"], 0.40)
 
     def test_forecast_change_d2_buys_when_entry_price_is_at_twenty_cents(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -330,7 +395,7 @@ class RunnerTests(unittest.TestCase):
             db = _seed_market(Path(tmp) / "test.db")
             _store_forecast(db, 28, "2026-05-04T00:45:00+08:00")
             _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
-            _store_book_pair(db, "yes29", old_ask=0.40, new_ask=0.405)
+            _store_book_pair(db, "yes29", old_ask=0.39, new_ask=0.395)
             _store_book_pair(db, "no29", old_ask=0.60, new_ask=0.60)
 
             first = process_forecast_entries(db, date(2026, 5, 4))
@@ -362,7 +427,7 @@ class RunnerTests(unittest.TestCase):
                   and status = 'processed'
                 """
             ).fetchone()[0]
-            _store_book_pair(db, "yes29", old_ask=0.40, new_ask=0.405)
+            _store_book_pair(db, "yes29", old_ask=0.39, new_ask=0.395)
 
             second = process_forecast_entries(
                 db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
@@ -377,7 +442,7 @@ class RunnerTests(unittest.TestCase):
             db = _seed_market(Path(tmp) / "test.db")
             _store_forecast(db, 28, "2026-05-04T00:45:00+08:00")
             _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
-            _store_book_pair(db, "yes29", old_ask=0.40, new_ask=0.405)
+            _store_book_pair(db, "yes29", old_ask=0.39, new_ask=0.395)
 
             first = process_forecast_entries(db, date(2026, 5, 4), today_hkt=date(2026, 5, 4))
             _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
@@ -407,7 +472,7 @@ class RunnerTests(unittest.TestCase):
             )
             _store_forecast(db, 28, "2026-05-04T00:45:00+08:00", forecast_date=date(2026, 5, 5))
             _store_forecast(db, 29, "2026-05-04T01:45:00+08:00", forecast_date=date(2026, 5, 5))
-            _store_book_pair(db, "future_yes29", old_ask=0.40, new_ask=0.405)
+            _store_book_pair(db, "future_yes29", old_ask=0.39, new_ask=0.395)
             _store_book_pair(db, "future_no29", old_ask=0.60, new_ask=0.60)
             _store_observation(db, 29.0)
             _store_observation(db, 30.0)
