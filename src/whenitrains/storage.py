@@ -351,6 +351,18 @@ def migrate(db: sqlite3.Connection) -> None:
             details_json text,
             created_at_utc text not null
         );
+
+        create index if not exists idx_orderbook_snapshots_latest
+        on orderbook_snapshots(outcome_id, fetched_at_utc desc, id desc);
+
+        create index if not exists idx_ocf_forecast_samples_latest
+        on ocf_forecast_samples(forecast_date_hkt, fetched_at_utc desc, id desc);
+
+        create index if not exists idx_hko_forecasts_latest
+        on hko_forecasts(source_type, forecast_date_hkt, id desc);
+
+        create index if not exists idx_hko_current_observations_latest
+        on hko_current_observations(observed_at_hkt, id desc);
         """
     )
     _add_column_if_missing(db, "raw_snapshots", "response_headers_json", "text")

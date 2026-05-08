@@ -22,6 +22,8 @@ Entry candidates now fail closed when the latest actual max/min has already inva
 
 Same-day effective forecast values now combine actuals with remaining-hour forecast values: high uses `max(latest_since_midnight_max, forecast_hourly_max)` and low uses `min(latest_since_midnight_min, forecast_hourly_min)`. This prevents the bot from treating a lower remaining-day forecast as a lower full-day forecast after the actual high has already occurred.
 
+Scheduler hot-read indexes are now additive migration state. The live `data/whenitrains.sqlite3` database was backed up before applying them, then migrated with indexes for latest orderbook snapshots, OCF forecast samples, HKO forecast rows, and HKO observation reads. `EXPLAIN QUERY PLAN` on the live DB confirms the latest orderbook, latest OCF sample, and latest HKO forecast reads use those indexes instead of scanning the append-only historical tables.
+
 Scheduler readiness now fails closed on the current loop: if a due HKO fetch, market discovery, orderbook refresh, or startup actual warmup fetch fails, decisions are skipped for that loop. Startup warmup does not complete until the startup data path succeeds, and schedulers using the background AWS actual poller perform a synchronous startup actual fetch before trading is enabled.
 
 Forecast-change and actual-cross events are retryable when orderbook prerequisites are missing. A decision row with an event key no longer counts as processed unless it is an explicit `EVENT` / `processed` marker, and those markers are written only after the event has enough market data to make a terminal trade/no-trade decision.
@@ -190,6 +192,21 @@ The matching low-side test also passes:
 
 ```bash
 PYTHONPATH=src python3 -m unittest tests.test_runner.RunnerTests.test_lowest_forecast_change_effective_low_includes_actual_min
+```
+
+Scheduler latency index red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_storage.StorageTests.test_migrate_creates_scheduler_latency_indexes tests.test_storage.StorageTests.test_latest_scheduler_queries_use_latency_indexes
+```
+
+Red result: migration created no named scheduler latency indexes, and latest orderbook reads scanned `orderbook_snapshots` with a temp sort.
+
+Green result after adding additive indexes in `storage.migrate`:
+
+```text
+Ran 2 tests in 0.012s
+OK
 ```
 
 Scheduler readiness red/green:

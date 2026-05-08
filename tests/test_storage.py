@@ -32,7 +32,93 @@ from whenitrains.storage import (
 from datetime import date, datetime
 
 
+def _plan_text(rows):
+    return "\n".join(row["detail"] for row in rows)
+
+
 class StorageTests(unittest.TestCase):
+    def test_migrate_creates_scheduler_latency_indexes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+
+            index_names = {
+                row["name"]
+                for row in db.execute(
+                    "select name from sqlite_master where type = 'index'"
+                )
+            }
+
+            self.assertIn("idx_orderbook_snapshots_latest", index_names)
+            self.assertIn("idx_ocf_forecast_samples_latest", index_names)
+            self.assertIn("idx_hko_forecasts_latest", index_names)
+            self.assertIn("idx_hko_current_observations_latest", index_names)
+
+    def test_latest_scheduler_queries_use_latency_indexes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+
+            plans = {
+                "orderbook": db.execute(
+                    """
+                    explain query plan
+                    select depth_json
+                    from orderbook_snapshots
+                    where outcome_id = ?
+                    order by fetched_at_utc desc, id desc
+                    limit 1
+                    """,
+                    ("yes",),
+                ).fetchall(),
+                "ocf": db.execute(
+                    """
+                    explain query plan
+                    select fetched_at_utc
+                    from ocf_forecast_samples
+                    where forecast_date_hkt = ?
+                    order by fetched_at_utc desc, id desc
+                    limit 1
+                    """,
+                    ("2026-05-08",),
+                ).fetchall(),
+                "hko_forecast": db.execute(
+                    """
+                    explain query plan
+                    select forecast_date_hkt, forecast_max_c, update_time, parse_warning, id
+                    from hko_forecasts
+                    where source_type = 'ocf_station'
+                      and forecast_date_hkt = ?
+                      and forecast_max_c is not null
+                      and coalesce(parse_warning, 0) = 0
+                    order by id desc
+                    limit 1
+                    """,
+                    ("2026-05-08",),
+                ).fetchall(),
+                "observation": db.execute(
+                    """
+                    explain query plan
+                    select observed_at_hkt, since_midnight_max_c, station, id
+                    from hko_current_observations
+                    where since_midnight_max_c is not null
+                      and observed_at_hkt >= ?
+                      and observed_at_hkt < ?
+                    order by id desc
+                    limit 1
+                    """,
+                    ("2026-05-08", "2026-05-09"),
+                ).fetchall(),
+            }
+
+            self.assertIn("idx_orderbook_snapshots_latest", _plan_text(plans["orderbook"]))
+            self.assertIn("idx_ocf_forecast_samples_latest", _plan_text(plans["ocf"]))
+            self.assertIn("idx_hko_forecasts_latest", _plan_text(plans["hko_forecast"]))
+            self.assertIn(
+                "idx_hko_current_observations_latest",
+                _plan_text(plans["observation"]),
+            )
+
     def test_backup_sqlite_database_creates_integrity_checked_copy_and_prunes(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "live.sqlite3"
