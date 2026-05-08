@@ -6,6 +6,7 @@ from pathlib import Path
 from whenitrains.dashboard_server import (
     INDEX_HTML,
     LIVE_HTML,
+    bucketed_orderbook_ask_points,
     dashboard_stats,
     forecast_series,
     forecast_panels,
@@ -18,6 +19,7 @@ from whenitrains.dashboard_server import (
     top_token_price_series,
     top_yes_price_series,
     latest_decimal_forecast_stats,
+    latest_market_token_price_rows,
     live_dashboard_payload,
     live_pnl_series,
     live_trade_rows,
@@ -245,6 +247,38 @@ class DashboardServerTests(unittest.TestCase):
             self.assertEqual(high[0]["value"], 27.7)
             self.assertEqual(low[0]["value"], 23.2)
 
+    def test_forecast_series_dedupes_ocf_samples_by_update_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            target = date(2026, 5, 6)
+            snapshot = store_raw_snapshot(db, "hko", "ocf", "{}")
+            for high in [27.2, 27.8]:
+                store_ocf_forecast_samples(
+                    db,
+                    snapshot.id,
+                    [
+                        OcfForecastSample(
+                            forecast_date_hkt=target,
+                            forecast_min_c=23,
+                            forecast_max_c=28,
+                            raw_min_c=23.0,
+                            raw_max_c=28.0,
+                            hourly_temperatures=[
+                                {
+                                    "forecast_hour_hkt": "2026-05-06T14:00:00+08:00",
+                                    "temperature_c": high,
+                                }
+                            ],
+                            raw={"LastModified": "2026-05-06T09:14:00+08:00"},
+                        )
+                    ],
+                )
+
+            high = forecast_series(db, target.isoformat(), value_kind="max")
+
+            self.assertEqual(len(high), 1)
+            self.assertEqual(high[0]["value"], 27.8)
+
     def test_forecast_series_parses_compact_hko_update_time(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_dashboard_db(Path(tmp) / "test.db")
@@ -451,6 +485,78 @@ class DashboardServerTests(unittest.TestCase):
             self.assertIn("24°C", [item["label"] for item in panel["top_tokens"]])
             self.assertNotIn("29°C", [item["label"] for item in panel["top_tokens"]])
             self.assertNotIn("30°C", [item["label"] for item in panel["top_tokens"]])
+
+    def test_latest_market_token_price_rows_uses_token_scoped_latest_reads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            for token, ask in [("yes24", 0.20), ("yes25", 0.30), ("other", 0.99)]:
+                store_orderbook(
+                    db,
+                    token,
+                    OrderBook(
+                        token,
+                        bids=[(ask - 0.01, 10)],
+                        asks=[(ask, 10)],
+                        tick_size=0.01,
+                        min_order_size=5,
+                    ),
+                )
+
+            rows = latest_market_token_price_rows(
+                db, "2026-05-06", "YES", "highest", sort_by_latest_price=True, limit=2
+            )
+
+            self.assertEqual([row["token_id"] for row in rows], ["yes25", "yes24"])
+            plan = "\n".join(
+                row[3]
+                for row in db.execute(
+                    """
+                    explain query plan
+                    select best_ask
+                    from orderbook_snapshots
+                    where outcome_id = ?
+                      and best_ask is not null
+                    order by fetched_at_utc desc, id desc
+                    limit 1
+                    """,
+                    ("yes25",),
+                ).fetchall()
+            )
+            self.assertIn("idx_orderbook_snapshots_latest", plan)
+
+    def test_bucketed_orderbook_ask_points_collapses_raw_snapshots_in_sql(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            for ask, fetched_at in [
+                (0.20, "2026-05-06T01:00:10+00:00"),
+                (0.30, "2026-05-06T01:00:50+00:00"),
+                (0.40, "2026-05-06T01:01:05+00:00"),
+            ]:
+                store_orderbook(
+                    db,
+                    "yes25",
+                    OrderBook(
+                        "yes25",
+                        bids=[(ask - 0.01, 10)],
+                        asks=[(ask, 10)],
+                        tick_size=0.01,
+                        min_order_size=5,
+                    ),
+                )
+                db.execute(
+                    """
+                    update orderbook_snapshots
+                    set fetched_at_utc = ?
+                    where id = (select max(id) from orderbook_snapshots)
+                    """,
+                    (fetched_at,),
+                )
+            db.commit()
+
+            points = bucketed_orderbook_ask_points(db, "yes25", bucket_seconds=60)
+
+            self.assertEqual([point["value"] for point in points], [0.30, 0.40])
+            self.assertEqual(len(points), 2)
 
     def test_paper_order_markers_include_decision_signal_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -30,6 +30,8 @@ Forecast-change and actual-cross events are retryable when orderbook prerequisit
 
 Actual-cross source preference now applies per value transition. AWS actual transitions are preferred when AWS provides a max/min transition; otherwise the runner falls back to the since-midnight observation stream instead of suppressing usable CSDI transitions merely because any AWS row exists.
 
+Dashboard forecast-panel loading is optimized for the append-only live database. The page still loads stats, forecast panels, and PnL in parallel, but forecast panels no longer compute latest orderbooks by grouping the full `orderbook_snapshots` table for every panel. They now fetch the small set of market tokens first, read each token's latest ask through the existing latest-orderbook index, bucket orderbook chart history in SQL, parse OCF high/low series in one pass per panel, and skip duplicate OCF rows with the same HKO update timestamp before JSON parsing.
+
 Past-date unresolved local positions remain a documented residual risk. The real market should eventually resolve, but local paper/live state still needs a reconcile/settlement path to reflect that resolution in risk and dashboard state if the scheduler missed the same-day exit window.
 
 ## API Discovery Findings
@@ -237,7 +239,7 @@ PYTHONPATH=src python3 -m unittest \
 Green result after delaying processed markers until orderbook prerequisites are available:
 
 ```text
-Ran 3 tests
+Ran 3 tests in 0.099s
 OK
 ```
 
@@ -255,6 +257,57 @@ Green result after preferring AWS only when it provides a same-value transition:
 Ran 2 tests in 0.017s
 OK
 ```
+
+Dashboard load-time red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest \
+  tests.test_dashboard_server.DashboardServerTests.test_latest_market_token_price_rows_uses_token_scoped_latest_reads \
+  tests.test_dashboard_server.DashboardServerTests.test_bucketed_orderbook_ask_points_collapses_raw_snapshots_in_sql \
+  tests.test_dashboard_server.DashboardServerTests.test_forecast_series_dedupes_ocf_samples_by_update_time
+```
+
+Red result: tests failed to import the new helper APIs before the optimization existed.
+
+Green result after replacing full-table latest-orderbook grouping with token-scoped latest reads and SQL bucketed chart history:
+
+```text
+Ran 3 tests
+OK
+```
+
+Dashboard regression run:
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_dashboard_server
+```
+
+Green result:
+
+```text
+Ran 25 tests in 1.618s
+OK
+```
+
+Full suite:
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests
+```
+
+Green result:
+
+```text
+Ran 195 tests in 12.708s
+OK
+```
+
+Live-size local DB timing against `data/whenitrains.sqlite3` on 2026-05-08 HKT:
+
+- Before optimization: `/api/forecast-panels?side=YES` measured `6.026s`, `11.846s`, and `24.527s` in one three-run pass.
+- After token-scoped latest reads and SQL bucketing: `/api/forecast-panels?side=YES` measured about `2.8s` to `3.5s`.
+- After one-pass OCF high/low parsing: `/api/forecast-panels?side=YES` measured about `1.6s` to `2.1s`; `/api/forecast-panels?side=NO` measured about `1.7s` to `2.1s`.
+- After duplicate OCF update-time pruning: warm `/api/forecast-panels?side=YES` measured about `0.7s` to `1.1s` with cold/contention runs around `1.4s` to `2.6s`; warm `/api/forecast-panels?side=NO` measured about `0.65s` to `0.72s`.
 
 CLI smoke checks:
 

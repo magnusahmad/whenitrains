@@ -373,17 +373,31 @@ def forecast_series(
 def _effective_forecast_sample_series(
     db: sqlite3.Connection, target_date_hkt: str, value_kind: str
 ) -> list[dict]:
+    high, low = _effective_forecast_sample_extreme_series(db, target_date_hkt)
+    return low if value_kind == "min" else high
+
+
+def _effective_forecast_sample_extreme_series(
+    db: sqlite3.Connection, target_date_hkt: str
+) -> tuple[list[dict], list[dict]]:
     rows = db.execute(
         """
+        with latest_by_update as (
+            select max(id) as id
+            from ocf_forecast_samples
+            where forecast_date_hkt = ?
+            group by coalesce(json_extract(raw_daily_forecast, '$.LastModified'), fetched_at_utc)
+        )
         select forecast_date_hkt, fetched_at_utc, raw_min_c, raw_max_c,
                hourly_temperatures_json, raw_daily_forecast
         from ocf_forecast_samples
-        where forecast_date_hkt = ?
+        where id in (select id from latest_by_update)
         order by fetched_at_utc asc, id asc
         """,
         (target_date_hkt,),
     ).fetchall()
-    seen: dict[int, float] = {}
+    high_seen: dict[int, float] = {}
+    low_seen: dict[int, float] = {}
     for row in rows:
         update_time = _forecast_sample_update_time(row)
         ts = _to_unix(update_time)
@@ -393,13 +407,19 @@ def _effective_forecast_sample_series(
             row["forecast_date_hkt"], row["hourly_temperatures_json"]
         )
         if hourly_values:
-            value = min(hourly_values) if value_kind == "min" else max(hourly_values)
+            high_value = max(hourly_values)
+            low_value = min(hourly_values)
         else:
-            raw_column = "raw_min_c" if value_kind == "min" else "raw_max_c"
-            value = _optional_float(row[raw_column])
-        if value is not None:
-            seen[ts] = value
-    return [{"time": ts, "value": value} for ts, value in sorted(seen.items())]
+            high_value = _optional_float(row["raw_max_c"])
+            low_value = _optional_float(row["raw_min_c"])
+        if high_value is not None:
+            high_seen[ts] = high_value
+        if low_value is not None:
+            low_seen[ts] = low_value
+    return (
+        [{"time": ts, "value": value} for ts, value in sorted(high_seen.items())],
+        [{"time": ts, "value": value} for ts, value in sorted(low_seen.items())],
+    )
 
 
 def _raw_forecast_value(raw_forecast: str | None, value_kind: str = "max") -> float | None:
@@ -532,43 +552,14 @@ def top_token_price_series(
     side = side.upper()
     if side not in {"YES", "NO"}:
         side = "YES"
-    token_col = "yes_token_id" if side == "YES" else "no_token_id"
-    limit_clause = "" if limit is None else "limit ?"
-    order_clause = (
-        "s.best_ask desc, o.predicate_value_c asc, o.label asc"
-        if sort_by_latest_price
-        else "o.predicate_value_c asc, o.label asc"
+    rows = latest_market_token_price_rows(
+        db,
+        target_date_hkt,
+        side,
+        market_kind,
+        sort_by_latest_price=sort_by_latest_price,
+        limit=limit,
     )
-    slug_prefix = (
-        "lowest-temperature-in-hong-kong-on-"
-        if market_kind == "lowest"
-        else "highest-temperature-in-hong-kong-on-"
-    )
-    params = (
-        (target_date_hkt, f"{slug_prefix}%")
-        if limit is None
-        else (target_date_hkt, f"{slug_prefix}%", limit)
-    )
-    rows = db.execute(
-        f"""
-        with latest as (
-            select outcome_id, max(id) as latest_id
-            from orderbook_snapshots
-            where best_ask is not null
-            group by outcome_id
-        )
-        select o.label, o.{token_col} as token_id, s.best_ask
-        from outcomes o
-        join markets m on m.id = o.market_id
-        join latest l on l.outcome_id = o.{token_col}
-        join orderbook_snapshots s on s.id = l.latest_id
-        where m.target_date_hkt = ?
-          and m.slug like ?
-        order by {order_clause}
-        {limit_clause}
-        """,
-        params,
-    ).fetchall()
 
     row_records = []
     for row in rows:
@@ -620,23 +611,9 @@ def top_token_price_series(
     for record in row_records:
         row = record["row"]
         points = []
-        snapshots = db.execute(
-            """
-            select fetched_at_utc, best_ask
-            from orderbook_snapshots
-            where outcome_id = ?
-              and best_ask is not null
-            order by fetched_at_utc asc, id asc
-            """,
-            (row["token_id"],),
-        ).fetchall()
-        seen: dict[int, float] = {}
-        for snapshot in snapshots:
-            ts = _to_unix(snapshot["fetched_at_utc"])
-            if ts is not None:
-                bucket = ts - (ts % bucket_seconds) if bucket_seconds > 0 else ts
-                seen[bucket] = float(snapshot["best_ask"])
-        points = [{"time": ts, "value": value} for ts, value in sorted(seen.items())]
+        points = bucketed_orderbook_ask_points(
+            db, row["token_id"], bucket_seconds=bucket_seconds
+        )
         series.append(
             {
                 "label": row["label"],
@@ -649,6 +626,102 @@ def top_token_price_series(
             }
         )
     return series
+
+
+def latest_market_token_price_rows(
+    db: sqlite3.Connection,
+    target_date_hkt: str,
+    side: str = "YES",
+    market_kind: str = "highest",
+    sort_by_latest_price: bool = False,
+    limit: int | None = 3,
+) -> list[dict]:
+    side = side.upper()
+    if side not in {"YES", "NO"}:
+        side = "YES"
+    token_col = "yes_token_id" if side == "YES" else "no_token_id"
+    slug_prefix = (
+        "lowest-temperature-in-hong-kong-on-"
+        if market_kind == "lowest"
+        else "highest-temperature-in-hong-kong-on-"
+    )
+    candidates = db.execute(
+        f"""
+        select o.label, o.{token_col} as token_id, o.predicate_value_c
+        from outcomes o
+        join markets m on m.id = o.market_id
+        where m.target_date_hkt = ?
+          and m.slug like ?
+          and o.{token_col} is not null
+        order by o.predicate_value_c asc, o.label asc
+        """,
+        (target_date_hkt, f"{slug_prefix}%"),
+    ).fetchall()
+
+    rows: list[dict] = []
+    for candidate in candidates:
+        latest = db.execute(
+            """
+            select best_ask
+            from orderbook_snapshots
+            where outcome_id = ?
+              and best_ask is not null
+            order by fetched_at_utc desc, id desc
+            limit 1
+            """,
+            (candidate["token_id"],),
+        ).fetchone()
+        if latest is None:
+            continue
+        rows.append(
+            {
+                "label": candidate["label"],
+                "token_id": candidate["token_id"],
+                "predicate_value_c": candidate["predicate_value_c"],
+                "best_ask": latest["best_ask"],
+            }
+        )
+
+    if sort_by_latest_price:
+        rows.sort(
+            key=lambda row: (
+                -float(row["best_ask"]),
+                row["predicate_value_c"],
+                row["label"],
+            )
+        )
+    else:
+        rows.sort(key=lambda row: (row["predicate_value_c"], row["label"]))
+    return rows if limit is None else rows[:limit]
+
+
+def bucketed_orderbook_ask_points(
+    db: sqlite3.Connection, token_id: str, bucket_seconds: int = 60
+) -> list[dict]:
+    bucket_size = max(1, int(bucket_seconds))
+    rows = db.execute(
+        """
+        with bucketed as (
+            select
+                ((cast(strftime('%s', fetched_at_utc) as integer) / ?) * ?) as bucket,
+                max(id) as latest_id
+            from orderbook_snapshots
+            where outcome_id = ?
+              and best_ask is not null
+              and strftime('%s', fetched_at_utc) is not null
+            group by bucket
+        )
+        select b.bucket, s.best_ask
+        from bucketed b
+        join orderbook_snapshots s on s.id = b.latest_id
+        order by b.bucket asc
+        """,
+        (bucket_size, bucket_size, token_id),
+    ).fetchall()
+    return [
+        {"time": int(row["bucket"]), "value": float(row["best_ask"])}
+        for row in rows
+    ]
 
 
 def row_sort_value(label: str) -> float:
@@ -916,13 +989,14 @@ def forecast_panel(
         market_kind="lowest",
         marker_source=marker_source,
     )
+    forecast_high, forecast_low = _forecast_extreme_series(
+        db, target_text, exact_raw=lead_days == 0
+    )
     return {
         "lead_days": lead_days,
         "target_date": target_text,
-        "forecast": forecast_series(db, target_text, exact_raw=lead_days == 0),
-        "forecast_low": forecast_series(
-            db, target_text, exact_raw=lead_days == 0, value_kind="min"
-        ),
+        "forecast": forecast_high,
+        "forecast_low": forecast_low,
         "actual_min": actual_min if lead_days == 0 else [],
         "actual_max": actual_max if lead_days == 0 else [],
         "current_temp": current if lead_days == 0 else [],
@@ -934,6 +1008,20 @@ def forecast_panel(
         "low_tokens": low_tokens,
         "top_yes": top_tokens if token_side.upper() == "YES" else [],
     }
+
+
+def _forecast_extreme_series(
+    db: sqlite3.Connection, target_date_hkt: str, exact_raw: bool = False
+) -> tuple[list[dict], list[dict]]:
+    sample_high, sample_low = _effective_forecast_sample_extreme_series(
+        db, target_date_hkt
+    )
+    if sample_high or sample_low:
+        return sample_high, sample_low
+    return (
+        forecast_series(db, target_date_hkt, exact_raw=exact_raw),
+        forecast_series(db, target_date_hkt, exact_raw=exact_raw, value_kind="min"),
+    )
 
 
 def forecast_panels(
