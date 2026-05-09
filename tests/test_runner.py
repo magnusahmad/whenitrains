@@ -28,6 +28,7 @@ from whenitrains.storage import (
     store_orderbook,
     store_polymarket_event,
     store_raw_snapshot,
+    upsert_live_position,
 )
 
 
@@ -35,6 +36,7 @@ class _FakeLiveClient:
     def __init__(self):
         self.buys = []
         self.sells = []
+        self.token_balances = {}
 
     def signer_address(self):
         return "0xsigner"
@@ -54,7 +56,7 @@ class _FakeLiveClient:
         return {"orderID": "sell-1", "status": "matched"}
 
     def token_balance(self, token_id):
-        return None
+        return self.token_balances.get(token_id)
 
     def reconcile_order(self, order_id, token_id):
         return {"order_id": order_id, "token_id": token_id, "status": "filled"}
@@ -615,6 +617,83 @@ class RunnerTests(unittest.TestCase):
                 "select net_shares from paper_positions where outcome_id = 'yes29'"
             ).fetchone()
             self.assertGreater(position["net_shares"], 0)
+
+    def test_exit_loop_does_not_count_missing_depth_when_position_is_not_invalidated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            from whenitrains.paper_db import execute_paper_buy
+
+            execute_paper_buy(
+                db,
+                token_id="yes29",
+                side="YES",
+                size_usd=100,
+                asks=[(0.40, 1000)],
+                max_order_usd=250,
+                reason="test",
+            )
+            _store_observation(db, 29.5)
+            store_orderbook(
+                db,
+                "yes29",
+                OrderBook("yes29", bids=[], asks=[(0.41, 1000)], tick_size=0.01, min_order_size=5),
+            )
+
+            result = process_open_position_exits(db, today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(result.sells_missed, 0)
+            self.assertEqual(result.notes, ())
+
+    def test_exit_loop_signposts_no_bid_depth_for_invalidated_sell(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            from whenitrains.paper_db import execute_paper_buy
+
+            execute_paper_buy(
+                db,
+                token_id="yes29",
+                side="YES",
+                size_usd=100,
+                asks=[(0.40, 1000)],
+                max_order_usd=250,
+                reason="test",
+            )
+            _store_observation(db, 30.0)
+            store_orderbook(
+                db,
+                "yes29",
+                OrderBook("yes29", bids=[], asks=[(0.41, 1000)], tick_size=0.01, min_order_size=5),
+            )
+
+            result = process_open_position_exits(db, today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(result.sells_missed, 1)
+            self.assertIn(
+                "sell missed 29°C YES: no bid depth (trigger=position invalidated by observed max, bid=n/a)",
+                result.notes,
+            )
+
+    def test_live_exit_signposts_no_sellable_balance_for_invalidated_sell(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            upsert_live_position(db, "yes29", 25.0, 0.40, 0.0)
+            _store_observation(db, 30.0)
+            store_orderbook(
+                db,
+                "yes29",
+                OrderBook("yes29", bids=[(0.10, 1000)], asks=[(0.41, 1000)], tick_size=0.01, min_order_size=5),
+            )
+            client = _FakeLiveClient()
+            client.token_balances["yes29"] = 0.0
+
+            result = run_live_tick(db, client, today_hkt=date(2026, 5, 4), order_cap_usd=5)
+
+            self.assertEqual(result.sells_missed, 1)
+            self.assertEqual(client.sells, [])
+            self.assertIn(
+                "sell missed 29°C YES: no sellable token balance (trigger=position invalidated by observed max, bid=0.100)",
+                result.notes,
+            )
 
     def test_tick_exits_invalidated_exact_position(self):
         with tempfile.TemporaryDirectory() as tmp:

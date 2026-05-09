@@ -18,6 +18,8 @@ Live invalidation exits now cap submitted sell shares to the CLOB-reported condi
 
 Live entries now refresh the CLOB orderbook immediately before submitting a live buy, persist that fresh quote, and re-apply the entry cap/slippage rule against it. If the fresh quote has moved beyond the executable rule that produced the candidate, the buy is recorded as missed instead of sending a stale-price FAK order.
 
+Live sell misses now signpost their reason in scheduler notes, including the label, side, trigger, and bid. Open-position exits also check whether a position is actually invalidated before counting missing bid depth as a sell miss, so `sells=0/N` no longer includes non-actionable held positions with thin books.
+
 Relevant existing implementation:
 
 - Strategy/decision path: `src/whenitrains/runner.py`

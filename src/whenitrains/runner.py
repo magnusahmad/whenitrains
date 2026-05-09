@@ -519,6 +519,14 @@ def process_forecast_position_exits(
         try:
             book = latest_orderbook(db, token_id)
         except ValueError:
+            notes.append(
+                _sell_miss_note(
+                    outcome["label"],
+                    side,
+                    "missing orderbook",
+                    reason,
+                )
+            )
             store_trading_decision(
                 db,
                 "forecast_exit",
@@ -562,6 +570,15 @@ def process_forecast_position_exits(
             sells_filled += 1
             notes.append(f"sold forecast-invalidated {outcome['label']} {side}")
         else:
+            notes.append(
+                _sell_miss_note(
+                    outcome["label"],
+                    side,
+                    result.reason,
+                    reason,
+                    book.best_bid,
+                )
+            )
             store_trading_decision(
                 db,
                 "forecast_exit",
@@ -1035,10 +1052,15 @@ def process_open_position_exits(
         if hold_to_maturity:
             notes.append(f"holding settled {outcome['label']} {side}")
             continue
+        if not invalidated and hourly_reason is None:
+            continue
 
         try:
             book = latest_orderbook(db, token_id)
         except ValueError:
+            notes.append(
+                _sell_miss_note(outcome["label"], side, "missing orderbook", "exit check")
+            )
             store_trading_decision(
                 db,
                 "exit_check",
@@ -1052,6 +1074,14 @@ def process_open_position_exits(
             sells_missed += 1
             continue
         if book.best_bid is None:
+            reason = hourly_reason or (
+                "position invalidated by observed min"
+                if market_kind == "lowest"
+                else "position invalidated by observed max"
+            )
+            notes.append(
+                _sell_miss_note(outcome["label"], side, "no bid depth", reason, None)
+            )
             store_trading_decision(
                 db,
                 "exit_check",
@@ -1063,8 +1093,6 @@ def process_open_position_exits(
                 "no bid depth",
             )
             sells_missed += 1
-            continue
-        if not invalidated and hourly_reason is None:
             continue
         reason = hourly_reason or (
             "position invalidated by observed min"
@@ -1101,6 +1129,15 @@ def process_open_position_exits(
             )
             sells_filled += 1
         else:
+            notes.append(
+                _sell_miss_note(
+                    outcome["label"],
+                    side,
+                    result.reason,
+                    reason,
+                    book.best_bid,
+                )
+            )
             store_trading_decision(
                 db,
                 "exit_check",
@@ -1118,6 +1155,21 @@ def process_open_position_exits(
             )
             sells_missed += 1
     return RunnerResult(sells_filled=sells_filled, sells_missed=sells_missed, notes=tuple(notes))
+
+
+def _sell_miss_note(
+    label: str | None,
+    side: str | None,
+    reason: str | None,
+    trigger: str | None,
+    bid: float | None = None,
+) -> str:
+    label_text = label or "unknown"
+    side_text = side or "unknown"
+    reason_text = reason or "unknown reason"
+    trigger_text = trigger or "unknown trigger"
+    bid_text = "n/a" if bid is None else f"{bid:.3f}"
+    return f"sell missed {label_text} {side_text}: {reason_text} (trigger={trigger_text}, bid={bid_text})"
 
 
 def build_forecast_move_candidates(
