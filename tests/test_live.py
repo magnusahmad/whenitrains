@@ -17,6 +17,7 @@ from whenitrains.live import (
     load_live_config,
     preflight_live,
 )
+from whenitrains.dashboard_server import active_live_positions
 from whenitrains.storage import (
     connect,
     get_live_position,
@@ -26,6 +27,7 @@ from whenitrains.storage import (
     live_total_open_exposure,
     migrate,
     set_live_setting,
+    store_live_order,
     upsert_live_position,
 )
 
@@ -65,7 +67,12 @@ class FakeClobClient:
         return {"orderID": "sell-1", "status": "matched"}
 
     def token_balance(self, token_id):
-        return self.token_balances.get(token_id)
+        value = self.token_balances.get(token_id)
+        if isinstance(value, list):
+            if len(value) > 1:
+                return value.pop(0)
+            return value[0] if value else None
+        return value
 
     def reconcile_order(self, order_id, token_id):
         if self.reconcile_payload != "default":
@@ -256,6 +263,89 @@ class LiveTests(unittest.TestCase):
             pos = get_live_position(db, "yes25")
             self.assertIsNotNone(pos)
             self.assertAlmostEqual(pos["net_shares"], 12.5)
+
+    def test_execute_live_buy_does_not_record_phantom_fill_when_token_balance_does_not_increase(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            client = FakeClobClient(
+                reconcile_payload=None,
+                buy_response={
+                    "orderID": "buy-1",
+                    "status": "matched",
+                    "makingAmount": "5000000",
+                    "takingAmount": "12500000",
+                },
+                token_balances={"yes25": [0.0, 0.0]},
+            )
+
+            result = execute_live_buy(
+                db,
+                client,
+                token_id="yes25",
+                side="YES",
+                size_usd=5,
+                asks=[(0.40, 100)],
+                reason="test live buy",
+                max_price=0.40,
+                min_fill_usd=5,
+                order_cap_usd=5,
+                label="25C",
+            )
+
+            self.assertEqual(result.status, "unknown_fill")
+            self.assertEqual(result.shares, 0)
+            self.assertIsNone(get_live_position(db, "yes25"))
+            row = db.execute(
+                "select status, fill_size_usd, fill_shares from live_orders"
+            ).fetchone()
+            self.assertEqual(row["status"], "unknown_fill")
+            self.assertEqual(row["fill_size_usd"], 0)
+            self.assertEqual(row["fill_shares"], 0)
+            risk = db.execute(
+                "select event_type, severity, details_json from risk_events order by id desc limit 1"
+            ).fetchone()
+            self.assertEqual(risk["event_type"], "live_buy_balance_mismatch")
+            details = json.loads(risk["details_json"])
+            self.assertAlmostEqual(details["reported_fill_shares"], 12.5)
+            self.assertAlmostEqual(details["actual_balance_delta"], 0.0)
+
+    def test_execute_live_buy_caps_fill_to_observed_token_balance_delta(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            client = FakeClobClient(
+                reconcile_payload=None,
+                buy_response={
+                    "orderID": "buy-1",
+                    "status": "matched",
+                    "makingAmount": "5000000",
+                    "takingAmount": "12500000",
+                },
+                token_balances={"yes25": [10.0, 15.0]},
+            )
+
+            result = execute_live_buy(
+                db,
+                client,
+                token_id="yes25",
+                side="YES",
+                size_usd=5,
+                asks=[(0.40, 100)],
+                reason="test live buy",
+                max_price=0.40,
+                min_fill_usd=5,
+                order_cap_usd=5,
+                label="25C",
+            )
+
+            self.assertEqual(result.status, "filled")
+            self.assertAlmostEqual(result.shares, 5.0)
+            self.assertAlmostEqual(result.fill_size_usd, 2.0)
+            pos = get_live_position(db, "yes25")
+            self.assertIsNotNone(pos)
+            self.assertAlmostEqual(pos["net_shares"], 5.0)
+            self.assertAlmostEqual(pos["avg_price"], 0.40)
 
     def test_execute_live_buy_keeps_submitted_when_reconcile_and_response_are_unfilled(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -724,7 +814,18 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(result.status, "filled")
             self.assertEqual(client.sells, [("yes27", 0.03, 255.36)])
             pos = get_live_position(db, "yes27")
-            self.assertAlmostEqual(pos["net_shares"], 117.301541)
+            self.assertAlmostEqual(pos["net_shares"], 0.001958)
+            adjustment = db.execute(
+                """
+                select side, action, status, fill_shares
+                from live_orders
+                where side = 'RECONCILE_SELL'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(adjustment["action"], "SELL")
+            self.assertEqual(adjustment["status"], "filled")
+            self.assertAlmostEqual(adjustment["fill_shares"], 117.299583)
             risk = db.execute(
                 "select event_type, severity, details_json from risk_events order by id desc limit 1"
             ).fetchone()
@@ -733,6 +834,91 @@ class LiveTests(unittest.TestCase):
             details = json.loads(risk["details_json"])
             self.assertAlmostEqual(details["local_shares"], 372.661541)
             self.assertAlmostEqual(details["clob_sellable_shares"], 255.361958)
+
+    def test_execute_live_sell_records_balance_adjustment_for_missing_local_shares(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_live_order(
+                db,
+                outcome_id="yes27",
+                label="27°C or higher",
+                side="BUY_YES",
+                action="BUY",
+                status="filled",
+                fill_price=0.20,
+                fill_size_usd=20.0,
+                fill_shares=100.0,
+                reason="test buy",
+            )
+            upsert_live_position(db, "yes27", 100.0, 0.20, 0.0)
+            client = FakeClobClient(token_balances={"yes27": 0.0})
+
+            result = execute_live_sell(
+                db,
+                client,
+                token_id="yes27",
+                bids=[(0.03, 1000)],
+                reason="position invalidated by hourly forecast",
+                label="27°C or higher",
+            )
+
+            self.assertEqual(result.status, "rejected")
+            self.assertEqual(result.reason, "no sellable token balance")
+            self.assertEqual(client.sells, [])
+            pos = get_live_position(db, "yes27")
+            self.assertAlmostEqual(pos["net_shares"], 0.0)
+            rows = db.execute(
+                """
+                select side, action, status, fill_price, fill_size_usd, fill_shares, reason
+                from live_orders
+                order by id asc
+                """
+            ).fetchall()
+            self.assertEqual(rows[1]["side"], "RECONCILE_SELL")
+            self.assertEqual(rows[1]["action"], "SELL")
+            self.assertEqual(rows[1]["status"], "filled")
+            self.assertEqual(rows[1]["fill_price"], 0.0)
+            self.assertEqual(rows[1]["fill_size_usd"], 0.0)
+            self.assertEqual(rows[1]["fill_shares"], 100.0)
+            self.assertIn("CLOB sellable balance lower than local position", rows[1]["reason"])
+            self.assertEqual(active_live_positions(db)["yes27"]["net_shares"], 0.0)
+
+    def test_rebuild_live_positions_includes_zero_proceeds_balance_adjustments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_live_order(
+                db,
+                outcome_id="yes27",
+                label="27°C or higher",
+                side="BUY_YES",
+                action="BUY",
+                status="filled",
+                fill_price=0.20,
+                fill_size_usd=20.0,
+                fill_shares=100.0,
+                reason="test buy",
+            )
+            store_live_order(
+                db,
+                outcome_id="yes27",
+                label="27°C or higher",
+                side="RECONCILE_SELL",
+                action="SELL",
+                status="filled",
+                fill_price=0.0,
+                fill_size_usd=0.0,
+                fill_shares=100.0,
+                reason="CLOB sellable balance lower than local position",
+            )
+
+            rebuilt = rebuild_live_positions_from_filled_orders(db)
+
+            self.assertEqual(rebuilt, 1)
+            pos = get_live_position(db, "yes27")
+            self.assertAlmostEqual(pos["net_shares"], 0.0)
+            self.assertAlmostEqual(pos["realized_pnl"], -20.0)
 
     def test_live_dashboard_stats_separate_from_paper(self):
         with tempfile.TemporaryDirectory() as tmp:

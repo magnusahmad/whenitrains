@@ -115,7 +115,7 @@ def active_paper_positions(db: sqlite3.Connection) -> dict[str, dict]:
 def active_live_positions(db: sqlite3.Connection) -> dict[str, dict]:
     orders = db.execute(
         """
-        select outcome_id, side, fill_price, fill_size_usd, fill_shares
+        select outcome_id, side, action, fill_price, fill_size_usd, fill_shares
         from live_orders
         where status = 'filled'
           and fill_price is not null
@@ -127,6 +127,7 @@ def active_live_positions(db: sqlite3.Connection) -> dict[str, dict]:
     for row in orders:
         token = row["outcome_id"]
         side = row["side"] or ""
+        action = row["action"] or ""
         order_shares = _optional_float(row["fill_shares"]) or 0.0
         if order_shares <= 0:
             continue
@@ -148,7 +149,7 @@ def active_live_positions(db: sqlite3.Connection) -> dict[str, dict]:
             new_shares = shares + order_shares
             pos["net_shares"] = new_shares
             pos["avg_price"] = (avg * shares + cost) / new_shares if new_shares > 0 else 0.0
-        elif side == "SELL":
+        elif action == "SELL" or side == "SELL":
             sold = min(order_shares, shares)
             proceeds = _live_fill_notional_usd(
                 row["fill_size_usd"],
@@ -171,7 +172,7 @@ def _live_open_buy_shares_by_order_id(
     placeholders = ",".join("?" for _ in tokens)
     orders = db.execute(
         f"""
-        select id, outcome_id, side, fill_shares
+        select id, outcome_id, side, action, fill_shares
         from live_orders
         where outcome_id in ({placeholders})
           and status = 'filled'
@@ -185,13 +186,14 @@ def _live_open_buy_shares_by_order_id(
     for row in orders:
         token = row["outcome_id"]
         side = row["side"] or ""
+        action = row["action"] or ""
         shares = _optional_float(row["fill_shares"]) or 0.0
         if shares <= 0:
             continue
         token_lots = lots.setdefault(token, [])
         if side.startswith("BUY"):
             token_lots.append({"id": int(row["id"]), "shares": shares})
-        elif side == "SELL":
+        elif action == "SELL" or side == "SELL":
             remaining_sell = shares
             for lot in token_lots:
                 if remaining_sell <= 1e-8:
@@ -1301,7 +1303,7 @@ def pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
 def live_pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
     orders = db.execute(
         """
-        select created_at_utc, outcome_id, side, fill_price, fill_size_usd,
+        select created_at_utc, outcome_id, side, action, fill_price, fill_size_usd,
                fill_shares, status
         from live_orders
         where status = 'filled'
@@ -1362,6 +1364,7 @@ def live_pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
         if kind == "order":
             token = row["outcome_id"]
             side = row["side"] or ""
+            action = row["action"] or ""
             order_shares = _optional_float(row["fill_shares"]) or 0.0
             usd = _live_fill_notional_usd(
                 row["fill_size_usd"], row["fill_price"], row["fill_shares"]
@@ -1374,7 +1377,7 @@ def live_pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
                     (avg * shares + cost) / new_shares if new_shares > 0 else 0.0
                 )
                 positions[token] = (new_shares, new_avg)
-            elif side == "SELL":
+            elif action == "SELL" or side == "SELL":
                 sold_shares = min(order_shares, shares)
                 proceeds = _live_fill_notional_usd(
                     row["fill_size_usd"],
@@ -1631,7 +1634,7 @@ def _live_realized_pnl_by_sell_order_id(
     placeholders = ",".join("?" for _ in tokens)
     orders = db.execute(
         f"""
-        select id, outcome_id, side, fill_price, fill_size_usd, fill_shares
+        select id, outcome_id, side, action, fill_price, fill_size_usd, fill_shares
         from live_orders
         where outcome_id in ({placeholders})
           and status = 'filled'
@@ -1646,6 +1649,7 @@ def _live_realized_pnl_by_sell_order_id(
     for row in orders:
         token = row["outcome_id"]
         side = row["side"] or ""
+        action = row["action"] or ""
         order_shares = _optional_float(row["fill_shares"]) or 0.0
         usd = _live_fill_notional_usd(
             row["fill_size_usd"], row["fill_price"], row["fill_shares"]
@@ -1656,7 +1660,7 @@ def _live_realized_pnl_by_sell_order_id(
             new_shares = shares + order_shares
             new_avg = (avg * shares + cost) / new_shares if new_shares > 0 else 0.0
             positions[token] = (new_shares, new_avg)
-        elif side == "SELL":
+        elif action == "SELL" or side == "SELL":
             sold_shares = min(order_shares, shares)
             proceeds = _live_fill_notional_usd(
                 row["fill_size_usd"],

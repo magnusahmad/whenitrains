@@ -641,6 +641,7 @@ def execute_live_buy(
         )
         return LiveExecutionResult("rejected", token_id, f"BUY_{side}", None, 0, 0, "live open exposure cap reached")
 
+    balance_before = _sellable_token_balance(client, token_id)
     request = {"token_id": token_id, "price": quote.limit_price, "size_usd": quote.estimated_cost_usd, "order_type": "FAK"}
     try:
         response = client.buy_fak(token_id, float(quote.limit_price), quote.estimated_cost_usd)
@@ -705,7 +706,18 @@ def execute_live_buy(
         quote.estimated_shares,
         allow_default_fill=_allow_default_fill_values(reconcile),
     )
+    fill_price, fill_size_usd, fill_shares, balance_status = _reconcile_live_buy_fill_to_balance(
+        db,
+        client,
+        token_id=token_id,
+        fill_price=fill_price,
+        fill_size_usd=fill_size_usd,
+        fill_shares=fill_shares,
+        balance_before=balance_before,
+    )
     status = _live_reconcile_status(reconcile, fill_shares, "submitted")
+    if balance_status is not None:
+        status = balance_status
     update_live_order_reconcile(
         db,
         order_id,
@@ -718,6 +730,45 @@ def execute_live_buy(
     if fill_shares > 0:
         _apply_live_buy_fill(db, token_id, fill_shares, fill_size_usd)
     return LiveExecutionResult(status, token_id, f"BUY_{side}", fill_price, fill_size_usd, fill_shares, reason, clob_order_id)
+
+
+def _reconcile_live_buy_fill_to_balance(
+    db: sqlite3.Connection,
+    client: LiveClobClient,
+    *,
+    token_id: str,
+    fill_price: float | None,
+    fill_size_usd: float,
+    fill_shares: float,
+    balance_before: float | None,
+) -> tuple[float | None, float, float, str | None]:
+    balance_after = _sellable_token_balance(client, token_id)
+    if balance_before is None or balance_after is None or fill_shares <= 0:
+        return fill_price, fill_size_usd, fill_shares, None
+    actual_delta = max(balance_after - balance_before, 0.0)
+    if fill_shares <= actual_delta + 1e-8:
+        return fill_price, fill_size_usd, fill_shares, None
+    store_risk_event(
+        db,
+        "live_buy_balance_mismatch",
+        "warning",
+        {
+            "token_id": token_id,
+            "balance_before": balance_before,
+            "balance_after": balance_after,
+            "actual_balance_delta": actual_delta,
+            "reported_fill_shares": fill_shares,
+            "reported_fill_size_usd": fill_size_usd,
+        },
+    )
+    if actual_delta <= 1e-8:
+        return fill_price, 0.0, 0.0, "unknown_fill"
+    adjusted_size = (
+        fill_size_usd * (actual_delta / fill_shares)
+        if fill_size_usd > 0
+        else (fill_price or 0.0) * actual_delta
+    )
+    return fill_price, adjusted_size, actual_delta, None
 
 
 def execute_live_sell(
@@ -762,6 +813,7 @@ def execute_live_sell(
     shares = float(pos["net_shares"])
     sellable_shares = _sellable_token_balance(client, token_id)
     if sellable_shares is not None and sellable_shares < shares:
+        missing_shares = max(shares - max(sellable_shares, 0.0), 0.0)
         store_risk_event(
             db,
             "live_position_balance_mismatch",
@@ -772,6 +824,17 @@ def execute_live_sell(
                 "clob_sellable_shares": sellable_shares,
             },
         )
+        if missing_shares > 1e-8:
+            _record_live_balance_adjustment(
+                db,
+                token_id=token_id,
+                label=label,
+                missing_shares=missing_shares,
+                local_shares=shares,
+                clob_sellable_shares=sellable_shares,
+                event_type=event_type,
+                event_key=event_key,
+            )
         shares = max(sellable_shares, 0.0)
     submitted_shares = _floor_decimal(shares, "0.01")
     if submitted_shares <= 0:
@@ -868,6 +931,47 @@ def execute_live_sell(
     if sold > 0:
         _apply_live_sell_fill(db, token_id, sold, proceeds)
     return LiveExecutionResult(status, token_id, "SELL", fill_price, proceeds, sold, reason, clob_order_id)
+
+
+def _record_live_balance_adjustment(
+    db: sqlite3.Connection,
+    *,
+    token_id: str,
+    label: str | None,
+    missing_shares: float,
+    local_shares: float,
+    clob_sellable_shares: float,
+    event_type: str | None,
+    event_key: str | None,
+) -> None:
+    pos = get_live_position(db, token_id)
+    if pos is not None:
+        old_avg = float(pos["avg_price"])
+        remaining = max(float(pos["net_shares"]) - missing_shares, 0.0)
+        avg_price = old_avg if remaining > 0 else 0.0
+        realized_pnl = float(pos["realized_pnl"]) - missing_shares * old_avg
+        upsert_live_position(db, token_id, remaining, avg_price, realized_pnl)
+    details = {
+        "token_id": token_id,
+        "local_shares": local_shares,
+        "clob_sellable_shares": clob_sellable_shares,
+        "missing_shares": missing_shares,
+    }
+    store_live_order(
+        db,
+        outcome_id=token_id,
+        label=label,
+        side="RECONCILE_SELL",
+        action="SELL",
+        status="filled",
+        fill_price=0.0,
+        fill_size_usd=0.0,
+        fill_shares=missing_shares,
+        reason="CLOB sellable balance lower than local position; local balance adjustment",
+        raw_reconcile=details,
+        event_type=event_type,
+        event_key=event_key,
+    )
 
 
 def daily_loss_limit_reached(db: sqlite3.Connection, now: datetime | None = None) -> bool:
@@ -982,7 +1086,7 @@ def rebuild_live_positions_from_filled_orders(db: sqlite3.Connection) -> int:
         from live_orders
         where status = 'filled'
           and coalesce(fill_shares, 0) > 0
-          and coalesce(fill_size_usd, 0) > 0
+          and fill_price is not null
         order by created_at_utc asc, id asc
         """
     ).fetchall()
@@ -991,7 +1095,10 @@ def rebuild_live_positions_from_filled_orders(db: sqlite3.Connection) -> int:
         token_id = row["outcome_id"]
         action = row["action"] or ""
         fill_shares = float(row["fill_shares"])
-        fill_size_usd = float(row["fill_size_usd"])
+        fill_price = float(row["fill_price"] or 0.0)
+        fill_size_usd = float(row["fill_size_usd"] or 0.0)
+        if fill_size_usd <= 0 and fill_price > 0:
+            fill_size_usd = fill_price * fill_shares
         shares, avg_price, realized_pnl = positions.get(token_id, (0.0, 0.0, 0.0))
         if action == "SELL":
             sold = min(fill_shares, shares)

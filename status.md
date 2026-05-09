@@ -20,6 +20,10 @@ Live entries now refresh the CLOB orderbook immediately before submitting a live
 
 Live sell misses now signpost their reason in scheduler notes, including the label, side, trigger, and bid. Open-position exits also check whether a position is actually invalidated before counting missing bid depth as a sell miss, so `sells=0/N` no longer includes non-actionable held positions with thin books.
 
+Live balance mismatches now write explicit local reconciliation adjustments. When CLOB reports fewer sellable conditional tokens than the local ledger, the missing shares are consumed by a `RECONCILE_SELL` ledger row with zero proceeds and a risk event, so open-position reporting and rebuilt live positions stop showing phantom sellable shares without pretending an exchange sell filled.
+
+Live buys now reconcile reported fills against the wallet's conditional-token balance delta. If CLOB exposes pre/post token balances and the received token delta is smaller than the reported fill, the local fill is capped to the observed delta; if no tokens arrive, the order is marked `unknown_fill` and no local position is opened.
+
 Relevant existing implementation:
 
 - Strategy/decision path: `src/whenitrains/runner.py`
