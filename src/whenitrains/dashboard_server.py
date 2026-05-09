@@ -2636,16 +2636,35 @@ function makeChart(elementId, dualAxis=false) {
   return chart;
 }
 
+function makeTimeScaffoldSeries(chart) {
+  return chart.addLineSeries({
+    color: "rgba(0, 0, 0, 0)",
+    lineWidth: 1,
+    lineVisible: false,
+    pointMarkersVisible: false,
+    crosshairMarkerVisible: false,
+    lastValueVisible: false,
+    priceLineVisible: false,
+    priceScaleId: "left",
+  });
+}
+
 const charts = {
-  0: { chart: makeChart("d0-chart", true), series: [] },
-  1: { chart: makeChart("d1-chart", true), series: [] },
-  2: { chart: makeChart("d2-chart", true), series: [] },
+  0: { chart: makeChart("d0-chart", true), series: [], timeScaffold: null, timeScaffoldDate: null },
+  1: { chart: makeChart("d1-chart", true), series: [], timeScaffold: null, timeScaffoldDate: null },
+  2: { chart: makeChart("d2-chart", true), series: [], timeScaffold: null, timeScaffoldDate: null },
 };
 const lowCharts = {
-  0: { chart: makeChart("l0-chart", true), series: [] },
-  1: { chart: makeChart("l1-chart", true), series: [] },
-  2: { chart: makeChart("l2-chart", true), series: [] },
+  0: { chart: makeChart("l0-chart", true), series: [], timeScaffold: null, timeScaffoldDate: null },
+  1: { chart: makeChart("l1-chart", true), series: [], timeScaffold: null, timeScaffoldDate: null },
+  2: { chart: makeChart("l2-chart", true), series: [], timeScaffold: null, timeScaffoldDate: null },
 };
+Object.values(charts).forEach((chartState) => {
+  chartState.timeScaffold = makeTimeScaffoldSeries(chartState.chart);
+});
+Object.values(lowCharts).forEach((chartState) => {
+  chartState.timeScaffold = makeTimeScaffoldSeries(chartState.chart);
+});
 const d0ForecastSeries = charts[0].chart.addLineSeries({
   color: "#f0b400", lineWidth: 2, lineType: LightweightCharts.LineType.WithSteps,
   priceFormat: { type: "price", precision: 1, minMove: 0.1 }, priceScaleId: "right",
@@ -3087,13 +3106,151 @@ function hktDayRange(dateText) {
   return { from, to };
 }
 
-function setHktDayVisibleRange(chart, dateText) {
-  const range = hktDayRange(dateText);
+function hktDateTextFromUnix(sec) {
+  const unixSec = chartTimeToUnixSeconds(sec);
+  if (unixSec == null || Number.isNaN(unixSec)) return null;
+  const d = new Date((unixSec + HKT_OFFSET_SEC) * 1000);
+  return d.toISOString().slice(0, 10);
+}
+
+function currentHktWallClockUnix(anchorTime = null) {
+  const now = new Date();
+  const hktNow = new Date(now.getTime() + HKT_OFFSET_SEC * 1000);
+  const anchorDateText = hktDateTextFromUnix(anchorTime) || hktNow.toISOString().slice(0, 10);
+  return hktWallClockUnix(
+    anchorDateText,
+    hktNow.getUTCHours(),
+    hktNow.getUTCMinutes(),
+    hktNow.getUTCSeconds()
+  );
+}
+
+function latestSeriesTime(seriesGroups) {
+  let latest = null;
+  for (const series of seriesGroups || []) {
+    for (const point of series || []) {
+      const time = chartTimeToUnixSeconds(point.time);
+      if (time == null || Number.isNaN(time)) continue;
+      latest = latest == null ? time : Math.max(latest, time);
+    }
+  }
+  return latest;
+}
+
+function initialDataWindowRange(seriesGroups) {
+  const latest = latestSeriesTime(seriesGroups);
+  const dateText = hktDateTextFromUnix(latest);
+  if (!dateText) return null;
+  const from = hktWallClockUnix(dateText, 0, 0, 0);
+  const to = currentHktWallClockUnix(latest);
+  if (from == null || to == null || to <= from) return null;
+  return { from, to };
+}
+
+function activeHktDataDate(seriesGroups) {
+  const latest = latestSeriesTime(seriesGroups);
+  return hktDateTextFromUnix(latest);
+}
+
+function filterSeriesToHktDate(points, dateText) {
+  if (!dateText) return points || [];
+  return (points || []).filter((point) => hktDateTextFromUnix(point.time) === dateText);
+}
+
+function projectSeriesToHktDate(points, targetDateText) {
+  if (!targetDateText) return points || [];
+  return (points || []).map((point) => {
+    const unixSec = chartTimeToUnixSeconds(point.time);
+    if (unixSec == null || Number.isNaN(unixSec)) return point;
+    const hkt = new Date((unixSec + HKT_OFFSET_SEC) * 1000);
+    return {
+      ...point,
+      time: hktWallClockUnix(
+        targetDateText,
+        hkt.getUTCHours(),
+        hkt.getUTCMinutes(),
+        hkt.getUTCSeconds()
+      ),
+    };
+  });
+}
+
+function filterTokenSeriesToHktDate(items, dateText) {
+  return (items || []).map((item) => ({
+    ...item,
+    points: filterSeriesToHktDate(item.points, dateText),
+    markers: filterSeriesToHktDate(item.markers || [], dateText),
+  }));
+}
+
+function projectTokenSeriesToHktDate(items, targetDateText) {
+  return (items || []).map((item) => ({
+    ...item,
+    points: projectSeriesToHktDate(item.points, targetDateText),
+    markers: projectSeriesToHktDate(item.markers || [], targetDateText),
+  }));
+}
+
+function panelForActiveHktDataDate(panel) {
+  const seriesGroups = [
+    panel.forecast || [],
+    panel.forecast_low || [],
+    panel.hourly_forecast || [],
+    panel.hourly_actual || [],
+    panel.actual_max || [],
+    panel.actual_min || [],
+    panel.current_temp || [],
+    ...(panel.top_tokens || []).map(item => item.points),
+    ...(panel.low_tokens || []).map(item => item.points),
+  ];
+  const dateText = activeHktDataDate(seriesGroups);
+  if (!dateText) return panel;
+  return {
+    ...panel,
+    forecast: projectSeriesToHktDate(filterSeriesToHktDate(panel.forecast, dateText), panel.target_date),
+    forecast_low: projectSeriesToHktDate(filterSeriesToHktDate(panel.forecast_low || [], dateText), panel.target_date),
+    hourly_forecast: projectSeriesToHktDate(filterSeriesToHktDate(panel.hourly_forecast || [], dateText), panel.target_date),
+    hourly_actual: projectSeriesToHktDate(filterSeriesToHktDate(panel.hourly_actual || [], dateText), panel.target_date),
+    hourly_error: projectSeriesToHktDate(filterSeriesToHktDate(panel.hourly_error || [], dateText), panel.target_date),
+    actual_max: projectSeriesToHktDate(filterSeriesToHktDate(panel.actual_max || [], dateText), panel.target_date),
+    actual_min: projectSeriesToHktDate(filterSeriesToHktDate(panel.actual_min || [], dateText), panel.target_date),
+    current_temp: projectSeriesToHktDate(filterSeriesToHktDate(panel.current_temp || [], dateText), panel.target_date),
+    top_tokens: projectTokenSeriesToHktDate(filterTokenSeriesToHktDate(panel.top_tokens || [], dateText), panel.target_date),
+    low_tokens: projectTokenSeriesToHktDate(filterTokenSeriesToHktDate(panel.low_tokens || [], dateText), panel.target_date),
+  };
+}
+
+function hktMinuteWhitespace(dateText) {
+  const points = [];
+  for (let minute = 0; minute <= 24 * 60; minute += 1) {
+    const hour = Math.floor(minute / 60);
+    const minuteOfHour = minute % 60;
+    const time = hktWallClockUnix(dateText, hour, minuteOfHour, 0);
+    if (time != null) points.push({ time });
+  }
+  return points;
+}
+
+function setTimeScaleScaffold(chartState, seriesGroups) {
+  const latest = latestSeriesTime(seriesGroups);
+  const dateText = hktDateTextFromUnix(latest);
+  if (!dateText || !chartState.timeScaffold) return;
+  if (chartState.timeScaffoldDate === dateText) return;
+  chartState.timeScaffold.setData(hktMinuteWhitespace(dateText));
+  chartState.timeScaffoldDate = dateText;
+}
+
+function setInitialDataWindowRangeOnce(key, chartState, dateText, seriesGroups) {
+  const rangeKey = `${key}:${dateText}`;
+  if (fittedCharts.has(rangeKey)) return;
+  setTimeScaleScaffold(chartState, seriesGroups);
+  const range = initialDataWindowRange(seriesGroups);
   if (!range) {
-    chart.timeScale().fitContent();
+    fitChartOnce(key, chartState.chart);
     return;
   }
-  chart.timeScale().setVisibleRange(range);
+  chartState.chart.timeScale().setVisibleRange(range);
+  fittedCharts.add(rangeKey);
 }
 
 function nearestTrade(trades, time) {
@@ -3286,6 +3443,8 @@ Object.values(lowCharts).forEach(c => {
 });
 
 function renderLeadPanel(panel) {
+  const displayPanel = panelForActiveHktDataDate(panel);
+  panel = displayPanel;
   const lead = panel.lead_days;
   document.getElementById(`d${lead}-date`).textContent = panel.target_date;
   document.getElementById(`l${lead}-date`).textContent = panel.target_date;
@@ -3349,8 +3508,22 @@ function renderLeadPanel(panel) {
     document.getElementById("l0-legend").innerHTML = lowLegend.join("");
     bindSeriesToggleButtons(document.getElementById("l0-legend"));
     applySeriesVisibility();
-    setHktDayVisibleRange(charts[0].chart, panel.target_date);
-    setHktDayVisibleRange(lowCharts[0].chart, panel.target_date);
+    setInitialDataWindowRangeOnce("d0", charts[0], panel.target_date, [
+      d0ForecastData,
+      d0HourlyForecastData,
+      d0HourlyActualData,
+      d0ActualMaxData,
+      d0CurrentTempData,
+      ...panel.top_tokens.map(item => item.points),
+    ]);
+    setInitialDataWindowRangeOnce("l0", lowCharts[0], panel.target_date, [
+      l0ForecastLowData,
+      l0HourlyForecastData,
+      l0HourlyActualData,
+      l0ActualMinData,
+      l0CurrentTempData,
+      ...(panel.low_tokens || []).map(item => item.points),
+    ]);
     return;
   }
 
@@ -3419,12 +3592,14 @@ function renderLeadPanel(panel) {
   document.getElementById(`l${lead}-legend`).innerHTML = lowLegend.join("");
   bindSeriesToggleButtons(document.getElementById(`l${lead}-legend`));
   applySeriesVisibility();
-  if (panel.forecast.length || panel.top_tokens.some(s => s.points.length)) {
-    fitChartOnce(`d${lead}`, charts[lead].chart);
-  }
-  if ((panel.forecast_low || []).length || (panel.low_tokens || []).some(s => s.points.length)) {
-    fitChartOnce(`l${lead}`, lowCharts[lead].chart);
-  }
+  setInitialDataWindowRangeOnce(`d${lead}`, charts[lead], panel.target_date, [
+    panel.forecast,
+    ...panel.top_tokens.map(item => item.points),
+  ]);
+  setInitialDataWindowRangeOnce(`l${lead}`, lowCharts[lead], panel.target_date, [
+    panel.forecast_low || [],
+    ...(panel.low_tokens || []).map(item => item.points),
+  ]);
 }
 
 async function loadAll() {

@@ -8,6 +8,8 @@ This repo has an intentionally untracked production-like SQLite database under `
 - Use red/green TDD. Before starting implementation work, specify the failing tests you expect to write or run first.
 - When making a change to the web dashboard, always perform visual checks with Browser Use and do not call the work done until those visual checks look good.
 - Track the state of the codebase with detailed specs and status files. Check an existing status file such as `status.md` or a feature-specific `*-status.md` file before updating or creating one, and follow the established structure for current state, decisions, milestones, tests, and exit criteria.
+- Follow `docs/specs.md` for specification and status-file discipline; follow `docs/milestone-files.md` for milestone file structure and session updates.
+- For python environment management we use venv
 
 Hard rules:
 
@@ -21,6 +23,21 @@ PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backup-d
 
 - Use `reset-paper --yes` for paper-trading cleanup. It clears only paper orders, positions, decisions, and signals, and it creates a backup first by default.
 - Use `/private/tmp/*.sqlite3` for smoke tests and destructive experiments.
+
+## Live Log Access
+
+The live machine publishes scheduler logs over the LAN from `~/whenitrains-live-logs` on port `8765`.
+
+Commands for this machine to view the live logs:
+
+```bash
+curl -L http://192.168.1.23:8765/
+curl -L -o /private/tmp/live-scheduler-latest.log http://192.168.1.23:8765/<log-file-name>
+rg -n -i "LIVE|preflight|failed|error|not enough|insufficient|balance|allowance|block_new_entries|buy|sell|filled|submitted|request error|live-scheduler actions" /private/tmp/live-scheduler-latest.log
+tail -n 120 /private/tmp/live-scheduler-latest.log
+```
+
+If sandboxed network access blocks the LAN request, rerun the `curl` with approved network access rather than changing the live machine.
 
 Rationale:
 
