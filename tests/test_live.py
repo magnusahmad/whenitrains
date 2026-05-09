@@ -37,11 +37,13 @@ class FakeClobClient:
         reconcile_payload="default",
         buy_response=None,
         trades=None,
+        token_balances=None,
     ):
         self.fill = fill
         self.reconcile_payload = reconcile_payload
         self.buy_response = buy_response
         self.trades = trades or []
+        self.token_balances = token_balances or {}
         self.buys = []
         self.sells = []
 
@@ -61,6 +63,9 @@ class FakeClobClient:
     def sell_fak(self, token_id, price, shares):
         self.sells.append((token_id, price, shares))
         return {"orderID": "sell-1", "status": "matched"}
+
+    def token_balance(self, token_id):
+        return self.token_balances.get(token_id)
 
     def reconcile_order(self, order_id, token_id):
         if self.reconcile_payload != "default":
@@ -699,6 +704,35 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(client.sells, [("yes25", 0.45, 12.34)])
             pos = get_live_position(db, "yes25")
             self.assertAlmostEqual(pos["net_shares"], 0.005)
+
+    def test_execute_live_sell_caps_to_clob_sellable_balance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            upsert_live_position(db, "yes27", 372.661541, 0.19, 0.0)
+            client = FakeClobClient(token_balances={"yes27": 255.361958})
+
+            result = execute_live_sell(
+                db,
+                client,
+                token_id="yes27",
+                bids=[(0.03, 1000)],
+                reason="position invalidated by hourly forecast",
+                label="27°C or higher",
+            )
+
+            self.assertEqual(result.status, "filled")
+            self.assertEqual(client.sells, [("yes27", 0.03, 255.36)])
+            pos = get_live_position(db, "yes27")
+            self.assertAlmostEqual(pos["net_shares"], 117.301541)
+            risk = db.execute(
+                "select event_type, severity, details_json from risk_events order by id desc limit 1"
+            ).fetchone()
+            self.assertEqual(risk["event_type"], "live_position_balance_mismatch")
+            self.assertEqual(risk["severity"], "warning")
+            details = json.loads(risk["details_json"])
+            self.assertAlmostEqual(details["local_shares"], 372.661541)
+            self.assertAlmostEqual(details["clob_sellable_shares"], 255.361958)
 
     def test_live_dashboard_stats_separate_from_paper(self):
         with tempfile.TemporaryDirectory() as tmp:

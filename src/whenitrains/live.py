@@ -99,6 +99,9 @@ class LiveClobClient(Protocol):
     def sell_fak(self, token_id: str, price: float, shares: float) -> dict:
         ...
 
+    def token_balance(self, token_id: str) -> float | None:
+        ...
+
     def reconcile_order(self, order_id: str | None, token_id: str) -> dict:
         ...
 
@@ -161,6 +164,12 @@ class PolymarketClobClient:
     def balance_allowance(self) -> dict | None:
         return self._balance_allowance()
 
+    def token_balance(self, token_id: str) -> float | None:
+        if hasattr(self._client, "get_balance_allowance"):
+            payload = self._client.get_balance_allowance(self._conditional_params(token_id))
+            return _asset_amount_from_payload(payload)
+        return None
+
     def _balance_allowance(self) -> dict | None:
         if hasattr(self._client, "get_balance_allowance"):
             return self._client.get_balance_allowance(self._collateral_params())
@@ -180,6 +189,28 @@ class PolymarketClobClient:
             )
         except TypeError:
             return BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+
+    def _conditional_params(self, token_id: str):
+        try:
+            from py_clob_client_v2 import AssetType, BalanceAllowanceParams
+        except ImportError:
+            return SimpleNamespace(
+                asset_type="CONDITIONAL",
+                token_id=token_id,
+                signature_type=self._signature_type,
+            )
+        asset_type = getattr(AssetType, "CONDITIONAL", "CONDITIONAL")
+        try:
+            return BalanceAllowanceParams(
+                asset_type=asset_type,
+                token_id=token_id,
+                signature_type=self._signature_type,
+            )
+        except TypeError:
+            try:
+                return BalanceAllowanceParams(asset_type=asset_type, token_id=token_id)
+            except TypeError:
+                return BalanceAllowanceParams(asset_type=asset_type)
 
     def buy_fak(self, token_id: str, price: float, size_usd: float) -> dict:
         if self._uses_v2_client:
@@ -729,6 +760,19 @@ def execute_live_sell(
         )
         return LiveExecutionResult("rejected", token_id, "SELL", None, 0, 0, "no bid depth")
     shares = float(pos["net_shares"])
+    sellable_shares = _sellable_token_balance(client, token_id)
+    if sellable_shares is not None and sellable_shares < shares:
+        store_risk_event(
+            db,
+            "live_position_balance_mismatch",
+            "warning",
+            {
+                "token_id": token_id,
+                "local_shares": shares,
+                "clob_sellable_shares": sellable_shares,
+            },
+        )
+        shares = max(sellable_shares, 0.0)
     submitted_shares = _floor_decimal(shares, "0.01")
     if submitted_shares <= 0:
         store_live_order(
@@ -738,9 +782,16 @@ def execute_live_sell(
             side="SELL",
             action="SELL",
             status="rejected",
-            reason="position rounds below sellable share precision",
+            reason="no sellable token balance"
+            if sellable_shares is not None
+            else "position rounds below sellable share precision",
             event_type=event_type,
             event_key=event_key,
+        )
+        reason_text = (
+            "no sellable token balance"
+            if sellable_shares is not None
+            else "position rounds below sellable share precision"
         )
         return LiveExecutionResult(
             "rejected",
@@ -749,7 +800,7 @@ def execute_live_sell(
             None,
             0,
             0,
-            "position rounds below sellable share precision",
+            reason_text,
         )
     request = {"token_id": token_id, "price": best_bid, "shares": submitted_shares, "order_type": "FAK"}
     try:
@@ -1185,6 +1236,35 @@ def _balance_from_payload(payload: dict | None) -> float | None:
         if key in payload:
             return _usdc_amount(payload[key])
     return None
+
+
+def _asset_amount(value) -> float:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and stripped.lstrip("-").isdigit():
+            return int(stripped) / 1_000_000
+    amount = float(value or 0)
+    if abs(amount) >= 1_000_000:
+        return amount / 1_000_000
+    return amount
+
+
+def _asset_amount_from_payload(payload: dict | None) -> float | None:
+    if payload is None:
+        return None
+    for key in ("balance", "available", "shares", "amount"):
+        if key in payload:
+            return _asset_amount(payload[key])
+    return None
+
+
+def _sellable_token_balance(client: LiveClobClient, token_id: str) -> float | None:
+    if not hasattr(client, "token_balance"):
+        return None
+    try:
+        return client.token_balance(token_id)
+    except Exception:
+        return None
 
 
 def _allowance_ok_from_payload(

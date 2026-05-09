@@ -1,6 +1,6 @@
 # Live Trading Status
 
-Last updated: 2026-05-08 HKT
+Last updated: 2026-05-09 HKT
 
 ## Current State
 
@@ -13,6 +13,8 @@ Live preflight now interprets raw pUSD micro-unit balance/allowance payloads fro
 The dashboard now includes a `/historicals` route for historical HKO accuracy review. It exposes `/api/historicals` with separate max-temperature and min-temperature series: OCF forecast error versus the actual daily extreme timestamp, forecast-bucket YES token prices versus the same lead-hours axis, lead-hour aggregate mean-error stats, and paper PNL histograms grouped by signal reason and D+0/D+1/D+N entry timing.
 
 Live dashboard trade rows now normalize filled order notional from `fill_price * fill_shares` whenever CLOB/API storage has a zero or missing `fill_size_usd`, so the USD column, realized PnL, unrealized PnL, and chart markers use the same cash-flow basis. Live dashboard open-position reporting now replays filled live orders instead of trusting persisted `live_positions.avg_price`, and open trade drilldowns show only remaining open buy-lot shares so table uPnL adds up to the summary.
+
+Live invalidation exits now cap submitted sell shares to the CLOB-reported conditional token balance when that balance is lower than local live position shares. This avoids rejected all-or-nothing FAK exits when the local live replay overstates sellable shares, while recording a `live_position_balance_mismatch` warning risk event so the accounting mismatch remains visible.
 
 Relevant existing implementation:
 
@@ -369,7 +371,22 @@ PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
 Result:
 
 ```text
-Ran 208 tests in 2.938s
+Ran 213 tests in 2.422s
+OK
+```
+
+Live exit sellable-balance cap red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_live.LiveTests.test_execute_live_sell_caps_to_clob_sellable_balance
+```
+
+Red result: live exit submitted the full local `372.66` shares even though the fake CLOB balance exposed only `255.361958` sellable shares.
+
+Green result after capping sell size to the CLOB token balance and recording a mismatch risk event:
+
+```text
+Ran 1 test in 0.011s
 OK
 ```
 
