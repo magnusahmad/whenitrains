@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from whenitrains.hko import HKT, HkoCurrentTemperature, HkoForecast, HkoObservation, OcfForecastSample
 from whenitrains.markets import parse_outcome_label
@@ -14,6 +15,7 @@ from whenitrains.runner import (
     process_open_position_exits,
     process_forecast_position_exits,
     render_dashboard,
+    run_live_tick,
     run_paper_tick,
 )
 from whenitrains.storage import (
@@ -27,6 +29,38 @@ from whenitrains.storage import (
     store_polymarket_event,
     store_raw_snapshot,
 )
+
+
+class _FakeLiveClient:
+    def __init__(self):
+        self.buys = []
+        self.sells = []
+
+    def signer_address(self):
+        return "0xsigner"
+
+    def balance_usd(self):
+        return 100.0
+
+    def allowance_ok(self):
+        return True
+
+    def buy_fak(self, token_id, price, size_usd):
+        self.buys.append((token_id, price, size_usd))
+        return {"orderID": "buy-1", "status": "matched"}
+
+    def sell_fak(self, token_id, price, shares):
+        self.sells.append((token_id, price, shares))
+        return {"orderID": "sell-1", "status": "matched"}
+
+    def token_balance(self, token_id):
+        return None
+
+    def reconcile_order(self, order_id, token_id):
+        return {"order_id": order_id, "token_id": token_id, "status": "filled"}
+
+    def trades_for_order(self, order_id, token_id):
+        return []
 
 
 class RunnerTests(unittest.TestCase):
@@ -282,6 +316,50 @@ class RunnerTests(unittest.TestCase):
                 "select simulated_fill_price from paper_orders where status = 'filled' order by id desc limit 1"
             ).fetchone()
             self.assertEqual(order["simulated_fill_price"], 0.40)
+
+    def test_live_forecast_change_refreshes_quote_before_buy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target_date = date(2026, 5, 5)
+            db = _seed_market(Path(tmp) / "test.db", target_date=target_date)
+            _store_forecast(
+                db,
+                28,
+                "2026-05-04T00:45:00+08:00",
+                forecast_date=target_date,
+            )
+            _store_forecast(
+                db,
+                29,
+                "2026-05-04T01:45:00+08:00",
+                forecast_date=target_date,
+            )
+            _store_book_pair(db, "yes29", old_ask=0.39, new_ask=0.395)
+            _store_book_pair(db, "no29", old_ask=0.61, new_ask=0.61)
+            fresh_book = OrderBook(
+                "yes29",
+                bids=[(0.39, 1000)],
+                asks=[(0.41, 1000)],
+                tick_size=0.01,
+                min_order_size=5,
+            )
+            client = _FakeLiveClient()
+
+            with patch("whenitrains.runner.fetch_orderbook", return_value=fresh_book):
+                result = run_live_tick(db, client, today_hkt=date(2026, 5, 4), order_cap_usd=5)
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(result.buys_missed, 1)
+            self.assertEqual(client.buys, [])
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "missed")
+            self.assertEqual(decision["reason"], "no ask depth at or below max price")
 
     def test_forecast_change_d2_buys_when_entry_price_is_at_twenty_cents(self):
         with tempfile.TemporaryDirectory() as tmp:

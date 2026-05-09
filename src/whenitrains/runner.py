@@ -12,7 +12,7 @@ from .engine import TradeCandidate
 from .hko import HKT
 from .markets import PredicateType, parse_outcome_label, predicate_matches
 from .paper_db import execute_paper_buy, execute_paper_sell
-from .polymarket import Outcome
+from .polymarket import Outcome, fetch_orderbook
 from .signals import DirectionalImpact, PriceResponse
 from .live import LiveClobClient, execute_live_buy, execute_live_sell
 from .storage import (
@@ -33,6 +33,7 @@ from .storage import (
     observed_min_decreases,
     observed_max_increases,
     store_signal,
+    store_orderbook,
     store_trading_decision,
 )
 
@@ -1572,18 +1573,38 @@ def _execute_candidate_buy(
     try:
         book = latest_orderbook(db, token_id)
     except ValueError:
-        store_trading_decision(
-            db,
-            event_type,
-            token_id,
-            candidate.outcome.label,
-            side,
-            "BUY",
-            "missed",
-            "missing orderbook",
-            event_key=event_key,
-        )
-        return False
+        if _LIVE_CLIENT is None:
+            store_trading_decision(
+                db,
+                event_type,
+                token_id,
+                candidate.outcome.label,
+                side,
+                "BUY",
+                "missed",
+                "missing orderbook",
+                event_key=event_key,
+            )
+            return False
+        book = None
+    reference_best_ask = book.best_ask if book is not None else None
+    if _LIVE_CLIENT is not None:
+        try:
+            book = fetch_orderbook(token_id)
+            store_orderbook(db, token_id, book)
+        except Exception as exc:
+            store_trading_decision(
+                db,
+                event_type,
+                token_id,
+                candidate.outcome.label,
+                side,
+                "BUY",
+                "missed",
+                f"fresh orderbook fetch failed: {type(exc).__name__}",
+                event_key=event_key,
+            )
+            return False
     hard_entry_cap = max(Settings.max_entry_price, max_buy_price or 0)
     if book.best_ask is not None and book.best_ask > hard_entry_cap:
         store_trading_decision(
@@ -1606,8 +1627,9 @@ def _execute_candidate_buy(
         )
         return False
     dynamic_max_buy_price = max_buy_price
-    if book.best_ask is not None:
-        slippage_cap = book.best_ask + Settings.max_entry_limit_slippage
+    slippage_anchor = reference_best_ask if reference_best_ask is not None else book.best_ask
+    if slippage_anchor is not None:
+        slippage_cap = slippage_anchor + Settings.max_entry_limit_slippage
         dynamic_max_buy_price = (
             slippage_cap
             if dynamic_max_buy_price is None

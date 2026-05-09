@@ -16,6 +16,8 @@ Live dashboard trade rows now normalize filled order notional from `fill_price *
 
 Live invalidation exits now cap submitted sell shares to the CLOB-reported conditional token balance when that balance is lower than local live position shares. This avoids rejected all-or-nothing FAK exits when the local live replay overstates sellable shares, while recording a `live_position_balance_mismatch` warning risk event so the accounting mismatch remains visible.
 
+Live entries now refresh the CLOB orderbook immediately before submitting a live buy, persist that fresh quote, and re-apply the entry cap/slippage rule against it. If the fresh quote has moved beyond the executable rule that produced the candidate, the buy is recorded as missed instead of sending a stale-price FAK order.
+
 Relevant existing implementation:
 
 - Strategy/decision path: `src/whenitrains/runner.py`
@@ -157,6 +159,7 @@ Tests:
 - Three consecutive CLOB insufficient balance/allowance submit failures set `block_new_entries`.
 - Secret values never appear in printed errors.
 - Env export helper prints only required live keys and fails closed when any required value is missing.
+- Live scheduler buys fetch a fresh orderbook just before execution and reject stale candidate prices that no longer satisfy the entry rule.
 
 Exit criteria:
 
