@@ -1840,6 +1840,49 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("gate manual_live_buy_observed=pass count=1", text)
             self.assertIn("gate manual_live_sell_observed=missing count=0", text)
 
+    def test_low_latency_readiness_report_fails_when_manual_live_fill_has_no_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="BUY_YES",
+                action="BUY",
+                status="filled",
+                event_type="manual_live",
+                fill_price=0.2,
+                reason="manual live buy 25C YES",
+            )
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="SELL",
+                action="SELL",
+                status="filled",
+                event_type="manual_live",
+                fill_price=0.2,
+                reason="manual live sell 25C YES",
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("gate manual_live_buy_observed=missing count=0", text)
+            self.assertIn("gate manual_live_sell_observed=missing count=0", text)
+
     def test_low_latency_readiness_report_fails_when_latest_network_smoke_failed(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

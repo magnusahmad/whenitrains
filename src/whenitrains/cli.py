@@ -2768,6 +2768,7 @@ def _manual_live_order_count(db, *, action: str) -> int:
         where event_type = 'manual_live'
           and action = ?
           and status = 'filled'
+          and (coalesce(fill_size_usd, 0) > 0 or coalesce(fill_shares, 0) > 0)
         """,
         (action,),
     ).fetchone()
