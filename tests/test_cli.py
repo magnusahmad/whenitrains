@@ -264,6 +264,17 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertEqual(live_tick.call_count, 2)
             for call in live_tick.call_args_list:
                 self.assertIs(call.kwargs["book_cache"], book_cache)
+            db = connect(db_path)
+            try:
+                event = db.execute(
+                    "select event_type, severity, details_json from risk_events order by id desc limit 1"
+                ).fetchone()
+                self.assertEqual(event["event_type"], "live_scheduler_smoke_ok")
+                self.assertEqual(event["severity"], "info")
+                self.assertIn('"ticks": 0', event["details_json"])
+                self.assertIn('"websockets_enabled": true', event["details_json"])
+            finally:
+                db.close()
 
     def test_live_network_smoke_starts_and_stops_websocket_runtime_without_trading(self):
         with tempfile.TemporaryDirectory() as tmp:

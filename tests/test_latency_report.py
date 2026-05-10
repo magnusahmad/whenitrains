@@ -392,6 +392,12 @@ class LatencyReportTests(unittest.TestCase):
                     "required_clients": 2,
                 },
             )
+            store_risk_event(
+                db,
+                "live_scheduler_smoke_ok",
+                "info",
+                {"ticks": 3, "websockets_enabled": True},
+            )
             db.close()
             stdout = StringIO()
 
@@ -423,7 +429,45 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("gate live_network_smoke_ok=pass count=1 latest=ok", text)
             self.assertIn("gate manual_live_buy_observed=pass count=1", text)
             self.assertIn("gate manual_live_sell_observed=pass count=1", text)
+            self.assertIn("gate live_scheduler_smoke_ok=pass count=1 latest=ok", text)
             self.assertNotIn("readiness evidence missing", text)
+
+    def test_low_latency_readiness_report_fails_when_latest_scheduler_smoke_failed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_risk_event(
+                db,
+                "live_scheduler_smoke_ok",
+                "info",
+                {"ticks": 3, "websockets_enabled": True},
+            )
+            store_risk_event(
+                db,
+                "live_scheduler_smoke_failed",
+                "critical",
+                {"ticks": 3, "websockets_enabled": True, "error": "boom"},
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "gate live_scheduler_smoke_ok=missing count=1 latest=failed",
+                text,
+            )
 
     def test_low_latency_readiness_report_fails_without_manual_live_sell(self):
         with tempfile.TemporaryDirectory() as tmp:

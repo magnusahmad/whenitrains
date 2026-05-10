@@ -893,9 +893,11 @@ def main(argv: list[str] | None = None) -> int:
                 stale_submitted_orders=stale_submitted,
                 local_clob_drift_count=drift_count,
             )
+            scheduler_smoke_blocked = False
             if freeze_new_entries_for_health_failures(
                 db, health, alert_sink=alert_sink
             ):
+                scheduler_smoke_blocked = True
                 print(
                     "blocked new entries: live startup health failed: "
                     + "; ".join(health.reasons),
@@ -928,6 +930,7 @@ def main(argv: list[str] | None = None) -> int:
                 db_path, "aws_gis_actual"
             )
             def reconcile_watchdog(tick_db):
+                nonlocal scheduler_smoke_blocked
                 kill_switch_exit = enforce_live_kill_switch_exits(
                     tick_db,
                     client,
@@ -993,6 +996,7 @@ def main(argv: list[str] | None = None) -> int:
                 freeze_new_entries_for_health_failures(
                     tick_db, health, alert_sink=alert_sink
                 )
+                scheduler_smoke_blocked = True
                 return RunnerResult(
                     notes=(
                         f"live reconcile watchdog froze entries: {len(drifts)} local/CLOB drift items",
@@ -1042,6 +1046,23 @@ def main(argv: list[str] | None = None) -> int:
                     output_label="live-scheduler",
                     alert_sink=alert_sink,
                 )
+                if args.ticks is not None and not scheduler_smoke_blocked:
+                    _record_live_scheduler_smoke(
+                        db,
+                        ok=True,
+                        ticks=args.ticks,
+                        websockets_enabled=not args.no_websockets,
+                    )
+            except Exception as exc:
+                if args.ticks is not None:
+                    _record_live_scheduler_smoke(
+                        db,
+                        ok=False,
+                        ticks=args.ticks,
+                        websockets_enabled=not args.no_websockets,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                raise
             finally:
                 if websocket_runtime is not None:
                     websocket_runtime.stop(timeout=5)
@@ -1609,6 +1630,26 @@ def _record_live_network_smoke(
     )
 
 
+def _record_live_scheduler_smoke(
+    db,
+    *,
+    ok: bool,
+    ticks: int,
+    websockets_enabled: bool,
+    error: str | None = None,
+) -> None:
+    store_risk_event(
+        db,
+        "live_scheduler_smoke_ok" if ok else "live_scheduler_smoke_failed",
+        "info" if ok else "critical",
+        {
+            "ticks": ticks,
+            "websockets_enabled": websockets_enabled,
+            "error": error,
+        },
+    )
+
+
 def _hko_source_timing_report(
     db,
     *,
@@ -1735,6 +1776,7 @@ def _low_latency_readiness_report(
     live_clob_drift_scan = _live_clob_drift_scan_summary(db)
     live_auth_smoke = _live_auth_smoke_summary(db)
     live_network_smoke = _live_network_smoke_summary(db)
+    live_scheduler_smoke = _live_scheduler_smoke_summary(db)
     manual_live_buy_count = _manual_live_order_count(db, action="BUY")
     manual_live_sell_count = _manual_live_order_count(db, action="SELL")
     live = live_dashboard_stats(db)
@@ -1793,6 +1835,7 @@ def _low_latency_readiness_report(
         _live_clob_drift_scan_gate(live_clob_drift_scan),
         _live_auth_smoke_gate(live_auth_smoke),
         _live_network_smoke_gate(live_network_smoke),
+        _live_scheduler_smoke_gate(live_scheduler_smoke),
         _count_observed_gate("manual_live_buy_observed", manual_live_buy_count),
         _count_observed_gate("manual_live_sell_observed", manual_live_sell_count),
         _live_money_state_gate(db, live),
@@ -2042,6 +2085,29 @@ def _live_network_smoke_summary(db) -> dict[str, object]:
     return {"ok_count": int(ok_row["count"] or 0), "latest": latest}
 
 
+def _live_scheduler_smoke_summary(db) -> dict[str, object]:
+    ok_row = db.execute(
+        """
+        select count(*) as count
+        from risk_events
+        where event_type = 'live_scheduler_smoke_ok'
+        """
+    ).fetchone()
+    latest_row = db.execute(
+        """
+        select event_type
+        from risk_events
+        where event_type in ('live_scheduler_smoke_ok', 'live_scheduler_smoke_failed')
+        order by id desc
+        limit 1
+        """
+    ).fetchone()
+    latest = "missing"
+    if latest_row is not None:
+        latest = "ok" if latest_row["event_type"] == "live_scheduler_smoke_ok" else "failed"
+    return {"ok_count": int(ok_row["count"] or 0), "latest": latest}
+
+
 def _manual_live_order_count(db, *, action: str) -> int:
     row = db.execute(
         """
@@ -2169,6 +2235,15 @@ def _live_network_smoke_gate(summary: dict[str, object]) -> dict[str, object]:
     status = "pass" if passed else "missing"
     line = f"gate live_network_smoke_ok={status} count={ok_count} latest={latest}"
     return {"name": "live_network_smoke_ok", "status": status, "line": line}
+
+
+def _live_scheduler_smoke_gate(summary: dict[str, object]) -> dict[str, object]:
+    ok_count = int(summary["ok_count"])
+    latest = str(summary["latest"])
+    passed = ok_count > 0 and latest == "ok"
+    status = "pass" if passed else "missing"
+    line = f"gate live_scheduler_smoke_ok={status} count={ok_count} latest={latest}"
+    return {"name": "live_scheduler_smoke_ok", "status": status, "line": line}
 
 
 def _live_money_state_gate(db, live: dict[str, object]) -> dict[str, object]:
