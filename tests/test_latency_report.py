@@ -371,6 +371,54 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("gate live_clob_drift_scan_clear=pass count=1", text)
             self.assertNotIn("readiness evidence missing", text)
 
+    def test_low_latency_readiness_report_fails_when_latest_drift_scan_has_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_risk_event(
+                db,
+                "live_clob_drift_scan_clear",
+                "info",
+                {"phase": "startup", "drift_count": 0},
+            )
+            store_risk_event(
+                db,
+                "live_clob_drift_scan_drift",
+                "critical",
+                {
+                    "phase": "reconcile_watchdog",
+                    "drift_count": 1,
+                    "drifts": [
+                        {
+                            "token_id": "yes25",
+                            "local_shares": 12.5,
+                            "clob_sellable_shares": 7.0,
+                            "drift_shares": 5.5,
+                        }
+                    ],
+                },
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "gate live_clob_drift_scan_clear=missing count=1 latest=drift",
+                text,
+            )
+
     def test_low_latency_readiness_report_require_evidence_fails_without_live_settlement(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

@@ -196,6 +196,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` timed out after 8003 ms with `curl: (28) Connection timed out after 8003 milliseconds`, so live scheduler log capture remains blocked on endpoint availability.
 
+2026-05-11 latest live drift scan gate pass: the CLOB drift readiness gate now evaluates the latest `live_clob_drift_scan_clear`/`live_clob_drift_scan_drift` event instead of accepting any historical clear scan, so a later local-vs-CLOB drift scan blocks `low-latency-readiness-report --require-evidence` until a new clean scan is recorded. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_readiness_report_fails_when_latest_drift_scan_has_drift`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

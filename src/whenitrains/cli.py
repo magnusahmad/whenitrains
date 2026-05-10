@@ -1635,7 +1635,7 @@ def _low_latency_readiness_report(
     user_trade_applied_count = _live_user_trade_applied_count(db)
     live_reconcile_count = _live_reconcile_count(db)
     live_settlement_count = _live_settlement_count(db)
-    live_clob_drift_scan_clear_count = _live_clob_drift_scan_clear_count(db)
+    live_clob_drift_scan = _live_clob_drift_scan_summary(db)
     live = live_dashboard_stats(db)
     counts = live["counts"]
     gates = [
@@ -1689,10 +1689,7 @@ def _low_latency_readiness_report(
         _count_observed_gate("user_channel_trade_applied", user_trade_applied_count),
         _count_observed_gate("live_reconcile_observed", live_reconcile_count),
         _count_observed_gate("live_settlement_observed", live_settlement_count),
-        _count_observed_gate(
-            "live_clob_drift_scan_clear",
-            live_clob_drift_scan_clear_count,
-        ),
+        _live_clob_drift_scan_gate(live_clob_drift_scan),
         _live_money_state_gate(db, live),
         _kill_switch_clear_gate(live),
     ]
@@ -1859,15 +1856,39 @@ def _live_settlement_count(db) -> int:
     return int(row["count"] or 0)
 
 
-def _live_clob_drift_scan_clear_count(db) -> int:
-    row = db.execute(
+def _live_clob_drift_scan_summary(db) -> dict[str, object]:
+    clear_row = db.execute(
         """
         select count(*) as count
         from risk_events
         where event_type = 'live_clob_drift_scan_clear'
         """
     ).fetchone()
-    return int(row["count"] or 0)
+    latest_row = db.execute(
+        """
+        select event_type, details_json
+        from risk_events
+        where event_type in ('live_clob_drift_scan_clear', 'live_clob_drift_scan_drift')
+        order by id desc
+        limit 1
+        """
+    ).fetchone()
+    latest = "missing"
+    drift_count = None
+    if latest_row is not None:
+        latest = "clear" if latest_row["event_type"] == "live_clob_drift_scan_clear" else "drift"
+        try:
+            details = json.loads(latest_row["details_json"] or "{}")
+        except json.JSONDecodeError:
+            details = {}
+        value = details.get("drift_count")
+        if isinstance(value, int):
+            drift_count = value
+    return {
+        "clear_count": int(clear_row["count"] or 0),
+        "latest": latest,
+        "latest_drift_count": drift_count,
+    }
 
 
 def _websocket_orderbook_snapshot_count(db) -> int:
@@ -1951,6 +1972,20 @@ def _minimum_count_gate(
         f"threshold={_fmt_seconds(threshold_seconds)}"
     )
     return {"name": name, "status": status, "line": line}
+
+
+def _live_clob_drift_scan_gate(summary: dict[str, object]) -> dict[str, object]:
+    clear_count = int(summary["clear_count"])
+    latest = str(summary["latest"])
+    latest_drift_count = summary["latest_drift_count"]
+    passed = clear_count > 0 and latest == "clear"
+    status = "pass" if passed else "missing"
+    drift_count_text = "n/a" if latest_drift_count is None else str(latest_drift_count)
+    line = (
+        f"gate live_clob_drift_scan_clear={status} "
+        f"count={clear_count} latest={latest} latest_drift_count={drift_count_text}"
+    )
+    return {"name": "live_clob_drift_scan_clear", "status": status, "line": line}
 
 
 def _live_money_state_gate(db, live: dict[str, object]) -> dict[str, object]:
