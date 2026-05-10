@@ -37,7 +37,7 @@ from .hko import (
     HKT,
 )
 from .hourly_accuracy import build_hourly_accuracy_report, render_hourly_accuracy_report
-from .low_latency import LowLatencyEventQueue
+from .low_latency import FastDecisionWorker, LowLatencyEventQueue
 from .live_runtime import LiveWebSocketRuntime
 from .operational import (
     LiveSchedulerLock,
@@ -873,26 +873,34 @@ def main(argv: list[str] | None = None) -> int:
         aws_actual_poll_learned_times = lambda: _list_hko_update_times_for_path(
             db_path, "aws_gis_actual"
         )
-        run_scheduled_paper_loop(
-            db,
-            fetch_since_midnight=lambda: _fetch_since_midnight(db),
-            fetch_bulletin=lambda: _fetch_bulletin(db, event_queue=low_latency_queue),
-            fetch_current_temperature=lambda: _fetch_current_temperature(
-                db, event_queue=low_latency_queue
-            ),
-            learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
-            learned_actual_times=lambda: list_hko_update_times(db, "aws_gis_actual"),
-            discover_market=lambda target: _discover_markets_for_forecast_dates(
-                db, target, event_queue=low_latency_queue
-            ),
-            fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
-            base_sleep_seconds=args.sleep,
-            max_ticks=args.ticks,
-            quiet=not args.verbose,
-            low_latency_event_queue=low_latency_queue,
-            aws_actual_poll_fetch=aws_actual_poll_fetch,
-            aws_actual_poll_learned_times=aws_actual_poll_learned_times,
+        fast_worker = FastDecisionWorker(
+            db_path=db_path,
+            event_queue=low_latency_queue,
         )
+        fast_worker.start()
+        try:
+            run_scheduled_paper_loop(
+                db,
+                fetch_since_midnight=lambda: _fetch_since_midnight(db),
+                fetch_bulletin=lambda: _fetch_bulletin(db, event_queue=low_latency_queue),
+                fetch_current_temperature=lambda: _fetch_current_temperature(
+                    db, event_queue=low_latency_queue
+                ),
+                learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
+                learned_actual_times=lambda: list_hko_update_times(db, "aws_gis_actual"),
+                discover_market=lambda target: _discover_markets_for_forecast_dates(
+                    db, target, event_queue=low_latency_queue
+                ),
+                fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
+                base_sleep_seconds=args.sleep,
+                max_ticks=args.ticks,
+                quiet=not args.verbose,
+                low_latency_event_queue=low_latency_queue,
+                aws_actual_poll_fetch=aws_actual_poll_fetch,
+                aws_actual_poll_learned_times=aws_actual_poll_learned_times,
+            )
+        finally:
+            fast_worker.stop(timeout=5)
         return 0
     if args.command == "sample-ocf":
         migrate(db)

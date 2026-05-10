@@ -29,6 +29,43 @@ from whenitrains.storage import connect, live_setting_enabled, migrate, store_po
 
 
 class CliDiscoveryTests(unittest.TestCase):
+    def test_paper_scheduler_starts_blocking_fast_worker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            worker_events = []
+
+            class FakeWorker:
+                def __init__(self, **kwargs):
+                    worker_events.append(("init", kwargs["db_path"], kwargs["event_queue"]))
+
+                def start(self):
+                    worker_events.append("start")
+
+                def stop(self, timeout=None):
+                    worker_events.append(("stop", timeout))
+
+            with (
+                patch("whenitrains.cli.FastDecisionWorker", FakeWorker),
+                patch("whenitrains.cli.run_scheduled_paper_loop") as run_loop,
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "paper-scheduler",
+                        "--ticks",
+                        "0",
+                        "--no-startup-backup",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(worker_events[0][0], "init")
+            self.assertEqual(worker_events[0][1], db_path)
+            self.assertEqual(worker_events[1:], ["start", ("stop", 5)])
+            run_loop.assert_called_once()
+
     def test_fetch_orderbooks_fetches_tokens_concurrently_and_stores_snapshots(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
