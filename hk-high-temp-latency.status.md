@@ -262,6 +262,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 evidence archive duplicate checksum verifier pass: tightened `low-latency-verify-evidence-archive` so duplicate checksum entries for the same report file are rejected instead of silently accepting the last value. Verified red/green with `PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_fails_duplicate_checksum_entry`.
 
+2026-05-11 post-duplicate-checksum-verifier live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 1 ms: Couldn't connect to server`. Live/account evidence capture remains blocked on endpoint availability.
+
 2026-05-11 post-empty-archive-verifier live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 0 ms: Couldn't connect to server`. Live/account evidence remains blocked on endpoint availability.
 
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
