@@ -1782,8 +1782,8 @@ def _sha256_file(path: Path) -> str:
 
 def _manifest_checksums(manifest: str) -> dict[str, str]:
     checksums: dict[str, str] = {}
-    for line in manifest.splitlines():
-        if not line.startswith("sha256 ") or "=" not in line:
+    for line in _manifest_checksum_lines(manifest):
+        if "=" not in line:
             continue
         name, digest = line[len("sha256 ") :].split("=", 1)
         checksums[name] = digest
@@ -1794,10 +1794,22 @@ def _manifest_duplicate_checksums(manifest: str) -> list[str]:
     return _duplicate_values(
         [
             line[len("sha256 ") :].split("=", 1)[0]
-            for line in manifest.splitlines()
-            if line.startswith("sha256 ") and "=" in line
+            for line in _manifest_checksum_lines(manifest)
+            if "=" in line
         ]
     )
+
+
+def _manifest_checksum_lines(manifest: str) -> list[str]:
+    lines: list[str] = []
+    in_checksums_section = False
+    for line in manifest.splitlines():
+        if line == "checksums:":
+            in_checksums_section = True
+            continue
+        if in_checksums_section and line.startswith("sha256 "):
+            lines.append(line)
+    return lines
 
 
 def _manifest_file_list(manifest: str) -> list[str]:
