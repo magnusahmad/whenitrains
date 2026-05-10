@@ -332,6 +332,28 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("evidence archive gates missing:", stdout.getvalue())
             self.assertIn("hko_commit_to_decision_under_1s", stdout.getvalue())
 
+    def test_low_latency_verify_evidence_archive_fails_missing_manifest_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                manifest.replace("low latency evidence archive\n", "", 1)
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("evidence archive manifest header missing", stdout.getvalue())
+
     def test_low_latency_verify_evidence_archive_requires_exact_passed_gate(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "evidence"
