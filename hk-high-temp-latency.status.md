@@ -20,6 +20,8 @@ Low-latency readiness M2 groundwork is also partially implemented. `OrderBookCac
 
 Low-latency readiness M3 groundwork has a standalone execution scheduler primitive. Candidate actions declare conflict keys such as token, position, or shared risk budget keys; independent actions can run concurrently, while conflicting actions are serialized in deterministic input order. This is not yet wired into the runner candidate planner.
 
+Low-latency readiness M4 groundwork is partially implemented. `live_user_events` stores authenticated user-channel order/trade lifecycle events independently from final live position state, and `apply_user_channel_event` can map order lifecycle statuses, apply matched trade deltas to local positions exactly once, and converge a submitted order after a restart when a later user trade event arrives. A real authenticated WebSocket client, reconnect loop, startup watchdog integration, and freeze-on-drift policy remain pending.
+
 The paper/live scheduler now performs a startup warmup loop before allowing trading decisions. On process start it may fetch HKO data, discover markets, and fetch orderbooks, but it skips the first trading tick so entries cannot be opened against a partially refreshed local data round.
 
 Dashboard executable PnL now values open positions against only the latest orderbook snapshot. If the latest snapshot has no bid depth, older non-null bids are ignored so stale bids cannot create phantom unrealized gains.
@@ -49,6 +51,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 2026-05-11 market WebSocket cache pass: added `src/whenitrains/orderbook_cache.py` with market subscription payloads, fixture-driven book cache updates, stale-cache rejection, snapshot persistence metadata, active token listing, and subscription-change detection. Live execution now accepts an optional book cache and avoids the hot-path REST `/book` fetch when a fresh cache book is available. Verified `PYTHONPATH=src python3 -m unittest tests.test_orderbook_cache` plus focused live runner tests.
 
 2026-05-11 execution scheduler pass: added `src/whenitrains/execution_scheduler.py` and `tests/test_execution_scheduler.py`. Verification covers independent candidate concurrency and deterministic serialization for conflicting token/risk keys. Runner integration and source-event candidate planning remain pending.
+
+2026-05-11 user WebSocket reconciliation pass: added `src/whenitrains/live_user_stream.py`, additive `live_user_events` storage, and `tests/test_live_user_stream.py`. Verification covers `PLACEMENT`, `UPDATE`, `CANCELLATION`, `MATCHED`, `MINED`, `CONFIRMED`, `RETRYING`, and `FAILED` order fixtures, idempotent matched trade application, and crash/restart convergence from a submitted row plus a later user trade event.
 
 Past-date unresolved local positions remain a documented residual risk. The real market should eventually resolve, but local paper/live state still needs a reconcile/settlement path to reflect that resolution in risk and dashboard state if the scheduler missed the same-day exit window.
 

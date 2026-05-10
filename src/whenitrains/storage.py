@@ -254,6 +254,21 @@ def migrate(db: sqlite3.Connection) -> None:
             updated_at_utc text not null
         );
 
+        create table if not exists live_user_events (
+            id integer primary key autoincrement,
+            event_id text not null unique,
+            received_at_utc text not null,
+            event_type text not null,
+            clob_order_id text,
+            outcome_id text,
+            status text,
+            side text,
+            price real,
+            size real,
+            applied_position_delta integer not null default 0,
+            raw_event_json text not null
+        );
+
         create table if not exists risk_events (
             id integer primary key autoincrement,
             created_at_utc text,
