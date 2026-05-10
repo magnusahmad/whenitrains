@@ -176,6 +176,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 HKO public-availability cluster gate pass: `hko-source-timing-report` now includes signed fetch-to-HTTP-`Last-Modified` offsets, and `low-latency-readiness-report --require-evidence` now requires at least two HKO fetch attempts within the 20-second public-availability burst window. This makes the M5 dry-run requirement objective in the production report instead of only proving generic HKO timing rows exist. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report tests.test_cli.CliDiscoveryTests.test_hko_source_timing_report_summarizes_aws_fetch_attempts`.
 
+2026-05-11 live log access retry: `curl -L --max-time 10 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 0 ms: Couldn't connect to server`. Live network smoke, production readiness report output, and production latency evidence remain blocked on endpoint availability.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
