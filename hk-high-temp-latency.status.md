@@ -194,6 +194,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live CLOB drift scan evidence gate pass: the live scheduler now records `live_clob_drift_scan_clear` risk events when startup/watchdog local-vs-CLOB sellable-balance scans return clean, and `low-latency-readiness-report --require-evidence` requires that clear scan evidence. This makes local-vs-CLOB drift proof explicit instead of inferred from the absence of unresolved/problem orders. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report tests.test_cli.CliDiscoveryTests.test_live_scheduler_reconciles_pending_orders_before_watchdog_drift_scan`.
 
+2026-05-11 live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` timed out after 8003 ms with `curl: (28) Connection timed out after 8003 milliseconds`, so live scheduler log capture remains blocked on endpoint availability.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
