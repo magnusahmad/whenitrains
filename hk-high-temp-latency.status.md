@@ -26,7 +26,7 @@ Low-latency readiness M5 polling groundwork is partially implemented. Learned AW
 
 Low-latency readiness M6 groundwork has started with a DB-specific exclusive live scheduler lock and stale submitted-order watchdog. `live-scheduler` now fails closed if another process already holds the lock for the same SQLite database, and it freezes new entries when previously submitted live orders are older than the configured watchdog threshold. Broader live startup health checks, external alerting, and a complete runbook remain pending.
 
-Latency reporting can now summarize trace rows directly from the database. `latency-report <start_stage> <end_stage>` prints count plus p50/p95/p99 nearest-rank durations, allowing live checks for HKO commit-to-decision and later submit/fill stages as those stages are populated.
+Latency reporting can now summarize trace rows directly from the database. `latency-report <start_stage> <end_stage>` prints count plus p50/p95/p99 nearest-rank durations. Event-keyed live buy/sell execution records `order_submitted`, `clob_ack`, `fill_matched`, and `fill_confirmed` stages when the order fills, allowing live checks for HKO commit-to-decision and submit/fill timing.
 
 The paper/live scheduler now performs a startup warmup loop before allowing trading decisions. On process start it may fetch HKO data, discover markets, and fetch orderbooks, but it skips the first trading tick so entries cannot be opened against a partially refreshed local data round.
 
@@ -67,6 +67,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 2026-05-11 latency reporting pass: added `latency_duration_summary` and `whenitrains latency-report`. Verification covers percentile calculation, ignoring incomplete events, and CLI output.
 
 2026-05-11 stale live-order watchdog pass: added `freeze_new_entries_for_stale_submitted_orders` and live-scheduler startup wiring. The watchdog sets `block_new_entries`, records a critical `live_stale_submitted_orders` risk event, and still lets the scheduler continue in exit/reconcile-capable mode. Verified with `PYTHONPATH=src python3 -m unittest tests.test_live.LiveTests.test_stale_submitted_order_watchdog_freezes_new_entries`.
+
+2026-05-11 live execution latency pass: event-keyed live buy/sell paths now record `order_submitted`, `clob_ack`, `fill_matched`, and `fill_confirmed` latency trace stages around FAK submit and local fill application. Verified with `PYTHONPATH=src python3 -m unittest tests.test_live.LiveTests.test_execute_live_buy_records_latency_stages_for_event_key` and `tests.test_latency_report`.
 
 Past-date unresolved local positions remain a documented residual risk. The real market should eventually resolve, but local paper/live state still needs a reconcile/settlement path to reflect that resolution in risk and dashboard state if the scheduler missed the same-day exit window.
 

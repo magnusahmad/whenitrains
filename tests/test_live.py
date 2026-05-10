@@ -31,6 +31,7 @@ from whenitrains.storage import (
     migrate,
     set_live_setting,
     store_live_order,
+    latency_stages_for_event,
     upsert_live_position,
 )
 
@@ -836,6 +837,38 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(result.status, "filled")
             self.assertEqual(get_live_setting(db, "insufficient_balance_error_count"), "0")
             self.assertFalse(live_setting_enabled(db, "block_new_entries"))
+
+    def test_execute_live_buy_records_latency_stages_for_event_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            client = FakeClobClient()
+
+            result = execute_live_buy(
+                db,
+                client,
+                token_id="yes25",
+                side="YES",
+                size_usd=5,
+                asks=[(0.40, 100)],
+                reason="test live buy",
+                max_price=0.40,
+                min_fill_usd=5,
+                order_cap_usd=5,
+                label="25C",
+                event_type="aws_actual_transition",
+                event_key="actual:2026-05-08:max",
+            )
+
+            self.assertEqual(result.status, "filled")
+            stages = [
+                row["stage"]
+                for row in latency_stages_for_event(db, "actual:2026-05-08:max")
+            ]
+            self.assertEqual(
+                stages,
+                ["order_submitted", "clob_ack", "fill_matched", "fill_confirmed"],
+            )
 
     def test_execute_live_sell_closes_position_from_fill(self):
         with tempfile.TemporaryDirectory() as tmp:

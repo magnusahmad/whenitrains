@@ -5,6 +5,7 @@ import json
 import shlex
 import sqlite3
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
@@ -20,6 +21,7 @@ from .storage import (
     live_realized_pnl_since,
     live_setting_enabled,
     live_total_open_exposure,
+    record_latency_stage,
     set_live_setting,
     store_live_order,
     store_risk_event,
@@ -383,6 +385,23 @@ class PolymarketClobClient:
             return None
 
 
+def _record_live_latency_stage(
+    db: sqlite3.Connection,
+    event_key: str | None,
+    stage: str,
+    event_type: str | None,
+    *,
+    token_id: str,
+    clob_order_id: str | None = None,
+) -> None:
+    if event_key is None:
+        return
+    details = {"token_id": token_id}
+    if clob_order_id is not None:
+        details["clob_order_id"] = clob_order_id
+    record_latency_stage(db, event_key, stage, time.monotonic(), event_type, details)
+
+
 def _floor_decimal(value: float, quantum: str) -> float:
     return float(Decimal(str(value)).quantize(Decimal(quantum), rounding=ROUND_DOWN))
 
@@ -646,6 +665,13 @@ def execute_live_buy(
     balance_before = _sellable_token_balance(client, token_id)
     request = {"token_id": token_id, "price": quote.limit_price, "size_usd": quote.estimated_cost_usd, "order_type": "FAK"}
     try:
+        _record_live_latency_stage(
+            db,
+            event_key,
+            "order_submitted",
+            event_type,
+            token_id=token_id,
+        )
         response = client.buy_fak(token_id, float(quote.limit_price), quote.estimated_cost_usd)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
@@ -677,6 +703,14 @@ def execute_live_buy(
         return LiveExecutionResult("error", token_id, f"BUY_{side}", None, 0, 0, error)
     _reset_insufficient_balance_submit_errors(db)
     clob_order_id = _order_id(response)
+    _record_live_latency_stage(
+        db,
+        event_key,
+        "clob_ack",
+        event_type,
+        token_id=token_id,
+        clob_order_id=clob_order_id,
+    )
     order_id = store_live_order(
         db,
         outcome_id=token_id,
@@ -730,7 +764,23 @@ def execute_live_buy(
         raw_reconcile=reconcile,
     )
     if fill_shares > 0:
+        _record_live_latency_stage(
+            db,
+            event_key,
+            "fill_matched",
+            event_type,
+            token_id=token_id,
+            clob_order_id=clob_order_id,
+        )
         _apply_live_buy_fill(db, token_id, fill_shares, fill_size_usd)
+        _record_live_latency_stage(
+            db,
+            event_key,
+            "fill_confirmed",
+            event_type,
+            token_id=token_id,
+            clob_order_id=clob_order_id,
+        )
     return LiveExecutionResult(status, token_id, f"BUY_{side}", fill_price, fill_size_usd, fill_shares, reason, clob_order_id)
 
 
@@ -869,6 +919,13 @@ def execute_live_sell(
         )
     request = {"token_id": token_id, "price": best_bid, "shares": submitted_shares, "order_type": "FAK"}
     try:
+        _record_live_latency_stage(
+            db,
+            event_key,
+            "order_submitted",
+            event_type,
+            token_id=token_id,
+        )
         response = client.sell_fak(token_id, best_bid, submitted_shares)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
@@ -889,6 +946,14 @@ def execute_live_sell(
         )
         return LiveExecutionResult("error", token_id, "SELL", None, 0, 0, error)
     clob_order_id = _order_id(response)
+    _record_live_latency_stage(
+        db,
+        event_key,
+        "clob_ack",
+        event_type,
+        token_id=token_id,
+        clob_order_id=clob_order_id,
+    )
     order_id = store_live_order(
         db,
         outcome_id=token_id,
@@ -931,7 +996,23 @@ def execute_live_sell(
         raw_reconcile=reconcile,
     )
     if sold > 0:
+        _record_live_latency_stage(
+            db,
+            event_key,
+            "fill_matched",
+            event_type,
+            token_id=token_id,
+            clob_order_id=clob_order_id,
+        )
         _apply_live_sell_fill(db, token_id, sold, proceeds)
+        _record_live_latency_stage(
+            db,
+            event_key,
+            "fill_confirmed",
+            event_type,
+            token_id=token_id,
+            clob_order_id=clob_order_id,
+        )
     return LiveExecutionResult(status, token_id, "SELL", fill_price, proceeds, sold, reason, clob_order_id)
 
 
