@@ -2674,6 +2674,11 @@ def _live_auth_smoke_summary(db) -> dict[str, object]:
         select count(*) as count
         from risk_events
         where event_type = 'live_auth_smoke_ok'
+          and length(trim(coalesce(json_extract(details_json, '$.signer_address'), ''))) > 0
+          and length(trim(coalesce(json_extract(details_json, '$.funder_address'), ''))) > 0
+          and json_extract(details_json, '$.allowance_ok') = 1
+          and cast(json_extract(details_json, '$.balance_usd') as real)
+              >= cast(json_extract(details_json, '$.required_balance_usd') as real)
         """
     ).fetchone()
     latest_row = db.execute(

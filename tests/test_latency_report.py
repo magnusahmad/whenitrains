@@ -1929,7 +1929,14 @@ class LatencyReportTests(unittest.TestCase):
                 db,
                 "live_auth_smoke_ok",
                 "info",
-                {"signer_address": "0xsigner", "reason": "ok"},
+                {
+                    "signer_address": "0xsigner",
+                    "funder_address": "0xfunder",
+                    "required_balance_usd": 5.0,
+                    "balance_usd": 42.0,
+                    "allowance_ok": True,
+                    "reason": "ok",
+                },
             )
             store_risk_event(
                 db,
@@ -1954,6 +1961,37 @@ class LatencyReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn(
                 "gate live_auth_smoke_ok=missing count=1 latest=failed",
+                text,
+            )
+
+    def test_low_latency_readiness_report_fails_when_auth_smoke_ok_lacks_preflight_details(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_risk_event(
+                db,
+                "live_auth_smoke_ok",
+                "info",
+                {"signer_address": "0xsigner", "reason": "ok"},
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "gate live_auth_smoke_ok=missing count=0 latest=ok",
                 text,
             )
 
