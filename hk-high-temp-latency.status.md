@@ -68,6 +68,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 ladder metadata precompute pass: added `src/whenitrains/ladder_metadata.py` with target-date token-side metadata for active highest/lowest ladders, including latest book prices, tick size, min order size, open position state, and remaining budget. `store_orderbook` now persists tick/min-size metadata into snapshots so the precompute path can avoid hard-coded exchange defaults. Verification covers the metadata builder and latest-orderbook parsing.
 
+2026-05-11 live log access attempt: attempted to fetch `http://192.168.1.23:8765/` from this machine for live smoke evidence, but the request timed out after 75 seconds without connecting. Live network smoke and production sub-second commit-to-decision proof remain unverified in this session.
+
 2026-05-11 live execution benchmark pass: added a fake-clock test that records `decision_started` then runs `execute_live_buy`, verifying `decision_started -> order_submitted` p95 is under 100 ms excluding network.
 
 2026-05-11 actual-cross runner planner pass: actual max-cross candidate executions now flow through planned candidate actions and `ExecutionScheduler`, with single-worker in-thread execution to avoid SQLite cross-thread access. Verification covers fast-lane bridge use plus the focused actual-cross behavior matrix.
