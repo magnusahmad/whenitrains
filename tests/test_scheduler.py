@@ -5,6 +5,7 @@ from datetime import datetime, time, timedelta
 from io import StringIO
 from pathlib import Path
 from contextlib import redirect_stdout
+from unittest.mock import patch
 
 from whenitrains.alerting import MemoryAlertSink
 from whenitrains.hko import HKT
@@ -687,6 +688,56 @@ HKO,27.3,28.5,24.0
 
             self.assertEqual(calls, [("fast", now.date())])
             self.assertIn("fast hko events", output.getvalue())
+
+    def test_scheduler_uses_default_fast_event_dispatch_without_custom_handler(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            queue = LowLatencyEventQueue()
+            queue.put(
+                AlphaEvent(
+                    kind="forecast_sample_changed",
+                    event_key="forecast_sample_changed:2026-05-04:1->2",
+                    target_date_hkt="2026-05-04",
+                    source_row_id=2,
+                    previous_row_id=1,
+                    committed_monotonic=100.0,
+                    detected_monotonic=100.0,
+                    details={},
+                )
+            )
+            calls = []
+            now = datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT)
+
+            def watchdog_tick(_db, today_hkt):
+                calls.append(("watchdog", today_hkt))
+                return RunnerResult(notes=("watchdog",))
+
+            def fast_side_effect(_db, event_queue, **_kwargs):
+                event_queue.get_nowait()
+                return type("FastResult", (), {"result": RunnerResult(notes=("fast",))})()
+
+            with patch(
+                "whenitrains.scheduler.process_next_fast_event",
+                side_effect=fast_side_effect,
+            ) as fast:
+                with redirect_stdout(StringIO()):
+                    run_scheduled_paper_loop(
+                        db,
+                        fetch_since_midnight=lambda: "",
+                        fetch_bulletin=lambda: "",
+                        discover_market=lambda target: None,
+                        fetch_orderbooks=lambda target: None,
+                        run_tick_fn=watchdog_tick,
+                        low_latency_event_queue=queue,
+                        max_ticks=2,
+                        now_fn=lambda: now,
+                        quiet=True,
+                        base_sleep_seconds=0,
+                    )
+
+            self.assertEqual(calls, [])
+            self.assertIsNone(fast.call_args.kwargs["decision_handler"])
 
     def test_scheduler_stops_when_stop_event_is_set(self):
         with tempfile.TemporaryDirectory() as tmp:

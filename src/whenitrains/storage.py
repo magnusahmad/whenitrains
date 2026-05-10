@@ -717,11 +717,17 @@ def store_hko_forecasts(
 
 
 def store_ocf_forecast_samples(
-    db: sqlite3.Connection, snapshot_id: int, samples: list[OcfForecastSample]
+    db: sqlite3.Connection,
+    snapshot_id: int,
+    samples: list[OcfForecastSample],
+    *,
+    event_queue=None,
+    monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
+    sample_ids: list[int] = []
     for sample in samples:
-        db.execute(
+        cursor = db.execute(
             """
             insert into ocf_forecast_samples
             (snapshot_id, fetched_at_utc, forecast_date_hkt, forecast_min_c,
@@ -741,7 +747,18 @@ def store_ocf_forecast_samples(
                 json.dumps(sample.raw),
             ),
         )
+        sample_ids.append(int(cursor.lastrowid))
     db.commit()
+    if event_queue is not None and sample_ids:
+        from .low_latency import enqueue_ocf_forecast_sample_events
+
+        enqueue_ocf_forecast_sample_events(
+            db,
+            event_queue,
+            sample_ids=sample_ids,
+            committed_monotonic=monotonic_fn(),
+            monotonic_fn=monotonic_fn,
+        )
 
 
 def store_polymarket_event(db: sqlite3.Connection, market: TemperatureMarket) -> None:

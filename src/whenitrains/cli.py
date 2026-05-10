@@ -793,7 +793,9 @@ def main(argv: list[str] | None = None) -> int:
                 run_scheduled_paper_loop(
                     db,
                     fetch_since_midnight=lambda: _fetch_since_midnight(db),
-                    fetch_bulletin=lambda: _fetch_bulletin(db),
+                    fetch_bulletin=lambda: _fetch_bulletin(
+                        db, event_queue=low_latency_queue
+                    ),
                     fetch_current_temperature=lambda: _fetch_current_temperature(
                         db, event_queue=low_latency_queue
                     ),
@@ -872,7 +874,7 @@ def main(argv: list[str] | None = None) -> int:
         run_scheduled_paper_loop(
             db,
             fetch_since_midnight=lambda: _fetch_since_midnight(db),
-            fetch_bulletin=lambda: _fetch_bulletin(db),
+            fetch_bulletin=lambda: _fetch_bulletin(db, event_queue=low_latency_queue),
             fetch_current_temperature=lambda: _fetch_current_temperature(
                 db, event_queue=low_latency_queue
             ),
@@ -1063,12 +1065,12 @@ def _record_aws_actual_update_minutes(db, response, observation) -> None:
         )
 
 
-def _fetch_bulletin(db) -> str:
-    snapshot_hash, _forecasts = _fetch_ocf_forecast(db)
+def _fetch_bulletin(db, *, event_queue=None) -> str:
+    snapshot_hash, _forecasts = _fetch_ocf_forecast(db, event_queue=event_queue)
     return snapshot_hash
 
 
-def _fetch_ocf_forecast(db) -> tuple[str, list]:
+def _fetch_ocf_forecast(db, *, event_queue=None) -> tuple[str, list]:
     try:
         response = fetch_response(AWS_GIS_FORECAST_URL)
     except Exception:
@@ -1076,7 +1078,9 @@ def _fetch_ocf_forecast(db) -> tuple[str, list]:
     ocf_snapshot = _store_hko_raw_snapshot(db, response)
     forecasts, samples = parse_ocf_station_json(response.text)
     store_hko_forecasts(db, ocf_snapshot.id, forecasts)
-    store_ocf_forecast_samples(db, ocf_snapshot.id, samples)
+    store_ocf_forecast_samples(
+        db, ocf_snapshot.id, samples, event_queue=event_queue
+    )
     _record_ocf_update_minutes(db, response.headers, forecasts)
     return ocf_snapshot.content_hash, forecasts
 

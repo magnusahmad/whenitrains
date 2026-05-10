@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
-from .runner import RunnerResult, process_actual_entries
+from .runner import RunnerResult, process_actual_entries, process_forecast_entries
 from .storage import record_latency_stage
 
 
@@ -147,11 +147,80 @@ def enqueue_hko_actual_transition_events(
     return events
 
 
+def enqueue_ocf_forecast_sample_events(
+    db: sqlite3.Connection,
+    event_queue: LowLatencyEventQueue,
+    *,
+    sample_ids: list[int],
+    committed_monotonic: float | None = None,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> list[AlphaEvent]:
+    committed = monotonic_fn() if committed_monotonic is None else committed_monotonic
+    detected: float | None = None
+    events: list[AlphaEvent] = []
+    for sample_id in sample_ids:
+        new = db.execute(
+            """
+            select id, forecast_date_hkt, forecast_min_c, forecast_max_c,
+                   raw_min_c, raw_max_c, hourly_temperatures_json
+            from ocf_forecast_samples
+            where id = ?
+            """,
+            (sample_id,),
+        ).fetchone()
+        if new is None or new["forecast_date_hkt"] is None:
+            continue
+        previous = db.execute(
+            """
+            select id, forecast_date_hkt, forecast_min_c, forecast_max_c,
+                   raw_min_c, raw_max_c, hourly_temperatures_json
+            from ocf_forecast_samples
+            where id < ?
+              and forecast_date_hkt = ?
+            order by id desc
+            limit 1
+            """,
+            (sample_id, new["forecast_date_hkt"]),
+        ).fetchone()
+        if previous is None or not _forecast_sample_changed(previous, new):
+            continue
+        if detected is None:
+            detected = monotonic_fn()
+        events.append(
+            _forecast_sample_event(
+                new=new,
+                previous=previous,
+                committed=committed,
+                detected=detected,
+            )
+        )
+
+    for event in events:
+        record_latency_stage(
+            db,
+            event.event_key,
+            "db_committed",
+            event.committed_monotonic,
+            event.kind,
+            {"source_row_id": event.source_row_id},
+        )
+        record_latency_stage(
+            db,
+            event.event_key,
+            "event_detected",
+            event.detected_monotonic,
+            event.kind,
+            event.details,
+        )
+        event_queue.put(event)
+    return events
+
+
 def process_next_fast_event(
     db: sqlite3.Connection,
     event_queue: LowLatencyEventQueue,
     *,
-    decision_handler: Callable[[sqlite3.Connection, date], object] = process_actual_entries,
+    decision_handler: Callable[[sqlite3.Connection, date], object] | None = None,
     monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> FastEventResult:
     event = event_queue.get_nowait()
@@ -164,7 +233,8 @@ def process_next_fast_event(
         event.kind,
         event.details,
     )
-    result = decision_handler(db, target)
+    handler = decision_handler or _default_decision_handler(event.kind)
+    result = handler(db, target)
     record_latency_stage(
         db,
         event.event_key,
@@ -174,6 +244,12 @@ def process_next_fast_event(
         _result_details(result),
     )
     return FastEventResult(event_key=event.event_key, result=result)
+
+
+def _default_decision_handler(kind: str) -> Callable[[sqlite3.Connection, date], object]:
+    if kind == "forecast_sample_changed":
+        return process_forecast_entries
+    return process_actual_entries
 
 
 def _actual_event(
@@ -209,6 +285,52 @@ def _actual_event(
             "observed_at_hkt": new["observed_at_hkt"],
         },
     )
+
+
+def _forecast_sample_event(
+    *,
+    new: sqlite3.Row,
+    previous: sqlite3.Row,
+    committed: float,
+    detected: float,
+) -> AlphaEvent:
+    target_date = str(new["forecast_date_hkt"])
+    event_key = (
+        f"forecast_sample_changed:{target_date}:"
+        f"{previous['id']}->{new['id']}"
+    )
+    return AlphaEvent(
+        kind="forecast_sample_changed",
+        event_key=event_key,
+        target_date_hkt=target_date,
+        source_row_id=int(new["id"]),
+        previous_row_id=int(previous["id"]),
+        committed_monotonic=committed,
+        detected_monotonic=detected,
+        details={
+            "previous_row_id": int(previous["id"]),
+            "source_row_id": int(new["id"]),
+            "old_forecast_min_c": _float_or_none(previous["forecast_min_c"]),
+            "new_forecast_min_c": _float_or_none(new["forecast_min_c"]),
+            "old_forecast_max_c": _float_or_none(previous["forecast_max_c"]),
+            "new_forecast_max_c": _float_or_none(new["forecast_max_c"]),
+            "old_raw_min_c": _float_or_none(previous["raw_min_c"]),
+            "new_raw_min_c": _float_or_none(new["raw_min_c"]),
+            "old_raw_max_c": _float_or_none(previous["raw_max_c"]),
+            "new_raw_max_c": _float_or_none(new["raw_max_c"]),
+        },
+    )
+
+
+def _forecast_sample_changed(previous: sqlite3.Row, new: sqlite3.Row) -> bool:
+    keys = (
+        "forecast_min_c",
+        "forecast_max_c",
+        "raw_min_c",
+        "raw_max_c",
+        "hourly_temperatures_json",
+    )
+    return any(previous[key] != new[key] for key in keys)
 
 
 def _float_or_none(value) -> float | None:

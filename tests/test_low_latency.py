@@ -3,14 +3,16 @@ import tempfile
 import unittest
 from datetime import date, datetime
 from pathlib import Path
+from unittest.mock import patch
 
-from whenitrains.hko import HKT, HkoCurrentTemperature
+from whenitrains.hko import HKT, HkoCurrentTemperature, OcfForecastSample
 from whenitrains.low_latency import LowLatencyEventQueue, process_next_fast_event
 from whenitrains.storage import (
     connect,
     latency_stages_for_event,
     migrate,
     store_hko_current_temperature,
+    store_ocf_forecast_samples,
     store_orderbook,
     store_raw_snapshot,
     store_trading_decision,
@@ -44,6 +46,43 @@ class LowLatencyReadinessTests(unittest.TestCase):
             )
             self.assertAlmostEqual(stages[0]["monotonic_ts"], 100.2)
             self.assertAlmostEqual(stages[1]["monotonic_ts"], 100.2)
+
+    def test_forecast_sample_change_enqueues_latency_stages_after_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            queue = LowLatencyEventQueue()
+            clock = _FakeMonotonic([300.0, 300.2, 300.2])
+            first_snapshot = store_raw_snapshot(db, "hko", "ocf-1", "{}")
+            second_snapshot = store_raw_snapshot(db, "hko", "ocf-2", "{}")
+
+            store_ocf_forecast_samples(
+                db,
+                first_snapshot.id,
+                [_ocf_sample(29.1)],
+                event_queue=queue,
+                monotonic_fn=clock,
+            )
+            store_ocf_forecast_samples(
+                db,
+                second_snapshot.id,
+                [_ocf_sample(30.2)],
+                event_queue=queue,
+                monotonic_fn=clock,
+            )
+
+            event = queue.get_nowait()
+            stages = latency_stages_for_event(db, event.event_key)
+
+            self.assertEqual(event.kind, "forecast_sample_changed")
+            self.assertEqual(event.target_date_hkt, "2026-05-04")
+            self.assertEqual(event.details["old_raw_max_c"], 29.1)
+            self.assertEqual(event.details["new_raw_max_c"], 30.2)
+            self.assertEqual(
+                [stage["stage"] for stage in stages],
+                ["db_committed", "event_detected"],
+            )
+            self.assertAlmostEqual(stages[0]["monotonic_ts"], 300.2)
 
     def test_fast_worker_starts_decision_under_one_second_after_hko_commit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,6 +126,24 @@ class LowLatencyReadinessTests(unittest.TestCase):
                 1.0,
             )
             self.assertIn("decision_completed", [stage["stage"] for stage in stages])
+
+    def test_fast_worker_dispatches_forecast_sample_events_to_forecast_handler(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            queue = LowLatencyEventQueue()
+            queue.put(
+                _alpha_event(
+                    kind="forecast_sample_changed",
+                    event_key="forecast_sample_changed:2026-05-04:1->2",
+                )
+            )
+
+            with patch("whenitrains.low_latency.process_forecast_entries") as handler:
+                handler.return_value = object()
+                process_next_fast_event(db, queue, monotonic_fn=_FakeMonotonic([400.0, 400.1]))
+
+            handler.assert_called_once_with(db, date(2026, 5, 4))
 
     def test_trading_decision_records_orderbook_state_age(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -163,4 +220,31 @@ def _store_aws_actual(
         ),
         event_queue=event_queue,
         monotonic_fn=monotonic_fn,
+    )
+
+
+def _ocf_sample(raw_max_c: float) -> OcfForecastSample:
+    return OcfForecastSample(
+        forecast_date_hkt=date(2026, 5, 4),
+        forecast_min_c=22,
+        forecast_max_c=round(raw_max_c),
+        raw_min_c=21.8,
+        raw_max_c=raw_max_c,
+        hourly_temperatures=[{"ForecastHour": "15", "Temperature": raw_max_c}],
+        raw={"LastModified": "2026-05-04T01:00:00+08:00"},
+    )
+
+
+def _alpha_event(kind: str, event_key: str):
+    from whenitrains.low_latency import AlphaEvent
+
+    return AlphaEvent(
+        kind=kind,
+        event_key=event_key,
+        target_date_hkt="2026-05-04",
+        source_row_id=2,
+        previous_row_id=1,
+        committed_monotonic=100.0,
+        detected_monotonic=100.0,
+        details={},
     )

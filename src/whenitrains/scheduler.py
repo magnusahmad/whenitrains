@@ -352,7 +352,6 @@ def run_scheduled_paper_loop(
                         result, reconcile_watchdog_fn(db)
                     )
                 if low_latency_event_queue is not None and not low_latency_event_queue.empty():
-                    handler = fast_event_handler or tick_fn
                     result = _merge_runner_results(
                         result, RunnerResult(notes=("fast event queue drained",))
                     )
@@ -360,7 +359,7 @@ def run_scheduled_paper_loop(
                         fast_result = process_next_fast_event(
                             db,
                             low_latency_event_queue,
-                            decision_handler=handler,
+                            decision_handler=fast_event_handler,
                         )
                         if isinstance(fast_result.result, RunnerResult):
                             result = _merge_runner_results(result, fast_result.result)
