@@ -26,6 +26,8 @@ Low-latency readiness M5 polling groundwork is partially implemented. Learned AW
 
 Low-latency readiness M6 groundwork has started with a DB-specific exclusive live scheduler lock. `live-scheduler` now fails closed if another process already holds the lock for the same SQLite database. Broader live startup health checks, external alerting, and a complete runbook remain pending.
 
+Latency reporting can now summarize trace rows directly from the database. `latency-report <start_stage> <end_stage>` prints count plus p50/p95/p99 nearest-rank durations, allowing live checks for HKO commit-to-decision and later submit/fill stages as those stages are populated.
+
 The paper/live scheduler now performs a startup warmup loop before allowing trading decisions. On process start it may fetch HKO data, discover markets, and fetch orderbooks, but it skips the first trading tick so entries cannot be opened against a partially refreshed local data round.
 
 Dashboard executable PnL now values open positions against only the latest orderbook snapshot. If the latest snapshot has no bid depth, older non-null bids are ignored so stale bids cannot create phantom unrealized gains.
@@ -61,6 +63,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 2026-05-11 polling hardening pass: added sub-second burst cadence for learned AWS actual publish windows and non-critical source backoff isolation. Verified with `PYTHONPATH=src python3 -m unittest tests.test_scheduler`.
 
 2026-05-11 operational lock pass: added `src/whenitrains/operational.py`, `tests/test_operational_readiness.py`, and live-scheduler lock wiring. Verification covers rejecting a second lock holder for the same DB and lock path selection.
+
+2026-05-11 latency reporting pass: added `latency_duration_summary` and `whenitrains latency-report`. Verification covers percentile calculation, ignoring incomplete events, and CLI output.
 
 Past-date unresolved local positions remain a documented residual risk. The real market should eventually resolve, but local paper/live state still needs a reconcile/settlement path to reflect that resolution in risk and dashboard state if the scheduler missed the same-day exit window.
 

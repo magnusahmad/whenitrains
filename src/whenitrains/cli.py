@@ -86,6 +86,7 @@ from .storage import (
     set_live_setting,
     live_setting_enabled,
     list_live_orders_for_reconcile,
+    latency_duration_summary,
 )
 
 
@@ -135,6 +136,9 @@ def main(argv: list[str] | None = None) -> int:
     backup_db = sub.add_parser("backup-db")
     backup_db.add_argument("--backup-dir")
     backup_db.add_argument("--keep", type=int, default=5)
+    latency_report = sub.add_parser("latency-report")
+    latency_report.add_argument("start_stage")
+    latency_report.add_argument("end_stage")
     accuracy = sub.add_parser("research-forecast-accuracy")
     accuracy.add_argument("--start")
     accuracy.add_argument("--end")
@@ -246,6 +250,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     db = connect(db_path)
+    if args.command == "latency-report":
+        migrate(db)
+        summary = latency_duration_summary(db, args.start_stage, args.end_stage)
+        print(
+            f"{summary['start_stage']} -> {summary['end_stage']} "
+            f"count={summary['count']} "
+            f"p50={_fmt_seconds(summary['p50_seconds'])} "
+            f"p95={_fmt_seconds(summary['p95_seconds'])} "
+            f"p99={_fmt_seconds(summary['p99_seconds'])}"
+        )
+        return 0
     if args.command == "init-db":
         migrate(db)
         print(f"initialized {args.db}")
@@ -1105,6 +1120,10 @@ def _fetch_orderbooks(
 
 def _fmt(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.4f}"
+
+
+def _fmt_seconds(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.3f}s"
 
 
 def _months_before(day: date, months: int) -> date:

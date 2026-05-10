@@ -626,6 +626,42 @@ def latency_stages_for_event(
     )
 
 
+def latency_duration_summary(
+    db: sqlite3.Connection, start_stage: str, end_stage: str
+) -> dict:
+    rows = db.execute(
+        """
+        select start.event_key,
+               min(start.monotonic_ts) as start_ts,
+               min(finish.monotonic_ts) as end_ts
+        from latency_trace_events start
+        join latency_trace_events finish on finish.event_key = start.event_key
+        where start.stage = ?
+          and finish.stage = ?
+          and finish.monotonic_ts >= start.monotonic_ts
+        group by start.event_key
+        order by end_ts - start_ts
+        """,
+        (start_stage, end_stage),
+    ).fetchall()
+    durations = [float(row["end_ts"]) - float(row["start_ts"]) for row in rows]
+    return {
+        "start_stage": start_stage,
+        "end_stage": end_stage,
+        "count": len(durations),
+        "p50_seconds": _nearest_rank_percentile(durations, 0.50),
+        "p95_seconds": _nearest_rank_percentile(durations, 0.95),
+        "p99_seconds": _nearest_rank_percentile(durations, 0.99),
+    }
+
+
+def _nearest_rank_percentile(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    index = max(0, min(len(values) - 1, int(len(values) * percentile + 0.999999) - 1))
+    return values[index]
+
+
 def store_hko_forecasts(
     db: sqlite3.Connection, snapshot_id: int, forecasts: list[HkoForecast]
 ) -> None:
