@@ -30,8 +30,10 @@ from whenitrains.storage import (
     live_dashboard_stats,
     live_total_open_exposure,
     migrate,
+    record_latency_stage,
     set_live_setting,
     store_live_order,
+    latency_duration_summary,
     latency_stages_for_event,
     upsert_live_position,
 )
@@ -870,6 +872,42 @@ class LiveTests(unittest.TestCase):
                 stages,
                 ["order_submitted", "clob_ack", "fill_matched", "fill_confirmed"],
             )
+
+    def test_execute_live_buy_decision_to_submit_latency_under_100ms_with_fake_clock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            event_key = "actual:2026-05-08:max"
+            record_latency_stage(
+                db,
+                event_key,
+                "decision_started",
+                100.0,
+                "aws_actual_transition",
+            )
+            client = FakeClobClient()
+
+            with patch("whenitrains.live.time.monotonic", side_effect=[100.05, 100.08, 100.09, 100.10]):
+                result = execute_live_buy(
+                    db,
+                    client,
+                    token_id="yes25",
+                    side="YES",
+                    size_usd=5,
+                    asks=[(0.40, 100)],
+                    reason="test live buy",
+                    max_price=0.40,
+                    min_fill_usd=5,
+                    order_cap_usd=5,
+                    label="25C",
+                    event_type="aws_actual_transition",
+                    event_key=event_key,
+                )
+
+            self.assertEqual(result.status, "filled")
+            summary = latency_duration_summary(db, "decision_started", "order_submitted")
+            self.assertEqual(summary["count"], 1)
+            self.assertLessEqual(summary["p95_seconds"], 0.1)
 
     def test_find_live_position_drifts_compares_local_to_clob_sellable_balance(self):
         with tempfile.TemporaryDirectory() as tmp:
