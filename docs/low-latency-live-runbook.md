@@ -17,6 +17,7 @@ PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-rea
 ```
 
 Archive this output with the scheduler logs. It is read-only and does not touch the database.
+The checklist includes the real-account kill-switch verification sequence and a settlement-validation reminder for the first resolved live market.
 
 4. Run a no-trade live network smoke to confirm both scheduler-owned WebSocket workers can start:
 

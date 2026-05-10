@@ -186,6 +186,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 user trade evidence gate pass: `low-latency-readiness-report --require-evidence` now requires a stored user-channel `trade` event with `applied_position_delta = 1`, so order lifecycle messages alone cannot satisfy M4 matched-trade evidence. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
 
+2026-05-11 checklist kill-switch/settlement pass: `live-readiness-checklist` now includes the persistent kill-switch verification sequence and an explicit live settlement validation reminder for the first resolved live market, so the generated evidence plan covers the remaining M6 proof points as well as network/auth/manual-money/capped-scheduler evidence. Verified with `PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_live_readiness_checklist_prints_ordered_evidence_commands`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

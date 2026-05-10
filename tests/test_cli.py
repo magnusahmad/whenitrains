@@ -409,6 +409,18 @@ class CliDiscoveryTests(unittest.TestCase):
             "live-scheduler --live --ticks 3 --verbose",
             text,
         )
+        self.assertIn("verify persistent kill-switch against the real account", text)
+        self.assertIn(
+            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
+            "live-kill-switch --block-new-entries",
+            text,
+        )
+        self.assertIn(
+            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
+            "live-kill-switch --allow-new-entries",
+            text,
+        )
+        self.assertIn("validate live settlement against CLOB/onchain truth", text)
         self.assertIn(
             "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
             "low-latency-readiness-report --require-evidence",

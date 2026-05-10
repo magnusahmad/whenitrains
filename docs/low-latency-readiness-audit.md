@@ -99,7 +99,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - Live scheduler takes a DB-specific exclusive lock.
 - Startup health covers WebSocket runtime, REST fallback, credentials, balance/allowance, stale submitted orders, and local/CLOB drift.
 - `live-auth-smoke --live` runs live preflight without placing orders and prints signer/funder, required balance, observed balance, allowance state, and reason for archived auth evidence.
-- `live-readiness-checklist` prints the ordered live evidence commands for network smoke, auth smoke, kill-switch status, minimum-size manual buy/sell, reconciliation, capped scheduler smoke, latency percentiles, and `low-latency-readiness-report --require-evidence`.
+- `live-readiness-checklist` prints the ordered live evidence commands for network smoke, auth smoke, kill-switch status, minimum-size manual buy/sell, reconciliation, real-account kill-switch verification, capped scheduler smoke, live settlement validation, latency percentiles, and `low-latency-readiness-report --require-evidence`.
 - Health failures freeze new entries and can emit alerts.
 - Trade alerts, source-freshness breach alerts, stalled-WebSocket freezes, stale submitted-order watchdog, persistent kill-switch exits, pending-order reconciliation, and live runbook are implemented.
 - Evidence: `src/whenitrains/operational.py`, `src/whenitrains/alerting.py`, `src/whenitrains/live.py`, `src/whenitrains/cli.py`, `docs/low-latency-live-runbook.md`.
