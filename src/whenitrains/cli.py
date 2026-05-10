@@ -1788,6 +1788,8 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             + ", ".join(missing_manifest_entries)
         )
     checksums = _manifest_checksums(manifest)
+    for line in _malformed_manifest_checksum_lines(manifest):
+        messages.append(f"evidence archive checksum entry malformed: {line}")
     duplicate_checksums = _manifest_duplicate_checksums(manifest)
     for name in duplicate_checksums:
         messages.append(f"evidence archive duplicate checksum entry: {name}")
@@ -2132,6 +2134,18 @@ def _manifest_checksums(manifest: str) -> dict[str, str]:
         name, digest = line[len("sha256 ") :].split("=", 1)
         checksums[name] = digest
     return checksums
+
+
+def _malformed_manifest_checksum_lines(manifest: str) -> list[str]:
+    malformed: list[str] = []
+    for line in _manifest_checksum_lines(manifest):
+        if "=" not in line:
+            malformed.append(line)
+            continue
+        name, digest = line[len("sha256 ") :].split("=", 1)
+        if not name or not digest:
+            malformed.append(line)
+    return malformed
 
 
 def _manifest_duplicate_checksums(manifest: str) -> list[str]:

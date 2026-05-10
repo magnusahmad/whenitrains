@@ -1022,6 +1022,31 @@ class LatencyReportTests(unittest.TestCase):
                 stdout.getvalue(),
             )
 
+    def test_low_latency_verify_evidence_archive_fails_malformed_checksum_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                manifest + "sha256 readiness_report.txt\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive checksum entry malformed: sha256 readiness_report.txt",
+                stdout.getvalue(),
+            )
+
     def test_low_latency_verify_evidence_archive_fails_unexpected_checksum_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "evidence"
