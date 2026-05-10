@@ -2318,6 +2318,50 @@ class LatencyReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn("gate user_channel_trade_applied=missing count=0", text)
 
+    def test_low_latency_readiness_report_require_evidence_fails_with_malformed_user_trade_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            db.execute(
+                """
+                insert into live_user_events
+                (event_id, received_at_utc, event_type, clob_order_id, outcome_id,
+                 status, side, price, size, applied_position_delta, raw_event_json)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "trade-event-1",
+                    "2026-05-11T00:00:00+00:00",
+                    "trade",
+                    None,
+                    "yes25",
+                    "MATCHED",
+                    "BUY",
+                    0.2,
+                    25.0,
+                    1,
+                    "{}",
+                ),
+            )
+            db.commit()
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("gate user_channel_trade_applied=missing count=0", text)
+
     def test_low_latency_readiness_report_require_evidence_fails_without_live_reconcile(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

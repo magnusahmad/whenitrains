@@ -2573,6 +2573,12 @@ def _live_user_trade_applied_count(db) -> int:
         from live_user_events
         where event_type = 'trade'
           and applied_position_delta = 1
+          and length(trim(coalesce(clob_order_id, ''))) > 0
+          and length(trim(coalesce(outcome_id, ''))) > 0
+          and status in ('MATCHED', 'MINED', 'CONFIRMED')
+          and side in ('BUY', 'SELL')
+          and coalesce(price, 0) > 0
+          and coalesce(size, 0) > 0
         """
     ).fetchone()
     return int(row["count"] or 0)
