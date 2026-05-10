@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -102,6 +103,22 @@ class UserWebSocketTests(unittest.IsolatedAsyncioTestCase):
             POLYMARKET_USER_WS_URL,
             "wss://ws-subscriptions-clob.polymarket.com/ws/user",
         )
+
+    def test_close_releases_owned_database_connection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            client = UserWebSocketClient(
+                db=db,
+                auth=UserWebSocketAuth("key", "secret", "passphrase"),
+                market_ids_fn=lambda: [],
+                connect_factory=lambda url: None,
+            )
+
+            client.close()
+
+            with self.assertRaises(sqlite3.ProgrammingError):
+                db.execute("select 1")
 
 
 if __name__ == "__main__":

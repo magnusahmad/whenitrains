@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from .orderbook_cache import MarketWebSocketSubscription, OrderBookCache
 
@@ -14,6 +14,11 @@ POLYMARKET_MARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market
 
 class MarketWebSocketError(RuntimeError):
     pass
+
+
+class StopSignal(Protocol):
+    def is_set(self) -> bool:
+        ...
 
 
 @dataclass
@@ -39,7 +44,7 @@ class MarketWebSocketClient:
 
     async def run_forever(
         self,
-        stop_event: asyncio.Event,
+        stop_event: StopSignal,
         *,
         reconnect_delay_seconds: float = 1.0,
     ) -> None:

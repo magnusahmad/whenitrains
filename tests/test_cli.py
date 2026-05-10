@@ -6,6 +6,7 @@ from contextlib import redirect_stdout
 from datetime import date
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from whenitrains.cli import (
@@ -158,6 +159,63 @@ class CliDiscoveryTests(unittest.TestCase):
                 stdout.getvalue().strip(),
                 "missing live env values: POLYMARKET_API_SECRET",
             )
+
+    def test_live_scheduler_starts_websocket_runtime_and_passes_book_cache_to_ticks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            runtime_events = []
+            book_cache = object()
+
+            class FakeRuntime:
+                def __init__(self):
+                    self.book_cache = book_cache
+
+                def start(self):
+                    runtime_events.append("start")
+
+                def stop(self, timeout=None):
+                    runtime_events.append(("stop", timeout))
+
+            fake_runtime = FakeRuntime()
+
+            def run_loop(*args, **kwargs):
+                kwargs["run_tick_fn"](args[0], date(2026, 5, 4))
+                kwargs["fast_event_handler"](args[0], date(2026, 5, 4))
+
+            stdout = StringIO()
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch("whenitrains.cli.PolymarketClobClient", return_value=object()),
+                patch(
+                    "whenitrains.cli.preflight_live",
+                    return_value=SimpleNamespace(ok=True, reason="ok"),
+                ),
+                patch(
+                    "whenitrains.cli.LiveWebSocketRuntime.for_live_scheduler",
+                    return_value=fake_runtime,
+                ) as runtime_factory,
+                patch("whenitrains.cli.run_scheduled_paper_loop", side_effect=run_loop),
+                patch("whenitrains.cli.run_live_tick", return_value=object()) as live_tick,
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-scheduler",
+                        "--live",
+                        "--ticks",
+                        "0",
+                        "--no-startup-backup",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            runtime_factory.assert_called_once()
+            self.assertEqual(runtime_events, ["start", ("stop", 5)])
+            self.assertEqual(live_tick.call_count, 2)
+            for call in live_tick.call_args_list:
+                self.assertIs(call.kwargs["book_cache"], book_cache)
 
     def test_discover_market_fetches_highest_and_lowest_temperature_events(self):
         with tempfile.TemporaryDirectory() as tmp:

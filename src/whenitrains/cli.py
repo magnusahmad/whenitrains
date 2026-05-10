@@ -36,6 +36,7 @@ from .hko import (
 )
 from .hourly_accuracy import build_hourly_accuracy_report, render_hourly_accuracy_report
 from .low_latency import LowLatencyEventQueue
+from .live_runtime import LiveWebSocketRuntime
 from .operational import LiveSchedulerLock, LiveSchedulerLockError
 from .polymarket import (
     event_slugs_for_date,
@@ -219,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
     live_scheduled.add_argument("--ticks", type=int)
     live_scheduled.add_argument("--verbose", action="store_true")
     live_scheduled.add_argument("--no-startup-backup", action="store_true")
+    live_scheduled.add_argument("--no-websockets", action="store_true")
     live_kill = sub.add_parser("live-kill-switch")
     live_kill.add_argument("--block-new-entries", action="store_true")
     live_kill.add_argument("--allow-new-entries", action="store_true")
@@ -705,43 +707,63 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         with scheduler_lock:
             low_latency_queue = LowLatencyEventQueue()
+            websocket_runtime = None
+            if not args.no_websockets:
+                websocket_runtime = LiveWebSocketRuntime.for_live_scheduler(
+                    db_path=db_path,
+                    config=config,
+                    min_date_hkt=datetime.now(HKT).date().isoformat(),
+                )
+                websocket_runtime.start()
+                print("live websocket runtime started", flush=True)
             aws_actual_poll_fetch = lambda: _fetch_current_temperature_for_path(
                 db_path, event_queue=low_latency_queue
             )
             aws_actual_poll_learned_times = lambda: _list_hko_update_times_for_path(
                 db_path, "aws_gis_actual"
             )
-            run_scheduled_paper_loop(
-                db,
-                fetch_since_midnight=lambda: _fetch_since_midnight(db),
-                fetch_bulletin=lambda: _fetch_bulletin(db),
-                fetch_current_temperature=lambda: _fetch_current_temperature(
-                    db, event_queue=low_latency_queue
-                ),
-                learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
-                learned_actual_times=lambda: list_hko_update_times(db, "aws_gis_actual"),
-                discover_market=lambda target: _discover_markets_for_forecast_dates(db, target),
-                fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
-                base_sleep_seconds=args.sleep,
-                max_ticks=args.ticks,
-                quiet=not args.verbose,
-                run_tick_fn=lambda tick_db, today_hkt: run_live_tick(
-                    tick_db,
-                    client,
-                    today_hkt=today_hkt,
-                    order_cap_usd=Settings.live_scheduler_order_cap_usd,
-                ),
-                low_latency_event_queue=low_latency_queue,
-                fast_event_handler=lambda tick_db, today_hkt: run_live_tick(
-                    tick_db,
-                    client,
-                    today_hkt=today_hkt,
-                    order_cap_usd=Settings.live_scheduler_order_cap_usd,
-                ),
-                aws_actual_poll_fetch=aws_actual_poll_fetch,
-                aws_actual_poll_learned_times=aws_actual_poll_learned_times,
-                output_label="live-scheduler",
-            )
+            try:
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: _fetch_since_midnight(db),
+                    fetch_bulletin=lambda: _fetch_bulletin(db),
+                    fetch_current_temperature=lambda: _fetch_current_temperature(
+                        db, event_queue=low_latency_queue
+                    ),
+                    learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
+                    learned_actual_times=lambda: list_hko_update_times(db, "aws_gis_actual"),
+                    discover_market=lambda target: _discover_markets_for_forecast_dates(db, target),
+                    fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
+                    base_sleep_seconds=args.sleep,
+                    max_ticks=args.ticks,
+                    quiet=not args.verbose,
+                    run_tick_fn=lambda tick_db, today_hkt: run_live_tick(
+                        tick_db,
+                        client,
+                        today_hkt=today_hkt,
+                        order_cap_usd=Settings.live_scheduler_order_cap_usd,
+                        book_cache=websocket_runtime.book_cache
+                        if websocket_runtime is not None
+                        else None,
+                    ),
+                    low_latency_event_queue=low_latency_queue,
+                    fast_event_handler=lambda tick_db, today_hkt: run_live_tick(
+                        tick_db,
+                        client,
+                        today_hkt=today_hkt,
+                        order_cap_usd=Settings.live_scheduler_order_cap_usd,
+                        book_cache=websocket_runtime.book_cache
+                        if websocket_runtime is not None
+                        else None,
+                    ),
+                    aws_actual_poll_fetch=aws_actual_poll_fetch,
+                    aws_actual_poll_learned_times=aws_actual_poll_learned_times,
+                    output_label="live-scheduler",
+                )
+            finally:
+                if websocket_runtime is not None:
+                    websocket_runtime.stop(timeout=5)
+                    print("live websocket runtime stopped", flush=True)
         return 0
     if args.command == "live-kill-switch":
         migrate(db)

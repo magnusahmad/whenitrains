@@ -5,13 +5,18 @@ import json
 import sqlite3
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from .live_user_stream import apply_user_channel_event
 from .market_websocket import _default_connect_factory
 
 
 POLYMARKET_USER_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+
+
+class StopSignal(Protocol):
+    def is_set(self) -> bool:
+        ...
 
 
 @dataclass(frozen=True)
@@ -50,7 +55,7 @@ class UserWebSocketClient:
 
     async def run_forever(
         self,
-        stop_event: asyncio.Event,
+        stop_event: StopSignal,
         *,
         reconnect_delay_seconds: float = 1.0,
     ) -> None:
@@ -70,6 +75,9 @@ class UserWebSocketClient:
         if market_ids:
             payload["markets"] = market_ids
         return payload
+
+    def close(self) -> None:
+        self.db.close()
 
 
 def _decode_messages(raw_message: str | bytes) -> list[dict[str, Any]]:
