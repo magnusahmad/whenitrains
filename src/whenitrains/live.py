@@ -19,6 +19,7 @@ from .storage import (
     get_live_position,
     get_live_setting,
     latest_orderbook,
+    list_live_orders_for_reconcile,
     list_open_live_positions,
     live_realized_pnl_since,
     live_setting_enabled,
@@ -44,6 +45,15 @@ class LiveKillSwitchExitResult:
     sells_filled: int = 0
     sells_missed: int = 0
     errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LiveOrderReconcileResult:
+    orders_checked: int
+    orders_filled: int
+    orders_open: int
+    orders_error: int
+    rebuilt_positions: int
 
 
 INSUFFICIENT_BALANCE_BLOCK_THRESHOLD = 3
@@ -1219,6 +1229,44 @@ def rebuild_live_positions_from_filled_orders(db: sqlite3.Connection) -> int:
     for token_id, (shares, avg_price, realized_pnl) in positions.items():
         upsert_live_position(db, token_id, shares, avg_price, realized_pnl)
     return len(positions)
+
+
+def reconcile_pending_live_orders(
+    db: sqlite3.Connection,
+    client: LiveClobClient,
+) -> LiveOrderReconcileResult:
+    rows = list_live_orders_for_reconcile(db)
+    orders_filled = 0
+    orders_open = 0
+    orders_error = 0
+    for row in rows:
+        try:
+            result = reconcile_submitted_live_order(db, client, row)
+        except Exception as exc:
+            orders_error += 1
+            store_risk_event(
+                db,
+                "live_order_reconcile_failed",
+                "warning",
+                {
+                    "order_id": row["clob_order_id"],
+                    "outcome_id": row["outcome_id"],
+                    "error": str(exc),
+                },
+            )
+            continue
+        if result.status == "filled":
+            orders_filled += 1
+        elif result.status in ("submitted", "open", "pending", "unknown_fill"):
+            orders_open += 1
+    rebuilt_positions = rebuild_live_positions_from_filled_orders(db)
+    return LiveOrderReconcileResult(
+        orders_checked=len(rows),
+        orders_filled=orders_filled,
+        orders_open=orders_open,
+        orders_error=orders_error,
+        rebuilt_positions=rebuilt_positions,
+    )
 
 
 def freeze_new_entries_for_stale_submitted_orders(

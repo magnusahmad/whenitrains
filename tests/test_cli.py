@@ -360,6 +360,59 @@ class CliDiscoveryTests(unittest.TestCase):
             )
             self.assertIn("live kill-switch exits cancel_all=ok sells=1/1 missed=0", stdout.getvalue())
 
+    def test_live_scheduler_reconciles_pending_orders_before_watchdog_drift_scan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            client = object()
+            calls = []
+
+            def run_loop(*args, **kwargs):
+                result = kwargs["reconcile_watchdog_fn"](args[0])
+                self.assertIn("live reconcile checked=1 filled=1", result.notes[0])
+
+            def reconcile(_db, live_client):
+                calls.append(live_client)
+                return SimpleNamespace(
+                    orders_checked=1,
+                    orders_filled=1,
+                    orders_open=0,
+                    orders_error=0,
+                    rebuilt_positions=1,
+                )
+
+            stdout = StringIO()
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch("whenitrains.cli.PolymarketClobClient", return_value=client),
+                patch(
+                    "whenitrains.cli.preflight_live",
+                    return_value=SimpleNamespace(ok=True, reason="ok"),
+                ),
+                patch("whenitrains.cli.find_live_position_drifts", return_value=[]),
+                patch("whenitrains.cli.reconcile_pending_live_orders", side_effect=reconcile),
+                patch("whenitrains.cli.run_scheduled_paper_loop", side_effect=run_loop),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-scheduler",
+                        "--live",
+                        "--ticks",
+                        "0",
+                        "--no-startup-backup",
+                        "--no-websockets",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(calls, [client, client])
+            self.assertIn(
+                "live reconcile checked=1 filled=1 open=0 errors=0 rebuilt_positions=1",
+                stdout.getvalue(),
+            )
+
     def test_live_scheduler_reconcile_watchdog_freezes_entries_when_drift_appears(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

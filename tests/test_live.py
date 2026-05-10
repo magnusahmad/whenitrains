@@ -15,6 +15,7 @@ from whenitrains.live import (
     execute_live_sell,
     find_live_position_drifts,
     freeze_new_entries_for_stale_submitted_orders,
+    reconcile_pending_live_orders,
     repair_live_position_drifts,
     reconcile_submitted_live_order,
     rebuild_live_positions_from_filled_orders,
@@ -981,6 +982,36 @@ class LiveTests(unittest.TestCase):
             self.assertAlmostEqual(adjustment["fill_shares"], 5.5)
             self.assertEqual(adjustment["event_type"], "live_position_drift_repair")
             self.assertEqual(adjustment["event_key"], "watchdog")
+
+    def test_reconcile_pending_live_orders_applies_fills_and_rebuilds_positions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="BUY_YES",
+                action="BUY",
+                status="submitted",
+                clob_order_id="order-1",
+                requested_size_usd=5.0,
+                limit_price=0.40,
+                raw_response={"orderID": "order-1", "status": "submitted"},
+            )
+            client = FakeClobClient()
+
+            result = reconcile_pending_live_orders(db, client)
+
+            self.assertEqual(result.orders_checked, 1)
+            self.assertEqual(result.orders_filled, 1)
+            self.assertEqual(result.rebuilt_positions, 1)
+            pos = get_live_position(db, "yes25")
+            self.assertAlmostEqual(pos["net_shares"], 12.5)
+            order = db.execute(
+                "select status, fill_shares from live_orders where clob_order_id = 'order-1'"
+            ).fetchone()
+            self.assertEqual(order["status"], "filled")
+            self.assertAlmostEqual(order["fill_shares"], 12.5)
 
     def test_enforce_live_kill_switch_exits_cancels_orders_and_sells_positions(self):
         with tempfile.TemporaryDirectory() as tmp:

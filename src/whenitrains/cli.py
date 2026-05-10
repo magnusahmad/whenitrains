@@ -67,8 +67,7 @@ from .live import (
     load_live_config,
     preflight_live,
     read_live_env_file,
-    rebuild_live_positions_from_filled_orders,
-    reconcile_submitted_live_order,
+    reconcile_pending_live_orders,
     repair_live_position_drifts,
     render_live_env_exports,
     store_keychain_secret,
@@ -97,7 +96,6 @@ from .storage import (
     store_risk_event,
     set_live_setting,
     live_setting_enabled,
-    list_live_orders_for_reconcile,
     latency_duration_summary,
 )
 
@@ -592,19 +590,16 @@ def main(argv: list[str] | None = None) -> int:
         try:
             config = load_live_config()
             client = PolymarketClobClient(config)
-            rows = list_live_orders_for_reconcile(db)
-            filled = 0
-            for row in rows:
-                result = reconcile_submitted_live_order(db, client, row)
-                if result.status == "filled":
-                    filled += 1
-            rebuilt_positions = rebuild_live_positions_from_filled_orders(db)
+            reconcile_result = reconcile_pending_live_orders(db, client)
         except LiveTradingError as exc:
             print(f"live reconcile failed: {exc}")
             return 2
         print(
-            f"reconciled {len(rows)} live orders; filled={filled} "
-            f"rebuilt_positions={rebuilt_positions}"
+            f"reconciled {reconcile_result.orders_checked} live orders; "
+            f"filled={reconcile_result.orders_filled} "
+            f"open={reconcile_result.orders_open} "
+            f"errors={reconcile_result.orders_error} "
+            f"rebuilt_positions={reconcile_result.rebuilt_positions}"
         )
         return 0
     if args.command == "live-cancel-order":
@@ -733,6 +728,17 @@ def main(argv: list[str] | None = None) -> int:
                     f"missed={kill_switch_exit.sells_missed}",
                     flush=True,
                 )
+            reconcile_result = reconcile_pending_live_orders(db, client)
+            if reconcile_result.orders_checked:
+                print(
+                    "live reconcile "
+                    f"checked={reconcile_result.orders_checked} "
+                    f"filled={reconcile_result.orders_filled} "
+                    f"open={reconcile_result.orders_open} "
+                    f"errors={reconcile_result.orders_error} "
+                    f"rebuilt_positions={reconcile_result.rebuilt_positions}",
+                    flush=True,
+                )
             drift_count = len(find_live_position_drifts(db, client))
             health = evaluate_live_startup_health(
                 market_websocket_connected=not args.no_websockets,
@@ -783,6 +789,7 @@ def main(argv: list[str] | None = None) -> int:
                     client,
                     event_key="live_reconcile_watchdog",
                 )
+                reconcile_result = reconcile_pending_live_orders(tick_db, client)
                 drifts = find_live_position_drifts(tick_db, client)
                 repaired = 0
                 if drifts:
@@ -797,6 +804,17 @@ def main(argv: list[str] | None = None) -> int:
                     websocket_runtime is not None and not websocket_runtime.all_running
                 )
                 if not drifts and not websocket_stalled:
+                    if reconcile_result.orders_checked:
+                        return RunnerResult(
+                            notes=(
+                                "live reconcile "
+                                f"checked={reconcile_result.orders_checked} "
+                                f"filled={reconcile_result.orders_filled} "
+                                f"open={reconcile_result.orders_open} "
+                                f"errors={reconcile_result.orders_error} "
+                                f"rebuilt_positions={reconcile_result.rebuilt_positions}",
+                            )
+                        )
                     if kill_switch_exit.enabled:
                         return RunnerResult(
                             notes=(
