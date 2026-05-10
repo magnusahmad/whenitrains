@@ -13,10 +13,22 @@ from whenitrains.storage import (
     set_live_setting,
     store_raw_snapshot,
     store_live_order,
+    store_orderbook,
     store_trading_decision,
 )
 from whenitrains.cli import main
 from whenitrains.live_user_stream import apply_user_channel_event
+from whenitrains.polymarket import OrderBook
+
+
+def _websocket_orderbook() -> OrderBook:
+    return OrderBook(
+        "yes25",
+        bids=[(0.2, 10)],
+        asks=[(0.3, 10)],
+        tick_size=0.01,
+        min_order_size=5,
+    )
 
 
 class LatencyReportTests(unittest.TestCase):
@@ -167,6 +179,7 @@ class LatencyReportTests(unittest.TestCase):
                 text,
             )
             self.assertIn("gate hko_source_timing_observed=missing count=0", text)
+            self.assertIn("gate websocket_orderbook_snapshots_observed=missing count=0", text)
             self.assertIn("gate user_channel_events_observed=missing count=0", text)
 
     def test_low_latency_readiness_report_prints_orderbook_age_gate(self):
@@ -261,6 +274,12 @@ class LatencyReportTests(unittest.TestCase):
                 fetch_started_at_utc="2026-05-11T00:00:01+00:00",
                 response_elapsed_ms=123.0,
             )
+            store_orderbook(
+                db,
+                "yes25",
+                _websocket_orderbook(),
+                metadata={"source": "polymarket_market_websocket"},
+            )
             apply_user_channel_event(
                 db,
                 {
@@ -286,6 +305,7 @@ class LatencyReportTests(unittest.TestCase):
             text = stdout.getvalue()
             self.assertEqual(exit_code, 0)
             self.assertIn("gate hko_source_timing_observed=pass count=1", text)
+            self.assertIn("gate websocket_orderbook_snapshots_observed=pass count=1", text)
             self.assertIn("gate user_channel_events_observed=pass count=1", text)
             self.assertNotIn("readiness evidence missing", text)
 
@@ -319,6 +339,12 @@ class LatencyReportTests(unittest.TestCase):
                 payload="{}",
                 fetch_started_at_utc="2026-05-11T00:00:01+00:00",
                 response_elapsed_ms=123.0,
+            )
+            store_orderbook(
+                db,
+                "yes25",
+                _websocket_orderbook(),
+                metadata={"source": "polymarket_market_websocket"},
             )
             apply_user_channel_event(
                 db,
@@ -390,6 +416,12 @@ class LatencyReportTests(unittest.TestCase):
                 fetch_started_at_utc="2026-05-11T00:00:01+00:00",
                 response_elapsed_ms=123.0,
             )
+            store_orderbook(
+                db,
+                "yes25",
+                _websocket_orderbook(),
+                metadata={"source": "polymarket_market_websocket"},
+            )
             store_live_order(
                 db,
                 outcome_id="yes25",
@@ -450,6 +482,12 @@ class LatencyReportTests(unittest.TestCase):
                 payload="{}",
                 fetch_started_at_utc="2026-05-11T00:00:01+00:00",
                 response_elapsed_ms=123.0,
+            )
+            store_orderbook(
+                db,
+                "yes25",
+                _websocket_orderbook(),
+                metadata={"source": "polymarket_market_websocket"},
             )
             apply_user_channel_event(
                 db,
@@ -520,6 +558,12 @@ class LatencyReportTests(unittest.TestCase):
                 payload="{}",
                 fetch_started_at_utc="2026-05-11T00:00:01+00:00",
                 response_elapsed_ms=123.0,
+            )
+            store_orderbook(
+                db,
+                "yes25",
+                _websocket_orderbook(),
+                metadata={"source": "polymarket_market_websocket"},
             )
             apply_user_channel_event(
                 db,

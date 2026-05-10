@@ -26,7 +26,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried on 2026-05-11 H
 - `fetch_response` and HKO raw snapshot storage persist fetch start, header receipt, payload receipt, and elapsed milliseconds.
 - Event-keyed live buy/sell execution records `order_submitted`, `clob_ack`, `fill_matched`, and `fill_confirmed`.
 - `latency-report` summarizes p50/p95/p99 between named stages.
-- `low-latency-readiness-report` prints the core latency stage pairs, explicit evidence gates including commit-to-decision-completed, CLOB ack, fill-match, orderbook-age-under-cap, user-channel-event, live-money-state-clear, and kill-switch-clear evidence, live money-state, and HKO source-timing evidence; `--require-evidence` exits nonzero when any measurable local evidence gate is missing.
+- `low-latency-readiness-report` prints the core latency stage pairs, explicit evidence gates including commit-to-decision-completed, CLOB ack, fill-match, WebSocket orderbook snapshot, orderbook-age-under-cap, user-channel-event, live-money-state-clear, and kill-switch-clear evidence, live money-state, and HKO source-timing evidence; `--require-evidence` exits nonzero when any measurable local evidence gate is missing.
 - Compact fast-event latency lines are emitted during scheduler drain.
 - Evidence: `src/whenitrains/storage.py`, `src/whenitrains/live.py`, `src/whenitrains/low_latency.py`, `src/whenitrains/cli.py`.
 - Tests: `tests.test_low_latency`, `tests.test_latency_report`, focused live latency tests.
@@ -52,6 +52,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried on 2026-05-11 H
 - Active token/condition subscription helpers support runtime resubscribe planning.
 - Live tick receives a scheduler-owned cache and live buys reject missing/stale cache books when a cache is configured.
 - `live-network-smoke --live --require-connected` starts and stops the scheduler-owned market/user WebSocket runtime without running trading decisions, reports per-client connection attempts, connected-once state, applied messages, and last error, and exits nonzero if fewer than the market/user clients are reported or any client never connected.
+- `low-latency-readiness-report --require-evidence` requires at least one persisted orderbook snapshot with `polymarket_market_websocket` metadata so the production report cannot pass on connection liveness alone.
 - Evidence: `src/whenitrains/orderbook_cache.py`, `src/whenitrains/market_websocket.py`, `src/whenitrains/live_runtime.py`, `src/whenitrains/runner.py`.
 - Tests: `tests.test_orderbook_cache`, `tests.test_market_websocket`, focused live runner tests.
 - Missing: real Polymarket WebSocket smoke and observed live book age at submission.
