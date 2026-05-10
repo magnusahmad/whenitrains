@@ -1641,6 +1641,8 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             messages.append(f"evidence archive file empty: {name}")
     manifest_path = input_dir / "manifest.txt"
     manifest = manifest_path.read_text() if manifest_path.is_file() else ""
+    for key in _manifest_duplicate_keys(manifest, ["all_gates_passed", "missing_gates"]):
+        messages.append(f"evidence archive duplicate manifest key: {key}")
     if _manifest_value(manifest, "all_gates_passed") != "True":
         missing_gates = _manifest_value(manifest, "missing_gates")
         if missing_gates:
@@ -1718,6 +1720,22 @@ def _manifest_file_list(manifest: str) -> list[str]:
         for line in manifest.splitlines()
         if line.startswith("- ")
     ]
+
+
+def _manifest_duplicate_keys(manifest: str, keys: list[str]) -> list[str]:
+    key_set = set(keys)
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for line in manifest.splitlines():
+        if "=" not in line:
+            continue
+        key = line.split("=", 1)[0]
+        if key not in key_set:
+            continue
+        if key in seen and key not in duplicates:
+            duplicates.append(key)
+        seen.add(key)
+    return duplicates
 
 
 def _duplicate_values(values: list[str]) -> list[str]:
