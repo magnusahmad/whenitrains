@@ -1772,6 +1772,8 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
         else:
             messages.append("evidence archive gates missing: all_gates_passed is not True")
     manifest_file_list = _manifest_file_list(manifest)
+    for line in _malformed_manifest_file_lines(manifest):
+        messages.append(f"evidence archive manifest entry malformed: {line}")
     manifest_files = set(manifest_file_list)
     for name in _duplicate_values(manifest_file_list):
         messages.append(f"evidence archive duplicate manifest entry: {name}")
@@ -2183,6 +2185,23 @@ def _manifest_file_list(manifest: str) -> list[str]:
         if in_files_section and line.startswith("- "):
             files.append(line[2:].strip())
     return files
+
+
+def _malformed_manifest_file_lines(manifest: str) -> list[str]:
+    malformed: list[str] = []
+    in_files_section = False
+    for line in manifest.splitlines():
+        if line == "files:":
+            in_files_section = True
+            continue
+        if line == "checksums:":
+            in_files_section = False
+            continue
+        if not in_files_section or not line.strip():
+            continue
+        if not line.startswith("- ") or not line[2:].strip():
+            malformed.append(line)
+    return malformed
 
 
 def _manifest_duplicate_keys(manifest: str, keys: list[str]) -> list[str]:
