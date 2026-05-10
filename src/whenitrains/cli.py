@@ -1655,6 +1655,10 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             "evidence archive manifest sections missing: "
             + ", ".join(missing_sections)
         )
+    for section in _duplicate_values(
+        [line[:-1] for line in manifest.splitlines() if line in {"files:", "checksums:"}]
+    ):
+        messages.append(f"evidence archive duplicate manifest section: {section}")
     required_metadata_keys = [
         "created_at_utc",
         "db_path",
