@@ -854,6 +854,28 @@ def list_outcomes_from_date(db: sqlite3.Connection, min_date_hkt: str) -> list[s
     )
 
 
+def list_active_market_token_ids(db: sqlite3.Connection, min_date_hkt: str) -> list[str]:
+    rows = db.execute(
+        """
+        select o.yes_token_id, o.no_token_id
+        from outcomes o
+        join markets m on m.id = o.market_id
+        where m.target_date_hkt >= ?
+          and coalesce(m.status, 'active') = 'active'
+        order by m.target_date_hkt, o.predicate_value_c, o.label, o.id
+        """,
+        (min_date_hkt,),
+    )
+    token_ids: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for token_id in (row["yes_token_id"], row["no_token_id"]):
+            if token_id and token_id not in seen:
+                seen.add(token_id)
+                token_ids.append(token_id)
+    return token_ids
+
+
 def list_hko_forecast_dates(
     db: sqlite3.Connection, min_date_hkt: str | None = None
 ) -> list[str]:

@@ -1,14 +1,22 @@
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from whenitrains.orderbook_cache import (
     BookCacheStale,
     MarketWebSocketSubscription,
     OrderBookCache,
+    SubscriptionManager,
 )
-from whenitrains.polymarket import OrderBook
-from whenitrains.storage import connect, migrate, store_orderbook
+from whenitrains.markets import parse_outcome_label
+from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
+from whenitrains.storage import (
+    connect,
+    list_active_market_token_ids,
+    migrate,
+    store_polymarket_event,
+)
 
 
 class OrderBookCacheTests(unittest.TestCase):
@@ -120,6 +128,28 @@ class OrderBookCacheTests(unittest.TestCase):
         self.assertEqual(book.bids, [(0.25, 25.0)])
         self.assertEqual(book.asks, [(0.40, 40.0)])
 
+    def test_lists_active_yes_no_tokens_for_market_subscription(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            _store_market(db, "2026-05-04", "yes-today", "no-today")
+            _store_market(db, "2026-05-03", "yes-past", "no-past")
+
+            tokens = list_active_market_token_ids(db, min_date_hkt="2026-05-04")
+
+            self.assertEqual(tokens, ["yes-today", "no-today"])
+
+    def test_subscription_manager_emits_payload_only_when_tokens_change(self):
+        manager = SubscriptionManager()
+
+        first = manager.update(["yes26", "no26"])
+        duplicate = manager.update(["no26", "yes26"])
+        changed = manager.update(["yes26", "no26", "yes27"])
+
+        self.assertEqual(first["assets_ids"], ["yes26", "no26"])
+        self.assertIsNone(duplicate)
+        self.assertEqual(changed["assets_ids"], ["yes26", "no26", "yes27"])
+
 
 class _FakeMonotonic:
     def __init__(self, values):
@@ -129,3 +159,24 @@ class _FakeMonotonic:
         if not self._values:
             raise AssertionError("fake monotonic exhausted")
         return self._values.pop(0)
+
+
+def _store_market(db, target_date: str, yes_token_id: str, no_token_id: str) -> None:
+    store_polymarket_event(
+        db,
+        TemperatureMarket(
+            event_id=f"event-{target_date}-{yes_token_id}",
+            event_slug=f"highest-temperature-in-hong-kong-on-{target_date}",
+            title=f"Highest temperature in Hong Kong on {target_date}?",
+            target_date=date.fromisoformat(target_date),
+            outcomes=[
+                Outcome(
+                    market_id=f"market-{target_date}-{yes_token_id}",
+                    label="26°C",
+                    predicate=parse_outcome_label("26°C"),
+                    yes_token_id=yes_token_id,
+                    no_token_id=no_token_id,
+                )
+            ],
+        ),
+    )

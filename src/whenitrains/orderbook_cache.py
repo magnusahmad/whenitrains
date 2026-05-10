@@ -36,6 +36,18 @@ class MarketWebSocketSubscription:
         }
 
 
+class SubscriptionManager:
+    def __init__(self) -> None:
+        self._token_ids: tuple[str, ...] = ()
+
+    def update(self, token_ids: list[str]) -> dict | None:
+        normalized = tuple(dict.fromkeys(token_ids))
+        if set(normalized) == set(self._token_ids):
+            return None
+        self._token_ids = normalized
+        return MarketWebSocketSubscription(list(self._token_ids)).payload()
+
+
 class OrderBookCache:
     def __init__(
         self,
