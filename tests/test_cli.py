@@ -324,6 +324,53 @@ class CliDiscoveryTests(unittest.TestCase):
                 stdout.getvalue(),
             )
 
+    def test_live_auth_smoke_requires_live_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(["--db", str(db_path), "live-auth-smoke"])
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("refusing live auth smoke without --live", stdout.getvalue())
+
+    def test_live_auth_smoke_prints_required_balance_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            client = object()
+            preflight_calls = []
+
+            def preflight(_db, live_client, _config, *, required_balance_usd):
+                preflight_calls.append((live_client, required_balance_usd))
+                return SimpleNamespace(
+                    ok=True,
+                    signer_address="0xsigner",
+                    funder_address="0xfunder",
+                    balance_usd=42.0,
+                    allowance_ok=True,
+                    reason="ok",
+                )
+
+            stdout = StringIO()
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch("whenitrains.cli.PolymarketClobClient", return_value=client),
+                patch("whenitrains.cli.preflight_live", side_effect=preflight),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    ["--db", str(db_path), "live-auth-smoke", "--live"]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(preflight_calls), 1)
+            self.assertIs(preflight_calls[0][0], client)
+            self.assertIn(
+                f"required_balance_usd={preflight_calls[0][1]:.2f}",
+                stdout.getvalue(),
+            )
+
     def test_live_network_smoke_require_connected_fails_when_client_never_connected(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

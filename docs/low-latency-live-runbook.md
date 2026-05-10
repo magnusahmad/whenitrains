@@ -18,13 +18,21 @@ PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-net
 
 Expected output includes `live network smoke websocket_all_running=True`, at least two reported clients, per-client `connected_once=True` lines, and `live network smoke connected_once_all=True`; the command exits `0` only when runtime liveness, market/user client count, and connection evidence pass. This command starts and stops the market/user WebSocket runtime but does not run trading decisions.
 
-4. Confirm there is no emergency entry block unless intentional:
+4. Run a no-trade live auth smoke to confirm CLOB credentials, signer/funder addresses, balance, and allowance:
+
+```bash
+PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-auth-smoke --live
+```
+
+Expected output includes `auth ok=True`, `required_balance_usd=...`, `allowance_ok=True`, signer/funder addresses, and exits `0`. This command performs preflight checks only and does not place orders.
+
+5. Confirm there is no emergency entry block unless intentional:
 
 ```bash
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch
 ```
 
-5. Start the live scheduler:
+6. Start the live scheduler:
 
 ```bash
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live --verbose

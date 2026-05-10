@@ -538,6 +538,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"auth ok={result.ok} signer={result.signer_address or 'n/a'} "
             f"funder={result.funder_address or 'n/a'} "
+            f"required_balance_usd={Settings.live_scheduler_order_cap_usd:.2f} "
             f"balance={_fmt(result.balance_usd)} allowance_ok={result.allowance_ok} "
             f"reason={result.reason}"
         )
