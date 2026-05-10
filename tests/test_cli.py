@@ -478,6 +478,16 @@ class CliDiscoveryTests(unittest.TestCase):
         )
         self.assertIn(
             "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
+            "latency-report order_submitted clob_ack",
+            text,
+        )
+        self.assertIn(
+            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
+            "latency-report order_submitted fill_matched",
+            text,
+        )
+        self.assertIn(
+            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
             "low-latency-archive-evidence --output-dir "
             "'data/low-latency-evidence/<run-id>' --require-evidence",
             text,

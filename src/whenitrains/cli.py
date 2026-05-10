@@ -1768,6 +1768,8 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         "11. archive latency percentiles and readiness gates from the production DB",
         command("latency-report", "db_committed", "decision_started"),
         command("latency-report", "decision_started", "order_submitted"),
+        command("latency-report", "order_submitted", "clob_ack"),
+        command("latency-report", "order_submitted", "fill_matched"),
         command("latency-report", "order_submitted", "fill_confirmed"),
         command("latency-report", "order_submitted", "order_rejected"),
         command("low-latency-readiness-report", "--require-evidence"),
