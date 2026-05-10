@@ -1653,23 +1653,26 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
     manifest_files = set(manifest_file_list)
     for name in _duplicate_values(manifest_file_list):
         messages.append(f"evidence archive duplicate manifest entry: {name}")
-    expected_manifest_files = set(required_files) - {"manifest.txt"}
+    expected_manifest_file_list = [name for name in required_files if name != "manifest.txt"]
+    expected_manifest_files = set(expected_manifest_file_list)
     for name in sorted(manifest_files - expected_manifest_files):
         messages.append(f"evidence archive unexpected manifest entry: {name}")
     missing_manifest_entries = [
-        name for name in expected_manifest_files if name not in manifest_files
+        name for name in expected_manifest_file_list if name not in manifest_files
     ]
     if missing_manifest_entries:
         messages.append(
             "evidence archive manifest entries missing: "
-            + ", ".join(sorted(missing_manifest_entries))
+            + ", ".join(missing_manifest_entries)
         )
     checksums = _manifest_checksums(manifest)
     duplicate_checksums = _manifest_duplicate_checksums(manifest)
     for name in duplicate_checksums:
         messages.append(f"evidence archive duplicate checksum entry: {name}")
+    for name in sorted(set(checksums) - expected_manifest_files):
+        messages.append(f"evidence archive unexpected checksum entry: {name}")
     missing_checksum_entries = [
-        name for name in required_files if name != "manifest.txt" and name not in checksums
+        name for name in expected_manifest_file_list if name not in checksums
     ]
     if missing_checksum_entries:
         messages.append(
