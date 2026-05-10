@@ -1680,12 +1680,22 @@ def _live_money_state_gate(db, live: dict[str, object]) -> dict[str, object]:
             """
         ).fetchone()[0]
     )
+    problem_orders = int(
+        db.execute(
+            """
+            select count(*)
+            from live_orders
+            where status in ('error', 'rejected', 'blocked', 'failed')
+            """
+        ).fetchone()[0]
+    )
     missing_bid_positions = int(live["missing_bid_positions"])
-    clear = unresolved_orders == 0 and error == 0 and missing_bid_positions == 0
+    clear = unresolved_orders == 0 and problem_orders == 0 and missing_bid_positions == 0
     status = "pass" if clear else "missing"
     line = (
         f"gate live_money_state_clear={status} "
         f"unresolved_orders={unresolved_orders} "
+        f"problem_orders={problem_orders} "
         f"submitted={submitted} "
         f"error={error} "
         f"missing_bid_positions={missing_bid_positions}"

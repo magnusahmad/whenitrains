@@ -73,7 +73,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried on 2026-05-11 H
 - Matched trade deltas are idempotent and can converge after restart.
 - Startup and periodic watchdog reconcile pending live orders, rebuild positions, compare sellable balances, repair safe local-greater-than-CLOB drift, and freeze new entries when drift remains.
 - Resolved/closed past-date markets locally settle remaining paper/live positions when stored target-date actuals identify the winning side.
-- `low-latency-readiness-report --require-evidence` fails while live orders remain in unresolved `submitted`, `unknown_fill`, `open`, or `pending` states.
+- `low-latency-readiness-report --require-evidence` fails while live orders remain in unresolved `submitted`, `unknown_fill`, `open`, or `pending` states, or terminal problem `error`, `rejected`, `blocked`, or `failed` states.
 - `low-latency-readiness-report --require-evidence` requires at least one stored `live_user_events` row so the production report cannot pass without authenticated user-channel evidence.
 - Evidence: `src/whenitrains/user_websocket.py`, `src/whenitrains/live_user_stream.py`, `src/whenitrains/live.py`, `src/whenitrains/runner.py`, `src/whenitrains/cli.py`.
 - Tests: `tests.test_live_user_stream`, `tests.test_user_websocket`, `tests.test_live`, `tests.test_cli`, `tests.test_runner`.
