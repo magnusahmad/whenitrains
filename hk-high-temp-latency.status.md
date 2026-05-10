@@ -236,6 +236,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 checklist CLOB lifecycle latency pass: tightened `live-readiness-checklist` again so the production evidence plan explicitly captures `latency-report order_submitted clob_ack` and `latency-report order_submitted fill_matched`, matching the readiness gates for intermediate CLOB lifecycle timing instead of relying on the readiness report alone. Verified red/green with `PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_live_readiness_checklist_prints_ordered_evidence_commands`.
 
+2026-05-11 post-checklist live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 0 ms: Couldn't connect to server`. Live network/auth/manual-money/capped-scheduler/kill-switch/settlement evidence remains blocked on endpoint availability.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
