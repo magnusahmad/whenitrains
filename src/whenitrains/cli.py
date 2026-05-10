@@ -2755,6 +2755,8 @@ def _live_kill_switch_verification_summary(db) -> dict[str, object]:
         select count(*) as count
         from risk_events
         where event_type = 'live_kill_switch_allowed'
+          and json_extract(details_json, '$.block_new_entries') = 0
+          and json_extract(details_json, '$.exit_on_kill_switch') = 0
         """
     ).fetchone()
     latest_row = db.execute(

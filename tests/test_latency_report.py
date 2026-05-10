@@ -1768,6 +1768,37 @@ class LatencyReportTests(unittest.TestCase):
                 text,
             )
 
+    def test_low_latency_readiness_report_fails_when_kill_switch_allowed_has_blocking_details(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_risk_event(
+                db,
+                "live_kill_switch_allowed",
+                "info",
+                {"block_new_entries": True, "exit_on_kill_switch": False},
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "gate live_kill_switch_verification=missing count=0 latest=allowed",
+                text,
+            )
+
     def test_low_latency_readiness_report_fails_when_latest_scheduler_smoke_failed(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"
