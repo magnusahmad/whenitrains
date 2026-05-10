@@ -1697,6 +1697,8 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             "evidence archive gates inconsistent: "
             "missing_gates present while all_gates_passed is True"
         )
+    if missing_gates and _missing_gates_malformed(missing_gates):
+        messages.append("evidence archive missing_gates malformed")
     if all_gates_passed != "True":
         if missing_gates:
             messages.append("evidence archive gates missing: " + missing_gates)
@@ -1784,6 +1786,10 @@ def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
             if parsed_limit <= 0:
                 invalid.append("hko_limit")
     return invalid
+
+
+def _missing_gates_malformed(value: str) -> bool:
+    return any(not item.strip() for item in value.split(","))
 
 
 def _sha256_file(path: Path) -> str:
