@@ -137,12 +137,25 @@ def process_all_forecast_entries(db: sqlite3.Connection, today_hkt: date) -> Run
 
 
 def process_forecast_entries(
-    db: sqlite3.Connection, target_date: date, today_hkt: date | None = None
+    db: sqlite3.Connection,
+    target_date: date,
+    today_hkt: date | None = None,
+    ladder_rows: dict[str, list[sqlite3.Row]] | None = None,
 ) -> RunnerResult:
     today = today_hkt or datetime.now(HKT).date()
-    value_result = process_forecast_value_entry(db, target_date, today)
-    high_result = _process_forecast_change_entries_kind(db, target_date, today, "highest")
-    low_rows = _lowest_temperature_rows(list_outcomes_for_date(db, target_date.isoformat()))
+    if ladder_rows is None:
+        rows = list_outcomes_for_date(db, target_date.isoformat())
+        ladder_rows = {
+            "highest": _highest_temperature_rows(rows),
+            "lowest": _lowest_temperature_rows(rows),
+        }
+    value_result = process_forecast_value_entry(
+        db, target_date, today, ladder_rows=ladder_rows
+    )
+    high_result = _process_forecast_change_entries_kind(
+        db, target_date, today, "highest", rows=ladder_rows["highest"]
+    )
+    low_rows = ladder_rows["lowest"]
     if not low_rows:
         return _merge_runner_results(value_result, high_result)
     low_result = _process_forecast_change_entries_kind(
@@ -295,10 +308,21 @@ def _process_forecast_change_entries_kind(
 
 
 def process_forecast_value_entry(
-    db: sqlite3.Connection, target_date: date, today_hkt: date
+    db: sqlite3.Connection,
+    target_date: date,
+    today_hkt: date,
+    ladder_rows: dict[str, list[sqlite3.Row]] | None = None,
 ) -> RunnerResult:
-    high_result = _process_forecast_value_entry_kind(db, target_date, today_hkt, "highest")
-    low_rows = _lowest_temperature_rows(list_outcomes_for_date(db, target_date.isoformat()))
+    if ladder_rows is None:
+        rows = list_outcomes_for_date(db, target_date.isoformat())
+        ladder_rows = {
+            "highest": _highest_temperature_rows(rows),
+            "lowest": _lowest_temperature_rows(rows),
+        }
+    high_result = _process_forecast_value_entry_kind(
+        db, target_date, today_hkt, "highest", rows=ladder_rows["highest"]
+    )
+    low_rows = ladder_rows["lowest"]
     if not low_rows:
         return high_result
     low_result = _process_forecast_value_entry_kind(

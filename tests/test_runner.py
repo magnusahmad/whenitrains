@@ -124,6 +124,37 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("token:yes29", action.conflict_keys)
             self.assertIn("risk:entry_budget", action.conflict_keys)
 
+    def test_forecast_entries_use_prefiltered_ladder_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_forecast(db, 28, "2026-05-04T00:45:00+08:00")
+            _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
+            _store_book_pair(db, "yes29", old_ask=0.39, new_ask=0.395)
+            _store_book_pair(db, "no29", old_ask=0.60, new_ask=0.60)
+            rows = list(db.execute(
+                """
+                select o.id, o.market_id, o.polymarket_market_id, o.label,
+                       o.predicate_type, o.predicate_value_c, o.yes_token_id, o.no_token_id,
+                       m.target_date_hkt, m.slug
+                from outcomes o
+                join markets m on m.id = o.market_id
+                order by o.id
+                """
+            ))
+
+            with patch(
+                "whenitrains.runner.list_outcomes_for_date",
+                side_effect=AssertionError("forecast hot path should use prefiltered ladder rows"),
+            ):
+                result = process_forecast_entries(
+                    db,
+                    date(2026, 5, 4),
+                    today_hkt=date(2026, 5, 4),
+                    ladder_rows={"highest": rows, "lowest": []},
+                )
+
+            self.assertEqual(result.buys_filled, 1)
+
     def test_lowest_forecast_change_buys_stale_new_minimum_bucket(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(Path(tmp) / "test.db")
