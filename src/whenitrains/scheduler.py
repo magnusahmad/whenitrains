@@ -15,6 +15,8 @@ from .runner import RunnerResult, run_paper_tick
 SINCE_MIDNIGHT_MINUTES = (0, 9, 19, 29, 38, 48, 58)
 AWS_ACTUAL_POLL_MINUTES = tuple(range(0, 60, 5))
 AWS_ACTUAL_FETCHABLE_BUFFER_SECONDS = 120
+AWS_ACTUAL_BURST_WINDOW_SECONDS = 10
+AWS_ACTUAL_BURST_CADENCE_SECONDS = 0.5
 FORECAST_POLL_MINUTES = tuple(range(0, 60, 10))
 FORECAST_CATCHUP_MINUTES = 50
 
@@ -25,7 +27,7 @@ class SourcePollPlan:
     scheduled_at: datetime
     window_start: datetime
     window_end: datetime
-    cadence_seconds: int
+    cadence_seconds: float
 
 
 @dataclass
@@ -37,6 +39,7 @@ class SchedulerState:
     last_market_discovery_at: datetime | None = None
     last_current_temperature_fetch_at: datetime | None = None
     trading_warmed_up: bool = False
+    source_backoff_until: dict[str, datetime] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -145,6 +148,13 @@ def mark_source_polled(
     state: SchedulerState, plan: SourcePollPlan, now_hkt: datetime
 ) -> None:
     state.last_source_poll_at[_window_key(plan)] = now_hkt
+
+
+def mark_source_backoff(
+    state: SchedulerState, source: str, until_hkt: datetime
+) -> None:
+    if source != "aws_actual":
+        state.source_backoff_until[source] = until_hkt
 
 
 def _aws_actual_payload_observed_at(payload: str) -> datetime | None:
@@ -259,12 +269,16 @@ def run_scheduled_paper_loop(
                 payload = _try_fetch_source("since_midnight", fetch_since_midnight, notes)
                 if payload is None:
                     data_failed = True
+                    mark_source_backoff(
+                        state, "since_midnight", now + timedelta(minutes=1)
+                    )
                 elif mark_source_fetch(state, plans["since_midnight"], payload, now):
                     notes.append("since_midnight changed")
             if actions.fetch_bulletin:
                 payload = _try_fetch_source("forecast", fetch_bulletin, notes)
                 if payload is None:
                     data_failed = True
+                    mark_source_backoff(state, "bulletin", now + timedelta(minutes=1))
                 elif mark_source_fetch(state, plans["bulletin"], payload, now):
                     notes.append("forecast changed")
             if (
@@ -514,6 +528,21 @@ def _aws_actual_plans(
                 source="aws_actual",
                 scheduled_at=scheduled,
                 window_start=max(
+                    scheduled - timedelta(seconds=AWS_ACTUAL_BURST_WINDOW_SECONDS),
+                    day_start,
+                ),
+                window_end=min(
+                    scheduled + timedelta(seconds=AWS_ACTUAL_BURST_WINDOW_SECONDS),
+                    day_end,
+                ),
+                cadence_seconds=AWS_ACTUAL_BURST_CADENCE_SECONDS,
+            )
+        )
+        plans.append(
+            SourcePollPlan(
+                source="aws_actual",
+                scheduled_at=scheduled,
+                window_start=max(
                     scheduled - timedelta(seconds=AWS_ACTUAL_FETCHABLE_BUFFER_SECONDS),
                     day_start,
                 ),
@@ -582,6 +611,13 @@ def _is_due(plan: SourcePollPlan, now_hkt: datetime, state: SchedulerState) -> b
     key = _window_key(plan)
     if key in state.completed_windows:
         return False
+    backoff_until = state.source_backoff_until.get(plan.source)
+    if (
+        plan.source != "aws_actual"
+        and backoff_until is not None
+        and now_hkt < backoff_until
+    ):
+        return False
     if not (plan.window_start <= now_hkt <= plan.window_end):
         return False
     last_poll = state.last_source_poll_at.get(key)
@@ -607,7 +643,10 @@ def _active_bulletin_plan(
 
 
 def _window_key(plan: SourcePollPlan) -> str:
-    return f"{plan.source}:{plan.scheduled_at.isoformat()}"
+    return (
+        f"{plan.source}:{plan.scheduled_at.isoformat()}:"
+        f"{plan.window_start.isoformat()}:{plan.window_end.isoformat()}"
+    )
 
 
 def _is_market_day_active(now_hkt: datetime) -> bool:

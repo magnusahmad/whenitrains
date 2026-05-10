@@ -15,6 +15,7 @@ from whenitrains.scheduler import (
     _is_stale_aws_actual_payload,
     due_hko_sources,
     mark_source_fetch,
+    mark_source_backoff,
     scheduler_actions,
     run_scheduled_paper_loop,
     should_print_scheduled_tick,
@@ -112,6 +113,47 @@ class SchedulerTests(unittest.TestCase):
                 learned,
             ),
         )
+
+    def test_learned_aws_actual_burst_window_uses_subsecond_cadence(self):
+        learned = [time(14, 36)]
+        state = SchedulerState()
+        near_publish = datetime(2026, 5, 4, 14, 35, 50, tzinfo=HKT)
+
+        plan = [
+            item
+            for item in due_hko_sources(near_publish, state, learned_actual_times=learned)
+            if item.source == "aws_actual"
+            and item.scheduled_at.time() == time(14, 36)
+            and item.cadence_seconds < 1
+        ][0]
+        mark_source_fetch(state, plan, "same", near_publish, changed=False)
+
+        self.assertNotIn(
+            plan,
+            due_hko_sources(
+                near_publish + timedelta(milliseconds=400),
+                state,
+                learned_actual_times=learned,
+            ),
+        )
+        self.assertIn(
+            plan,
+            due_hko_sources(
+                near_publish + timedelta(milliseconds=500),
+                state,
+                learned_actual_times=learned,
+            ),
+        )
+
+    def test_noncritical_source_backoff_does_not_slow_aws_actual(self):
+        now = datetime(2026, 5, 4, 12, 5, 0, tzinfo=HKT)
+        state = SchedulerState()
+        mark_source_backoff(state, "bulletin", now + timedelta(minutes=1))
+
+        sources = {item.source for item in due_hko_sources(now, state)}
+
+        self.assertIn("aws_actual", sources)
+        self.assertNotIn("bulletin", sources)
 
     def test_since_midnight_window_is_one_minute_before_to_two_minutes_after(self):
         before = datetime(2026, 5, 4, 10, 7, 59, tzinfo=HKT)
