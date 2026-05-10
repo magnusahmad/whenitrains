@@ -2067,6 +2067,16 @@ def _readiness_gate_line_malformed(line: str) -> bool:
             "False",
         }:
             return True
+        if key == "latest" and value not in {
+            "allowed",
+            "blocked",
+            "clear",
+            "failed",
+            "missing",
+            "none",
+            "ok",
+        }:
+            return True
         seen_fields.add(key)
     count_value = field_values.get("count")
     if status == "pass" and count_value == "0":
