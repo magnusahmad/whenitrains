@@ -2023,7 +2023,8 @@ def _readiness_gate_line_malformed(line: str) -> bool:
     gate_tokens = gate_part.split()
     if len(gate_tokens) != 2 or gate_tokens[0] != "gate":
         return True
-    if not gate_tokens[1]:
+    gate_name = gate_tokens[1]
+    if not gate_name:
         return True
     rest_parts = rest.split()
     if not rest_parts:
@@ -2034,12 +2035,14 @@ def _readiness_gate_line_malformed(line: str) -> bool:
     if len(rest_parts) == 1:
         return True
     seen_fields: set[str] = set()
+    field_values: dict[str, str] = {}
     for field in rest_parts[1:]:
         if "=" not in field:
             return True
         key, value = field.split("=", 1)
         if not key or key in seen_fields:
             return True
+        field_values[key] = value
         if key == "count":
             try:
                 count = int(value)
@@ -2060,6 +2063,14 @@ def _readiness_gate_line_malformed(line: str) -> bool:
             if seconds < 0:
                 return True
         seen_fields.add(key)
+    count_value = field_values.get("count")
+    if status == "pass" and count_value == "0":
+        optional_not_observed = (
+            gate_name == "submit_to_reject_observed"
+            and field_values.get("evidence") == "not_observed"
+        )
+        if not optional_not_observed:
+            return True
     return False
 
 
