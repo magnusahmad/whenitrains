@@ -310,619 +310,575 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     db = connect(db_path)
-    if args.command == "latency-report":
-        migrate(db)
-        summary = latency_duration_summary(db, args.start_stage, args.end_stage)
-        print(_render_latency_summary(summary))
-        return 0
-    if args.command == "hko-source-timing-report":
-        migrate(db)
-        report = _hko_source_timing_report(
-            db,
-            endpoint_contains=args.endpoint_contains,
-            limit=args.limit,
-        )
-        print(report)
-        return 0
-    if args.command == "low-latency-readiness-report":
-        migrate(db)
-        report, gate_status = _low_latency_readiness_report(
-            db,
-            hko_endpoint_contains=args.hko_endpoint_contains,
-            hko_limit=args.hko_limit,
-        )
-        print(report)
-        if args.require_evidence and not gate_status["all_passed"]:
-            print(
-                "readiness evidence missing: "
-                + ", ".join(gate_status["missing_gates"])
-            )
-            return 2
-        return 0
-    if args.command == "low-latency-archive-evidence":
-        migrate(db)
-        output_dir = Path(args.output_dir)
-        report_paths, gate_status = _archive_low_latency_evidence(
-            db,
-            db_path=db_path,
-            output_dir=output_dir,
-            hko_endpoint_contains=args.hko_endpoint_contains,
-            hko_limit=args.hko_limit,
-        )
-        print(f"archived low latency evidence to {output_dir}")
-        for path in report_paths:
-            print(path)
-        if args.require_evidence and not gate_status["all_passed"]:
-            print(
-                "readiness evidence missing: "
-                + ", ".join(gate_status["missing_gates"])
-            )
-            return 2
-        return 0
-    if args.command == "init-db":
-        migrate(db)
-        print(f"initialized {args.db}")
-        return 0
-    if args.command == "fetch-hko":
-        migrate(db)
-        _fetch_hko(db)
-        print("stored HKO snapshots")
-        return 0
-    if args.command == "discover-market":
-        migrate(db)
-        target_date = date.fromisoformat(args.date)
-        if not _discover_market(db, target_date):
-            print("no market event found")
-            return 2
-        print(f"stored temperature markets for {target_date.isoformat()}")
-        return 0
-    if args.command == "fetch-orderbooks":
-        migrate(db)
-        _fetch_orderbooks(db)
-        return 0
-    if args.command == "calc-entry":
-        outcome = find_outcome_by_label(db, args.label)
-        token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
-        book = latest_orderbook(db, token_id)
-        quote = calculate_entry(
-            token_id, args.size_usd, book.asks, max_order_usd=Settings.max_order_usd
-        )
-        print(
-            f"{quote.status} {args.label} {args.side} "
-            f"size=${quote.requested_size_usd:.2f} limit={_fmt(quote.limit_price)} "
-            f"avg={_fmt(quote.estimated_avg_price)} shares={quote.estimated_shares:.4f} "
-            f"cost=${quote.estimated_cost_usd:.2f} reason={quote.reason}"
-        )
-        return 0 if quote.status == "fillable" else 2
-    if args.command == "paper-buy":
-        outcome = find_outcome_by_label(db, args.label)
-        token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
-        book = latest_orderbook(db, token_id)
-        result = execute_paper_buy(
-            db,
-            token_id=token_id,
-            side=args.side,
-            size_usd=args.size_usd,
-            asks=book.asks,
-            max_order_usd=Settings.max_order_usd,
-            reason=f"manual paper buy {args.label} {args.side}",
-        )
-        print(
-            f"{result.status} BUY_{args.side} {args.label} "
-            f"avg={_fmt(result.fill_price)} cost=${result.fill_size_usd:.2f} "
-            f"shares={result.shares:.4f} reason={result.reason}"
-        )
-        return 0 if result.status == "filled" else 2
-    if args.command == "check-exit":
-        outcome = find_outcome_by_label(db, args.label)
-        token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
-        book = latest_orderbook(db, token_id)
-        current_bid = book.best_bid
-        if current_bid is None:
-            print("no current bid")
-            return 2
-        quote = calculate_exit(
-            db,
-            token_id,
-            current_bid,
-            args.take_profit,
-            max_hold_minutes=args.max_hold_minutes,
-        )
-        print(
-            f"{args.label} {args.side} bid={current_bid:.4f} "
-            f"entry={quote.avg_entry_price:.4f} move={quote.price_move:.4f} "
-            f"shares={quote.net_shares:.4f} should_sell={quote.should_sell} "
-            f"reason={quote.reason}"
-        )
-        return 0
-    if args.command == "paper-sell":
-        outcome = find_outcome_by_label(db, args.label)
-        token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
-        book = latest_orderbook(db, token_id)
-        result = execute_paper_sell(
-            db,
-            token_id=token_id,
-            bids=book.bids,
-            reason=f"manual paper sell {args.label} {args.side}",
-        )
-        print(
-            f"{result.status} SELL {args.label} {args.side} "
-            f"avg={_fmt(result.fill_price)} proceeds=${result.fill_size_usd:.2f} "
-            f"shares={result.shares:.4f} reason={result.reason}"
-        )
-        return 0 if result.status == "filled" else 2
-    if args.command == "paper-tick":
-        migrate(db)
-        today = datetime.now(HKT).date()
-        if not args.no_fetch:
-            _fetch_hko(db)
-            _discover_markets_for_forecast_dates(db, today)
-            _fetch_orderbooks(db)
-        result = run_paper_tick(db, today_hkt=today)
-        print(
-            f"paper-tick buys={result.buys_filled}/{result.buys_missed} "
-            f"sells={result.sells_filled}/{result.sells_missed} "
-            f"signals={result.signals} notes={'; '.join(result.notes)}"
-        )
-        return 0
-    if args.command == "paper-loop":
-        migrate(db)
-        today = datetime.now(HKT).date()
-        if args.no_fetch:
-            run_paper_loop(db, tick_seconds=args.interval, max_ticks=args.ticks, today_hkt=today)
+    try:
+        if args.command == "latency-report":
+            migrate(db)
+            summary = latency_duration_summary(db, args.start_stage, args.end_stage)
+            print(_render_latency_summary(summary))
             return 0
-        ticks = 0
-        while args.ticks is None or ticks < args.ticks:
+        if args.command == "hko-source-timing-report":
+            migrate(db)
+            report = _hko_source_timing_report(
+                db,
+                endpoint_contains=args.endpoint_contains,
+                limit=args.limit,
+            )
+            print(report)
+            return 0
+        if args.command == "low-latency-readiness-report":
+            migrate(db)
+            report, gate_status = _low_latency_readiness_report(
+                db,
+                hko_endpoint_contains=args.hko_endpoint_contains,
+                hko_limit=args.hko_limit,
+            )
+            print(report)
+            if args.require_evidence and not gate_status["all_passed"]:
+                print(
+                    "readiness evidence missing: "
+                    + ", ".join(gate_status["missing_gates"])
+                )
+                return 2
+            return 0
+        if args.command == "low-latency-archive-evidence":
+            migrate(db)
+            output_dir = Path(args.output_dir)
+            report_paths, gate_status = _archive_low_latency_evidence(
+                db,
+                db_path=db_path,
+                output_dir=output_dir,
+                hko_endpoint_contains=args.hko_endpoint_contains,
+                hko_limit=args.hko_limit,
+            )
+            print(f"archived low latency evidence to {output_dir}")
+            for path in report_paths:
+                print(path)
+            if args.require_evidence and not gate_status["all_passed"]:
+                print(
+                    "readiness evidence missing: "
+                    + ", ".join(gate_status["missing_gates"])
+                )
+                return 2
+            return 0
+        if args.command == "init-db":
+            migrate(db)
+            print(f"initialized {args.db}")
+            return 0
+        if args.command == "fetch-hko":
+            migrate(db)
             _fetch_hko(db)
-            _discover_markets_for_forecast_dates(db, today)
+            print("stored HKO snapshots")
+            return 0
+        if args.command == "discover-market":
+            migrate(db)
+            target_date = date.fromisoformat(args.date)
+            if not _discover_market(db, target_date):
+                print("no market event found")
+                return 2
+            print(f"stored temperature markets for {target_date.isoformat()}")
+            return 0
+        if args.command == "fetch-orderbooks":
+            migrate(db)
             _fetch_orderbooks(db)
+            return 0
+        if args.command == "calc-entry":
+            outcome = find_outcome_by_label(db, args.label)
+            token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
+            book = latest_orderbook(db, token_id)
+            quote = calculate_entry(
+                token_id, args.size_usd, book.asks, max_order_usd=Settings.max_order_usd
+            )
+            print(
+                f"{quote.status} {args.label} {args.side} "
+                f"size=${quote.requested_size_usd:.2f} limit={_fmt(quote.limit_price)} "
+                f"avg={_fmt(quote.estimated_avg_price)} shares={quote.estimated_shares:.4f} "
+                f"cost=${quote.estimated_cost_usd:.2f} reason={quote.reason}"
+            )
+            return 0 if quote.status == "fillable" else 2
+        if args.command == "paper-buy":
+            outcome = find_outcome_by_label(db, args.label)
+            token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
+            book = latest_orderbook(db, token_id)
+            result = execute_paper_buy(
+                db,
+                token_id=token_id,
+                side=args.side,
+                size_usd=args.size_usd,
+                asks=book.asks,
+                max_order_usd=Settings.max_order_usd,
+                reason=f"manual paper buy {args.label} {args.side}",
+            )
+            print(
+                f"{result.status} BUY_{args.side} {args.label} "
+                f"avg={_fmt(result.fill_price)} cost=${result.fill_size_usd:.2f} "
+                f"shares={result.shares:.4f} reason={result.reason}"
+            )
+            return 0 if result.status == "filled" else 2
+        if args.command == "check-exit":
+            outcome = find_outcome_by_label(db, args.label)
+            token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
+            book = latest_orderbook(db, token_id)
+            current_bid = book.best_bid
+            if current_bid is None:
+                print("no current bid")
+                return 2
+            quote = calculate_exit(
+                db,
+                token_id,
+                current_bid,
+                args.take_profit,
+                max_hold_minutes=args.max_hold_minutes,
+            )
+            print(
+                f"{args.label} {args.side} bid={current_bid:.4f} "
+                f"entry={quote.avg_entry_price:.4f} move={quote.price_move:.4f} "
+                f"shares={quote.net_shares:.4f} should_sell={quote.should_sell} "
+                f"reason={quote.reason}"
+            )
+            return 0
+        if args.command == "paper-sell":
+            outcome = find_outcome_by_label(db, args.label)
+            token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
+            book = latest_orderbook(db, token_id)
+            result = execute_paper_sell(
+                db,
+                token_id=token_id,
+                bids=book.bids,
+                reason=f"manual paper sell {args.label} {args.side}",
+            )
+            print(
+                f"{result.status} SELL {args.label} {args.side} "
+                f"avg={_fmt(result.fill_price)} proceeds=${result.fill_size_usd:.2f} "
+                f"shares={result.shares:.4f} reason={result.reason}"
+            )
+            return 0 if result.status == "filled" else 2
+        if args.command == "paper-tick":
+            migrate(db)
+            today = datetime.now(HKT).date()
+            if not args.no_fetch:
+                _fetch_hko(db)
+                _discover_markets_for_forecast_dates(db, today)
+                _fetch_orderbooks(db)
             result = run_paper_tick(db, today_hkt=today)
             print(
                 f"paper-tick buys={result.buys_filled}/{result.buys_missed} "
                 f"sells={result.sells_filled}/{result.sells_missed} "
                 f"signals={result.signals} notes={'; '.join(result.notes)}"
             )
-            ticks += 1
-            if args.ticks is None or ticks < args.ticks:
-                time.sleep(args.interval)
-        return 0
-    if args.command == "dashboard":
-        migrate(db)
-        print(render_dashboard(db))
-        return 0
-    if args.command == "dashboard-serve":
-        migrate(db)
-        db.close()
-        serve_dashboard(db_path, host=args.host, port=args.port)
-        return 0
-    if args.command == "backtest-day":
-        db.close()
-        target = date.fromisoformat(args.date)
-        replay_db = Path(args.replay_db) if args.replay_db else None
-        result = run_backtest_day(
-            db_path,
-            target,
-            replay_db=replay_db,
-            tick_source=args.tick_source,
-            include_orderbook_ticks=args.include_orderbook_ticks,
-            max_ticks=args.max_ticks,
-        )
-        print(dumps_result_json(result) if args.json else render_backtest_result(result))
-        return 0
-    if args.command == "experiment-backtest-day":
-        db.close()
-        target = date.fromisoformat(args.date)
-        config = ExperimentConfig.from_path(Path(args.config) if args.config else None)
-        replay_db = Path(args.replay_db) if args.replay_db else None
-        result = run_experiment_backtest_day(
-            db_path,
-            target,
-            config,
-            replay_db=replay_db,
-            tick_source=args.tick_source,
-            include_orderbook_ticks=args.include_orderbook_ticks,
-            max_ticks=args.max_ticks,
-        )
-        print(
-            dumps_experiment_result_json(result)
-            if args.json
-            else render_experiment_result(result)
-        )
-        return 0
-    if args.command == "live-store-hot-key":
-        private_key = getpass.getpass("Polymarket bot private key: ")
-        if not private_key.startswith("0x"):
-            print("refusing to store key: expected 0x-prefixed private key")
-            return 2
-        store_keychain_secret(args.service, args.account, private_key)
-        print(f"stored hot key in Keychain service={args.service} account={args.account}")
-        return 0
-    if args.command == "live-preflight":
-        migrate(db)
-        if not args.live:
-            print("refusing live preflight without --live")
-            return 2
-        print("LIVE TRADING preflight")
-        try:
-            config = load_live_config()
-            client = PolymarketClobClient(config)
-            result = preflight_live(
-                db,
-                client,
-                config,
-                required_balance_usd=Settings.live_scheduler_order_cap_usd,
-            )
-        except LiveTradingError as exc:
-            print(f"live preflight failed: {exc}")
-            return 2
-        print(
-            f"preflight ok={result.ok} signer={result.signer_address or 'n/a'} "
-            f"funder={result.funder_address or 'n/a'} "
-            f"balance={_fmt(result.balance_usd)} allowance_ok={result.allowance_ok} "
-            f"reason={result.reason}"
-        )
-        return 0 if result.ok else 2
-    if args.command == "live-auth-smoke":
-        migrate(db)
-        if not args.live:
-            print("refusing live auth smoke without --live")
-            return 2
-        print("LIVE TRADING auth smoke")
-        try:
-            config = load_live_config()
-            client = PolymarketClobClient(config)
-            result = preflight_live(
-                db,
-                client,
-                config,
-                required_balance_usd=Settings.live_scheduler_order_cap_usd,
-            )
-        except LiveTradingError as exc:
-            print(f"live auth smoke failed: {exc}")
-            return 2
-        _record_live_auth_smoke(
-            db,
-            ok=result.ok,
-            signer_address=result.signer_address,
-            funder_address=result.funder_address,
-            required_balance_usd=Settings.live_scheduler_order_cap_usd,
-            balance_usd=result.balance_usd,
-            allowance_ok=result.allowance_ok,
-            reason=result.reason,
-        )
-        print(
-            f"auth ok={result.ok} signer={result.signer_address or 'n/a'} "
-            f"funder={result.funder_address or 'n/a'} "
-            f"required_balance_usd={Settings.live_scheduler_order_cap_usd:.2f} "
-            f"balance={_fmt(result.balance_usd)} allowance_ok={result.allowance_ok} "
-            f"reason={result.reason}"
-        )
-        return 0 if result.ok else 2
-    if args.command == "live-network-smoke":
-        migrate(db)
-        if not args.live:
-            print("refusing live network smoke without --live")
-            return 2
-        print("LIVE TRADING network smoke")
-        websocket_runtime = None
-        try:
-            config = load_live_config()
-            websocket_runtime = LiveWebSocketRuntime.for_live_scheduler(
-                db_path=db_path,
-                config=config,
-                min_date_hkt=datetime.now(HKT).date().isoformat(),
-            )
-            websocket_runtime.start()
-            time.sleep(max(args.seconds, 0.0))
-            all_running = websocket_runtime.all_running
-            print(f"live network smoke websocket_all_running={all_running}")
-            client_statuses = list(getattr(websocket_runtime, "client_statuses", ()))
-            for index, status in enumerate(
-                client_statuses, start=1
-            ):
-                print(
-                    "live network smoke "
-                    f"client{index}_connected_once={status.connected_once} "
-                    f"client{index}_attempts={status.connection_attempts} "
-                    f"client{index}_messages={status.messages_applied} "
-                    f"client{index}_last_error={status.last_error or 'n/a'}"
-                )
-            connected_once_all = bool(client_statuses) and all(
-                status.connected_once for status in client_statuses
-            )
-            if args.require_connected:
-                required_clients = 2
-                print(
-                    "live network smoke "
-                    f"client_count={len(client_statuses)} "
-                    f"required_clients={required_clients}"
-                )
-                print(
-                    "live network smoke "
-                    f"connected_once_all={connected_once_all}"
-                )
-                has_required_clients = len(client_statuses) >= required_clients
-                ok = all_running and connected_once_all and has_required_clients
-                _record_live_network_smoke(
-                    db,
-                    ok=ok,
-                    all_running=all_running,
-                    connected_once_all=connected_once_all,
-                    client_statuses=client_statuses,
-                    required_clients=required_clients,
-                )
-                return 0 if ok else 2
-            _record_live_network_smoke(
-                db,
-                ok=all_running,
-                all_running=all_running,
-                connected_once_all=connected_once_all,
-                client_statuses=client_statuses,
-                required_clients=None,
-            )
-            return 0 if all_running else 2
-        except LiveTradingError as exc:
-            print(f"live network smoke failed: {exc}")
-            _record_live_network_smoke(
-                db,
-                ok=False,
-                all_running=False,
-                connected_once_all=False,
-                client_statuses=[],
-                required_clients=2 if args.require_connected else None,
-                error=str(exc),
-            )
-            return 2
-        finally:
-            if websocket_runtime is not None:
-                websocket_runtime.stop(timeout=5)
-    if args.command == "live-buy":
-        migrate(db)
-        if not args.live or not args.yes_i_understand:
-            print("refusing live buy without --live and --yes-i-understand")
-            return 2
-        if args.size_usd > Settings.live_manual_order_cap_usd:
-            print(f"refusing live buy above manual cap ${Settings.live_manual_order_cap_usd:.2f}")
-            return 2
-        print("LIVE TRADING manual buy")
-        try:
-            config = load_live_config()
-            client = PolymarketClobClient(config)
-            outcome = find_outcome_by_label_and_filters(
-                db,
-                args.label,
-                target_date_hkt=args.date,
-                slug_contains=args.market_kind,
-            )
-            token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
-            book = latest_orderbook(db, token_id)
-            max_price = book.best_ask + Settings.max_entry_limit_slippage if book.best_ask is not None else None
-            result = execute_live_buy(
-                db,
-                client,
-                token_id=token_id,
-                side=args.side,
-                size_usd=args.size_usd,
-                asks=book.asks,
-                reason=f"manual live buy {args.label} {args.side}",
-                max_price=max_price,
-                min_fill_usd=min(args.size_usd, Settings.min_entry_fill_usd),
-                order_cap_usd=Settings.live_manual_order_cap_usd,
-                label=args.label,
-                event_type="manual_live",
-            )
-        except (LiveTradingError, ValueError) as exc:
-            print(f"live buy failed: {exc}")
-            return 2
-        print(
-            f"{result.status} {result.side} {args.label} "
-            f"avg={_fmt(result.fill_price)} cost=${result.fill_size_usd:.2f} "
-            f"shares={result.shares:.4f} order={result.clob_order_id or 'n/a'} "
-            f"reason={result.reason}"
-        )
-        return 0 if result.status in ("filled", "submitted") else 2
-    if args.command == "live-sell":
-        migrate(db)
-        if not args.live or not args.yes_i_understand:
-            print("refusing live sell without --live and --yes-i-understand")
-            return 2
-        print("LIVE TRADING manual sell")
-        try:
-            config = load_live_config()
-            client = PolymarketClobClient(config)
-            outcome = find_outcome_by_label_and_filters(
-                db,
-                args.label,
-                target_date_hkt=args.date,
-                slug_contains=args.market_kind,
-            )
-            token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
-            book = latest_orderbook(db, token_id)
-            result = execute_live_sell(
-                db,
-                client,
-                token_id=token_id,
-                bids=book.bids,
-                reason=f"manual live sell {args.label} {args.side}",
-                label=args.label,
-                event_type="manual_live",
-            )
-        except (LiveTradingError, ValueError) as exc:
-            print(f"live sell failed: {exc}")
-            return 2
-        print(
-            f"{result.status} SELL {args.label} {args.side} "
-            f"avg={_fmt(result.fill_price)} proceeds=${result.fill_size_usd:.2f} "
-            f"shares={result.shares:.4f} order={result.clob_order_id or 'n/a'} "
-            f"reason={result.reason}"
-        )
-        return 0 if result.status in ("filled", "submitted") else 2
-    if args.command == "live-reconcile":
-        migrate(db)
-        if not args.live:
-            print("refusing live reconcile without --live")
-            return 2
-        print("LIVE TRADING reconcile")
-        try:
-            config = load_live_config()
-            client = PolymarketClobClient(config)
-            reconcile_result = reconcile_pending_live_orders(db, client)
-        except LiveTradingError as exc:
-            print(f"live reconcile failed: {exc}")
-            return 2
-        print(
-            f"reconciled {reconcile_result.orders_checked} live orders; "
-            f"filled={reconcile_result.orders_filled} "
-            f"open={reconcile_result.orders_open} "
-            f"errors={reconcile_result.orders_error} "
-            f"rebuilt_positions={reconcile_result.rebuilt_positions}"
-        )
-        return 0
-    if args.command == "live-settlement-validate":
-        migrate(db)
-        if not args.live:
-            print("refusing live settlement validation without --live")
-            return 2
-        row = db.execute(
-            "select * from live_orders where id = ?",
-            (args.order_id,),
-        ).fetchone()
-        if row is None:
-            print(f"live settlement validation failed: order {args.order_id} not found")
-            return 2
-        if not _is_filled_live_settlement_row(row):
-            print(
-                "live settlement validation failed: "
-                f"order {args.order_id} is not a filled settlement"
-            )
-            return 2
-        _record_live_settlement_validation(
-            db,
-            live_order=row,
-            reference=args.reference,
-        )
-        print(
-            f"validated live settlement order_id={args.order_id} "
-            f"outcome={row['outcome_id']} reference={args.reference}"
-        )
-        return 0
-    if args.command == "live-cancel-order":
-        migrate(db)
-        if not args.live or not args.yes_i_understand:
-            print("refusing live cancel without --live and --yes-i-understand")
-            return 2
-        print("LIVE TRADING cancel order")
-        try:
-            config = load_live_config()
-            client = PolymarketClobClient(config)
-            payload = client.cancel_order(args.order_id)
-        except LiveTradingError as exc:
-            print(f"live cancel failed: {exc}")
-            return 2
-        print(f"cancelled order {args.order_id}: {payload}")
-        return 0
-    if args.command == "live-cancel-all":
-        migrate(db)
-        if not args.live or not args.yes_i_understand:
-            print("refusing live cancel-all without --live and --yes-i-understand")
-            return 2
-        print("LIVE TRADING cancel all")
-        try:
-            config = load_live_config()
-            client = PolymarketClobClient(config)
-            payload = client.cancel_all()
-        except LiveTradingError as exc:
-            print(f"live cancel-all failed: {exc}")
-            return 2
-        print(f"cancel-all result: {payload}")
-        return 0
-    if args.command == "live-tick":
-        migrate(db)
-        if not args.live:
-            print("refusing live tick without --live")
-            return 2
-        print("LIVE TRADING tick")
-        try:
-            config = load_live_config()
-            client = PolymarketClobClient(config)
+            return 0
+        if args.command == "paper-loop":
+            migrate(db)
             today = datetime.now(HKT).date()
-            if not args.no_fetch:
+            if args.no_fetch:
+                run_paper_loop(db, tick_seconds=args.interval, max_ticks=args.ticks, today_hkt=today)
+                return 0
+            ticks = 0
+            while args.ticks is None or ticks < args.ticks:
                 _fetch_hko(db)
                 _discover_markets_for_forecast_dates(db, today)
                 _fetch_orderbooks(db)
-            preflight = preflight_live(
-                db,
-                client,
+                result = run_paper_tick(db, today_hkt=today)
+                print(
+                    f"paper-tick buys={result.buys_filled}/{result.buys_missed} "
+                    f"sells={result.sells_filled}/{result.sells_missed} "
+                    f"signals={result.signals} notes={'; '.join(result.notes)}"
+                )
+                ticks += 1
+                if args.ticks is None or ticks < args.ticks:
+                    time.sleep(args.interval)
+            return 0
+        if args.command == "dashboard":
+            migrate(db)
+            print(render_dashboard(db))
+            return 0
+        if args.command == "dashboard-serve":
+            migrate(db)
+            db.close()
+            serve_dashboard(db_path, host=args.host, port=args.port)
+            return 0
+        if args.command == "backtest-day":
+            db.close()
+            target = date.fromisoformat(args.date)
+            replay_db = Path(args.replay_db) if args.replay_db else None
+            result = run_backtest_day(
+                db_path,
+                target,
+                replay_db=replay_db,
+                tick_source=args.tick_source,
+                include_orderbook_ticks=args.include_orderbook_ticks,
+                max_ticks=args.max_ticks,
+            )
+            print(dumps_result_json(result) if args.json else render_backtest_result(result))
+            return 0
+        if args.command == "experiment-backtest-day":
+            db.close()
+            target = date.fromisoformat(args.date)
+            config = ExperimentConfig.from_path(Path(args.config) if args.config else None)
+            replay_db = Path(args.replay_db) if args.replay_db else None
+            result = run_experiment_backtest_day(
+                db_path,
+                target,
                 config,
-                required_balance_usd=Settings.live_scheduler_order_cap_usd,
-                require_entry_capacity=False,
+                replay_db=replay_db,
+                tick_source=args.tick_source,
+                include_orderbook_ticks=args.include_orderbook_ticks,
+                max_ticks=args.max_ticks,
             )
-            if not preflight.ok:
-                print(f"live preflight failed: {preflight.reason}")
-                return 2
-            kill_switch_exit = enforce_live_kill_switch_exits(
-                db,
-                client,
-                event_key="live_tick",
-            )
-            result = run_live_tick(
-                db,
-                client,
-                today_hkt=today,
-                order_cap_usd=Settings.live_scheduler_order_cap_usd,
-            )
-        except (LiveTradingError, ValueError) as exc:
-            print(f"live tick failed: {exc}")
-            return 2
-        print(
-            f"live-tick buys={result.buys_filled}/{result.buys_missed} "
-            f"sells={result.sells_filled}/{result.sells_missed} "
-            f"signals={result.signals} notes={'; '.join(result.notes)}"
-        )
-        if kill_switch_exit.enabled:
             print(
-                "live kill-switch exits "
-                f"cancel_all={kill_switch_exit.cancel_all_status} "
-                f"sells={kill_switch_exit.sells_filled}/{kill_switch_exit.sells_attempted} "
-                f"missed={kill_switch_exit.sells_missed}",
-                flush=True,
+                dumps_experiment_result_json(result)
+                if args.json
+                else render_experiment_result(result)
             )
-        return 0
-    if args.command == "live-scheduler":
-        migrate(db)
-        if not args.live:
-            print("refusing live scheduler without --live")
-            return 2
-        print("LIVE TRADING scheduler starting", flush=True)
-        if not args.no_startup_backup:
-            print("creating startup backup...", flush=True)
-            backup_path = backup_sqlite_database(db_path)
-            print(f"created startup backup {backup_path}", flush=True)
-        stale_submitted = freeze_new_entries_for_stale_submitted_orders(db)
-        if stale_submitted:
-            print(
-                f"blocked new entries: {stale_submitted} stale submitted live orders",
-                flush=True,
-            )
-        print("loading live config and running preflight...", flush=True)
-        try:
-            config = load_live_config()
-            client = PolymarketClobClient(config)
-            alert_sink = alert_sink_from_env(os.environ)
-            preflight = preflight_live(
-                db,
-                client,
-                config,
-                required_balance_usd=Settings.live_scheduler_order_cap_usd,
-                require_entry_capacity=False,
-            )
-            if not preflight.ok:
-                print(f"live preflight failed: {preflight.reason}")
+            return 0
+        if args.command == "live-store-hot-key":
+            private_key = getpass.getpass("Polymarket bot private key: ")
+            if not private_key.startswith("0x"):
+                print("refusing to store key: expected 0x-prefixed private key")
                 return 2
-            kill_switch_exit = enforce_live_kill_switch_exits(
+            store_keychain_secret(args.service, args.account, private_key)
+            print(f"stored hot key in Keychain service={args.service} account={args.account}")
+            return 0
+        if args.command == "live-preflight":
+            migrate(db)
+            if not args.live:
+                print("refusing live preflight without --live")
+                return 2
+            print("LIVE TRADING preflight")
+            try:
+                config = load_live_config()
+                client = PolymarketClobClient(config)
+                result = preflight_live(
+                    db,
+                    client,
+                    config,
+                    required_balance_usd=Settings.live_scheduler_order_cap_usd,
+                )
+            except LiveTradingError as exc:
+                print(f"live preflight failed: {exc}")
+                return 2
+            print(
+                f"preflight ok={result.ok} signer={result.signer_address or 'n/a'} "
+                f"funder={result.funder_address or 'n/a'} "
+                f"balance={_fmt(result.balance_usd)} allowance_ok={result.allowance_ok} "
+                f"reason={result.reason}"
+            )
+            return 0 if result.ok else 2
+        if args.command == "live-auth-smoke":
+            migrate(db)
+            if not args.live:
+                print("refusing live auth smoke without --live")
+                return 2
+            print("LIVE TRADING auth smoke")
+            try:
+                config = load_live_config()
+                client = PolymarketClobClient(config)
+                result = preflight_live(
+                    db,
+                    client,
+                    config,
+                    required_balance_usd=Settings.live_scheduler_order_cap_usd,
+                )
+            except LiveTradingError as exc:
+                print(f"live auth smoke failed: {exc}")
+                return 2
+            _record_live_auth_smoke(
                 db,
-                client,
-                event_key="live_scheduler_startup",
+                ok=result.ok,
+                signer_address=result.signer_address,
+                funder_address=result.funder_address,
+                required_balance_usd=Settings.live_scheduler_order_cap_usd,
+                balance_usd=result.balance_usd,
+                allowance_ok=result.allowance_ok,
+                reason=result.reason,
+            )
+            print(
+                f"auth ok={result.ok} signer={result.signer_address or 'n/a'} "
+                f"funder={result.funder_address or 'n/a'} "
+                f"required_balance_usd={Settings.live_scheduler_order_cap_usd:.2f} "
+                f"balance={_fmt(result.balance_usd)} allowance_ok={result.allowance_ok} "
+                f"reason={result.reason}"
+            )
+            return 0 if result.ok else 2
+        if args.command == "live-network-smoke":
+            migrate(db)
+            if not args.live:
+                print("refusing live network smoke without --live")
+                return 2
+            print("LIVE TRADING network smoke")
+            websocket_runtime = None
+            try:
+                config = load_live_config()
+                websocket_runtime = LiveWebSocketRuntime.for_live_scheduler(
+                    db_path=db_path,
+                    config=config,
+                    min_date_hkt=datetime.now(HKT).date().isoformat(),
+                )
+                websocket_runtime.start()
+                time.sleep(max(args.seconds, 0.0))
+                all_running = websocket_runtime.all_running
+                print(f"live network smoke websocket_all_running={all_running}")
+                client_statuses = list(getattr(websocket_runtime, "client_statuses", ()))
+                for index, status in enumerate(
+                    client_statuses, start=1
+                ):
+                    print(
+                        "live network smoke "
+                        f"client{index}_connected_once={status.connected_once} "
+                        f"client{index}_attempts={status.connection_attempts} "
+                        f"client{index}_messages={status.messages_applied} "
+                        f"client{index}_last_error={status.last_error or 'n/a'}"
+                    )
+                connected_once_all = bool(client_statuses) and all(
+                    status.connected_once for status in client_statuses
+                )
+                if args.require_connected:
+                    required_clients = 2
+                    print(
+                        "live network smoke "
+                        f"client_count={len(client_statuses)} "
+                        f"required_clients={required_clients}"
+                    )
+                    print(
+                        "live network smoke "
+                        f"connected_once_all={connected_once_all}"
+                    )
+                    has_required_clients = len(client_statuses) >= required_clients
+                    ok = all_running and connected_once_all and has_required_clients
+                    _record_live_network_smoke(
+                        db,
+                        ok=ok,
+                        all_running=all_running,
+                        connected_once_all=connected_once_all,
+                        client_statuses=client_statuses,
+                        required_clients=required_clients,
+                    )
+                    return 0 if ok else 2
+                _record_live_network_smoke(
+                    db,
+                    ok=all_running,
+                    all_running=all_running,
+                    connected_once_all=connected_once_all,
+                    client_statuses=client_statuses,
+                    required_clients=None,
+                )
+                return 0 if all_running else 2
+            except LiveTradingError as exc:
+                print(f"live network smoke failed: {exc}")
+                _record_live_network_smoke(
+                    db,
+                    ok=False,
+                    all_running=False,
+                    connected_once_all=False,
+                    client_statuses=[],
+                    required_clients=2 if args.require_connected else None,
+                    error=str(exc),
+                )
+                return 2
+            finally:
+                if websocket_runtime is not None:
+                    websocket_runtime.stop(timeout=5)
+        if args.command == "live-buy":
+            migrate(db)
+            if not args.live or not args.yes_i_understand:
+                print("refusing live buy without --live and --yes-i-understand")
+                return 2
+            if args.size_usd > Settings.live_manual_order_cap_usd:
+                print(f"refusing live buy above manual cap ${Settings.live_manual_order_cap_usd:.2f}")
+                return 2
+            print("LIVE TRADING manual buy")
+            try:
+                config = load_live_config()
+                client = PolymarketClobClient(config)
+                outcome = find_outcome_by_label_and_filters(
+                    db,
+                    args.label,
+                    target_date_hkt=args.date,
+                    slug_contains=args.market_kind,
+                )
+                token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
+                book = latest_orderbook(db, token_id)
+                max_price = book.best_ask + Settings.max_entry_limit_slippage if book.best_ask is not None else None
+                result = execute_live_buy(
+                    db,
+                    client,
+                    token_id=token_id,
+                    side=args.side,
+                    size_usd=args.size_usd,
+                    asks=book.asks,
+                    reason=f"manual live buy {args.label} {args.side}",
+                    max_price=max_price,
+                    min_fill_usd=min(args.size_usd, Settings.min_entry_fill_usd),
+                    order_cap_usd=Settings.live_manual_order_cap_usd,
+                    label=args.label,
+                    event_type="manual_live",
+                )
+            except (LiveTradingError, ValueError) as exc:
+                print(f"live buy failed: {exc}")
+                return 2
+            print(
+                f"{result.status} {result.side} {args.label} "
+                f"avg={_fmt(result.fill_price)} cost=${result.fill_size_usd:.2f} "
+                f"shares={result.shares:.4f} order={result.clob_order_id or 'n/a'} "
+                f"reason={result.reason}"
+            )
+            return 0 if result.status in ("filled", "submitted") else 2
+        if args.command == "live-sell":
+            migrate(db)
+            if not args.live or not args.yes_i_understand:
+                print("refusing live sell without --live and --yes-i-understand")
+                return 2
+            print("LIVE TRADING manual sell")
+            try:
+                config = load_live_config()
+                client = PolymarketClobClient(config)
+                outcome = find_outcome_by_label_and_filters(
+                    db,
+                    args.label,
+                    target_date_hkt=args.date,
+                    slug_contains=args.market_kind,
+                )
+                token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
+                book = latest_orderbook(db, token_id)
+                result = execute_live_sell(
+                    db,
+                    client,
+                    token_id=token_id,
+                    bids=book.bids,
+                    reason=f"manual live sell {args.label} {args.side}",
+                    label=args.label,
+                    event_type="manual_live",
+                )
+            except (LiveTradingError, ValueError) as exc:
+                print(f"live sell failed: {exc}")
+                return 2
+            print(
+                f"{result.status} SELL {args.label} {args.side} "
+                f"avg={_fmt(result.fill_price)} proceeds=${result.fill_size_usd:.2f} "
+                f"shares={result.shares:.4f} order={result.clob_order_id or 'n/a'} "
+                f"reason={result.reason}"
+            )
+            return 0 if result.status in ("filled", "submitted") else 2
+        if args.command == "live-reconcile":
+            migrate(db)
+            if not args.live:
+                print("refusing live reconcile without --live")
+                return 2
+            print("LIVE TRADING reconcile")
+            try:
+                config = load_live_config()
+                client = PolymarketClobClient(config)
+                reconcile_result = reconcile_pending_live_orders(db, client)
+            except LiveTradingError as exc:
+                print(f"live reconcile failed: {exc}")
+                return 2
+            print(
+                f"reconciled {reconcile_result.orders_checked} live orders; "
+                f"filled={reconcile_result.orders_filled} "
+                f"open={reconcile_result.orders_open} "
+                f"errors={reconcile_result.orders_error} "
+                f"rebuilt_positions={reconcile_result.rebuilt_positions}"
+            )
+            return 0
+        if args.command == "live-settlement-validate":
+            migrate(db)
+            if not args.live:
+                print("refusing live settlement validation without --live")
+                return 2
+            row = db.execute(
+                "select * from live_orders where id = ?",
+                (args.order_id,),
+            ).fetchone()
+            if row is None:
+                print(f"live settlement validation failed: order {args.order_id} not found")
+                return 2
+            if not _is_filled_live_settlement_row(row):
+                print(
+                    "live settlement validation failed: "
+                    f"order {args.order_id} is not a filled settlement"
+                )
+                return 2
+            _record_live_settlement_validation(
+                db,
+                live_order=row,
+                reference=args.reference,
+            )
+            print(
+                f"validated live settlement order_id={args.order_id} "
+                f"outcome={row['outcome_id']} reference={args.reference}"
+            )
+            return 0
+        if args.command == "live-cancel-order":
+            migrate(db)
+            if not args.live or not args.yes_i_understand:
+                print("refusing live cancel without --live and --yes-i-understand")
+                return 2
+            print("LIVE TRADING cancel order")
+            try:
+                config = load_live_config()
+                client = PolymarketClobClient(config)
+                payload = client.cancel_order(args.order_id)
+            except LiveTradingError as exc:
+                print(f"live cancel failed: {exc}")
+                return 2
+            print(f"cancelled order {args.order_id}: {payload}")
+            return 0
+        if args.command == "live-cancel-all":
+            migrate(db)
+            if not args.live or not args.yes_i_understand:
+                print("refusing live cancel-all without --live and --yes-i-understand")
+                return 2
+            print("LIVE TRADING cancel all")
+            try:
+                config = load_live_config()
+                client = PolymarketClobClient(config)
+                payload = client.cancel_all()
+            except LiveTradingError as exc:
+                print(f"live cancel-all failed: {exc}")
+                return 2
+            print(f"cancel-all result: {payload}")
+            return 0
+        if args.command == "live-tick":
+            migrate(db)
+            if not args.live:
+                print("refusing live tick without --live")
+                return 2
+            print("LIVE TRADING tick")
+            try:
+                config = load_live_config()
+                client = PolymarketClobClient(config)
+                today = datetime.now(HKT).date()
+                if not args.no_fetch:
+                    _fetch_hko(db)
+                    _discover_markets_for_forecast_dates(db, today)
+                    _fetch_orderbooks(db)
+                preflight = preflight_live(
+                    db,
+                    client,
+                    config,
+                    required_balance_usd=Settings.live_scheduler_order_cap_usd,
+                    require_entry_capacity=False,
+                )
+                if not preflight.ok:
+                    print(f"live preflight failed: {preflight.reason}")
+                    return 2
+                kill_switch_exit = enforce_live_kill_switch_exits(
+                    db,
+                    client,
+                    event_key="live_tick",
+                )
+                result = run_live_tick(
+                    db,
+                    client,
+                    today_hkt=today,
+                    order_cap_usd=Settings.live_scheduler_order_cap_usd,
+                )
+            except (LiveTradingError, ValueError) as exc:
+                print(f"live tick failed: {exc}")
+                return 2
+            print(
+                f"live-tick buys={result.buys_filled}/{result.buys_missed} "
+                f"sells={result.sells_filled}/{result.sells_missed} "
+                f"signals={result.signals} notes={'; '.join(result.notes)}"
             )
             if kill_switch_exit.enabled:
                 print(
@@ -932,145 +888,302 @@ def main(argv: list[str] | None = None) -> int:
                     f"missed={kill_switch_exit.sells_missed}",
                     flush=True,
                 )
-            reconcile_result = reconcile_pending_live_orders(db, client)
-            if reconcile_result.orders_checked:
+            return 0
+        if args.command == "live-scheduler":
+            migrate(db)
+            if not args.live:
+                print("refusing live scheduler without --live")
+                return 2
+            print("LIVE TRADING scheduler starting", flush=True)
+            if not args.no_startup_backup:
+                print("creating startup backup...", flush=True)
+                backup_path = backup_sqlite_database(db_path)
+                print(f"created startup backup {backup_path}", flush=True)
+            stale_submitted = freeze_new_entries_for_stale_submitted_orders(db)
+            if stale_submitted:
                 print(
-                    "live reconcile "
-                    f"checked={reconcile_result.orders_checked} "
-                    f"filled={reconcile_result.orders_filled} "
-                    f"open={reconcile_result.orders_open} "
-                    f"errors={reconcile_result.orders_error} "
-                    f"rebuilt_positions={reconcile_result.rebuilt_positions}",
+                    f"blocked new entries: {stale_submitted} stale submitted live orders",
                     flush=True,
                 )
-            drifts = find_live_position_drifts(db, client)
-            _record_live_clob_drift_scan(db, phase="startup", drifts=drifts)
-            drift_count = len(drifts)
-            health = evaluate_live_startup_health(
-                market_websocket_connected=not args.no_websockets,
-                user_websocket_connected=not args.no_websockets,
-                rest_fallback_available=True,
-                credentials_valid=True,
-                balance_allowance_ok=True,
-                stale_submitted_orders=stale_submitted,
-                local_clob_drift_count=drift_count,
+            print("loading live config and running preflight...", flush=True)
+            try:
+                config = load_live_config()
+                client = PolymarketClobClient(config)
+                alert_sink = alert_sink_from_env(os.environ)
+                preflight = preflight_live(
+                    db,
+                    client,
+                    config,
+                    required_balance_usd=Settings.live_scheduler_order_cap_usd,
+                    require_entry_capacity=False,
+                )
+                if not preflight.ok:
+                    print(f"live preflight failed: {preflight.reason}")
+                    return 2
+                kill_switch_exit = enforce_live_kill_switch_exits(
+                    db,
+                    client,
+                    event_key="live_scheduler_startup",
+                )
+                if kill_switch_exit.enabled:
+                    print(
+                        "live kill-switch exits "
+                        f"cancel_all={kill_switch_exit.cancel_all_status} "
+                        f"sells={kill_switch_exit.sells_filled}/{kill_switch_exit.sells_attempted} "
+                        f"missed={kill_switch_exit.sells_missed}",
+                        flush=True,
+                    )
+                reconcile_result = reconcile_pending_live_orders(db, client)
+                if reconcile_result.orders_checked:
+                    print(
+                        "live reconcile "
+                        f"checked={reconcile_result.orders_checked} "
+                        f"filled={reconcile_result.orders_filled} "
+                        f"open={reconcile_result.orders_open} "
+                        f"errors={reconcile_result.orders_error} "
+                        f"rebuilt_positions={reconcile_result.rebuilt_positions}",
+                        flush=True,
+                    )
+                drifts = find_live_position_drifts(db, client)
+                _record_live_clob_drift_scan(db, phase="startup", drifts=drifts)
+                drift_count = len(drifts)
+                health = evaluate_live_startup_health(
+                    market_websocket_connected=not args.no_websockets,
+                    user_websocket_connected=not args.no_websockets,
+                    rest_fallback_available=True,
+                    credentials_valid=True,
+                    balance_allowance_ok=True,
+                    stale_submitted_orders=stale_submitted,
+                    local_clob_drift_count=drift_count,
+                )
+                scheduler_smoke_blocked = False
+                if freeze_new_entries_for_health_failures(
+                    db, health, alert_sink=alert_sink
+                ):
+                    scheduler_smoke_blocked = True
+                    print(
+                        "blocked new entries: live startup health failed: "
+                        + "; ".join(health.reasons),
+                        flush=True,
+                    )
+            except LiveTradingError as exc:
+                print(f"live scheduler failed: {exc}")
+                return 2
+            try:
+                scheduler_lock = LiveSchedulerLock(db_path)
+                scheduler_lock.acquire()
+            except LiveSchedulerLockError as exc:
+                print(f"live scheduler failed: {exc}")
+                return 2
+            with scheduler_lock:
+                low_latency_queue = LowLatencyEventQueue()
+                websocket_runtime = None
+                if not args.no_websockets:
+                    websocket_runtime = LiveWebSocketRuntime.for_live_scheduler(
+                        db_path=db_path,
+                        config=config,
+                        min_date_hkt=datetime.now(HKT).date().isoformat(),
+                    )
+                    websocket_runtime.start()
+                    print("live websocket runtime started", flush=True)
+                aws_actual_poll_fetch = lambda: _fetch_current_temperature_for_path(
+                    db_path, event_queue=low_latency_queue
+                )
+                aws_actual_poll_learned_times = lambda: _list_hko_update_times_for_path(
+                    db_path, "aws_gis_actual"
+                )
+                def reconcile_watchdog(tick_db):
+                    nonlocal scheduler_smoke_blocked
+                    kill_switch_exit = enforce_live_kill_switch_exits(
+                        tick_db,
+                        client,
+                        event_key="live_reconcile_watchdog",
+                    )
+                    reconcile_result = reconcile_pending_live_orders(tick_db, client)
+                    drifts = find_live_position_drifts(tick_db, client)
+                    repaired = 0
+                    if drifts:
+                        repaired = repair_live_position_drifts(
+                            tick_db,
+                            drifts,
+                            event_key="live_reconcile_watchdog",
+                        )
+                        if repaired:
+                            drifts = find_live_position_drifts(tick_db, client)
+                    _record_live_clob_drift_scan(
+                        tick_db,
+                        phase="reconcile_watchdog",
+                        drifts=drifts,
+                        repaired=repaired,
+                    )
+                    websocket_stalled = (
+                        websocket_runtime is not None and not websocket_runtime.all_running
+                    )
+                    if not drifts and not websocket_stalled:
+                        if reconcile_result.orders_checked:
+                            return RunnerResult(
+                                notes=(
+                                    "live reconcile "
+                                    f"checked={reconcile_result.orders_checked} "
+                                    f"filled={reconcile_result.orders_filled} "
+                                    f"open={reconcile_result.orders_open} "
+                                    f"errors={reconcile_result.orders_error} "
+                                    f"rebuilt_positions={reconcile_result.rebuilt_positions}",
+                                )
+                            )
+                        if kill_switch_exit.enabled:
+                            return RunnerResult(
+                                notes=(
+                                    "live kill-switch exits "
+                                    f"cancel_all={kill_switch_exit.cancel_all_status} "
+                                    f"sells={kill_switch_exit.sells_filled}/{kill_switch_exit.sells_attempted} "
+                                    f"missed={kill_switch_exit.sells_missed}",
+                                )
+                            )
+                        if repaired:
+                            return RunnerResult(
+                                notes=(
+                                    f"live reconcile watchdog repaired {repaired} local/CLOB drift items",
+                                )
+                            )
+                        return RunnerResult()
+                    health = evaluate_live_startup_health(
+                        market_websocket_connected=not args.no_websockets and not websocket_stalled,
+                        user_websocket_connected=not args.no_websockets and not websocket_stalled,
+                        rest_fallback_available=True,
+                        credentials_valid=True,
+                        balance_allowance_ok=True,
+                        stale_submitted_orders=0,
+                        local_clob_drift_count=len(drifts),
+                    )
+                    freeze_new_entries_for_health_failures(
+                        tick_db, health, alert_sink=alert_sink
+                    )
+                    scheduler_smoke_blocked = True
+                    return RunnerResult(
+                        notes=(
+                            f"live reconcile watchdog froze entries: {len(drifts)} local/CLOB drift items",
+                        )
+                    )
+                try:
+                    run_scheduled_paper_loop(
+                        db,
+                        fetch_since_midnight=lambda: _fetch_since_midnight(db),
+                        fetch_bulletin=lambda: _fetch_bulletin(
+                            db, event_queue=low_latency_queue
+                        ),
+                        fetch_current_temperature=lambda: _fetch_current_temperature(
+                            db, event_queue=low_latency_queue
+                        ),
+                        learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
+                        learned_actual_times=lambda: list_hko_update_times(db, "aws_gis_actual"),
+                        discover_market=lambda target: _discover_markets_for_forecast_dates(
+                            db, target, event_queue=low_latency_queue
+                        ),
+                        fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
+                        base_sleep_seconds=args.sleep,
+                        max_ticks=args.ticks,
+                        quiet=not args.verbose,
+                        run_tick_fn=lambda tick_db, today_hkt: run_live_tick(
+                            tick_db,
+                            client,
+                            today_hkt=today_hkt,
+                            order_cap_usd=Settings.live_scheduler_order_cap_usd,
+                            book_cache=websocket_runtime.book_cache
+                            if websocket_runtime is not None
+                            else None,
+                        ),
+                        low_latency_event_queue=low_latency_queue,
+                        fast_event_handler=lambda tick_db, today_hkt: run_live_tick(
+                            tick_db,
+                            client,
+                            today_hkt=today_hkt,
+                            order_cap_usd=Settings.live_scheduler_order_cap_usd,
+                            book_cache=websocket_runtime.book_cache
+                            if websocket_runtime is not None
+                            else None,
+                        ),
+                        reconcile_watchdog_fn=reconcile_watchdog,
+                        aws_actual_poll_fetch=aws_actual_poll_fetch,
+                        aws_actual_poll_learned_times=aws_actual_poll_learned_times,
+                        output_label="live-scheduler",
+                        alert_sink=alert_sink,
+                    )
+                    if args.ticks is not None and not scheduler_smoke_blocked:
+                        _record_live_scheduler_smoke(
+                            db,
+                            ok=True,
+                            ticks=args.ticks,
+                            websockets_enabled=not args.no_websockets,
+                        )
+                except Exception as exc:
+                    if args.ticks is not None:
+                        _record_live_scheduler_smoke(
+                            db,
+                            ok=False,
+                            ticks=args.ticks,
+                            websockets_enabled=not args.no_websockets,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                    raise
+                finally:
+                    if websocket_runtime is not None:
+                        websocket_runtime.stop(timeout=5)
+                        print("live websocket runtime stopped", flush=True)
+            return 0
+        if args.command == "live-kill-switch":
+            migrate(db)
+            if args.block_new_entries and args.allow_new_entries:
+                print("choose only one of --block-new-entries or --allow-new-entries")
+                return 2
+            if args.exit_on_kill_switch and args.no_exit_on_kill_switch:
+                print("choose only one of --exit-on-kill-switch or --no-exit-on-kill-switch")
+                return 2
+            if args.block_new_entries:
+                set_live_setting(db, "block_new_entries", True)
+            if args.allow_new_entries:
+                set_live_setting(db, "block_new_entries", False)
+            if args.exit_on_kill_switch:
+                set_live_setting(db, "cancel_open_orders_and_exit_positions", True)
+            if args.no_exit_on_kill_switch:
+                set_live_setting(db, "cancel_open_orders_and_exit_positions", False)
+            if args.block_new_entries or args.allow_new_entries:
+                _record_live_kill_switch_verification(
+                    db,
+                    blocked=live_setting_enabled(db, "block_new_entries"),
+                    exit_on_kill_switch=live_setting_enabled(
+                        db, "cancel_open_orders_and_exit_positions"
+                    ),
+                )
+            print(
+                "live kill switch "
+                f"block_new_entries={live_setting_enabled(db, 'block_new_entries')} "
+                "cancel_open_orders_and_exit_positions="
+                f"{live_setting_enabled(db, 'cancel_open_orders_and_exit_positions')}"
             )
-            scheduler_smoke_blocked = False
-            if freeze_new_entries_for_health_failures(
-                db, health, alert_sink=alert_sink
-            ):
-                scheduler_smoke_blocked = True
-                print(
-                    "blocked new entries: live startup health failed: "
-                    + "; ".join(health.reasons),
-                    flush=True,
-                )
-        except LiveTradingError as exc:
-            print(f"live scheduler failed: {exc}")
-            return 2
-        try:
-            scheduler_lock = LiveSchedulerLock(db_path)
-            scheduler_lock.acquire()
-        except LiveSchedulerLockError as exc:
-            print(f"live scheduler failed: {exc}")
-            return 2
-        with scheduler_lock:
+            return 0
+        if args.command == "paper-scheduler":
+            migrate(db)
+            if not args.no_startup_backup:
+                backup_path = backup_sqlite_database(db_path)
+                print(f"created startup backup {backup_path}")
             low_latency_queue = LowLatencyEventQueue()
-            websocket_runtime = None
-            if not args.no_websockets:
-                websocket_runtime = LiveWebSocketRuntime.for_live_scheduler(
-                    db_path=db_path,
-                    config=config,
-                    min_date_hkt=datetime.now(HKT).date().isoformat(),
-                )
-                websocket_runtime.start()
-                print("live websocket runtime started", flush=True)
             aws_actual_poll_fetch = lambda: _fetch_current_temperature_for_path(
                 db_path, event_queue=low_latency_queue
             )
             aws_actual_poll_learned_times = lambda: _list_hko_update_times_for_path(
                 db_path, "aws_gis_actual"
             )
-            def reconcile_watchdog(tick_db):
-                nonlocal scheduler_smoke_blocked
-                kill_switch_exit = enforce_live_kill_switch_exits(
-                    tick_db,
-                    client,
-                    event_key="live_reconcile_watchdog",
-                )
-                reconcile_result = reconcile_pending_live_orders(tick_db, client)
-                drifts = find_live_position_drifts(tick_db, client)
-                repaired = 0
-                if drifts:
-                    repaired = repair_live_position_drifts(
-                        tick_db,
-                        drifts,
-                        event_key="live_reconcile_watchdog",
-                    )
-                    if repaired:
-                        drifts = find_live_position_drifts(tick_db, client)
-                _record_live_clob_drift_scan(
-                    tick_db,
-                    phase="reconcile_watchdog",
-                    drifts=drifts,
-                    repaired=repaired,
-                )
-                websocket_stalled = (
-                    websocket_runtime is not None and not websocket_runtime.all_running
-                )
-                if not drifts and not websocket_stalled:
-                    if reconcile_result.orders_checked:
-                        return RunnerResult(
-                            notes=(
-                                "live reconcile "
-                                f"checked={reconcile_result.orders_checked} "
-                                f"filled={reconcile_result.orders_filled} "
-                                f"open={reconcile_result.orders_open} "
-                                f"errors={reconcile_result.orders_error} "
-                                f"rebuilt_positions={reconcile_result.rebuilt_positions}",
-                            )
-                        )
-                    if kill_switch_exit.enabled:
-                        return RunnerResult(
-                            notes=(
-                                "live kill-switch exits "
-                                f"cancel_all={kill_switch_exit.cancel_all_status} "
-                                f"sells={kill_switch_exit.sells_filled}/{kill_switch_exit.sells_attempted} "
-                                f"missed={kill_switch_exit.sells_missed}",
-                            )
-                        )
-                    if repaired:
-                        return RunnerResult(
-                            notes=(
-                                f"live reconcile watchdog repaired {repaired} local/CLOB drift items",
-                            )
-                        )
-                    return RunnerResult()
-                health = evaluate_live_startup_health(
-                    market_websocket_connected=not args.no_websockets and not websocket_stalled,
-                    user_websocket_connected=not args.no_websockets and not websocket_stalled,
-                    rest_fallback_available=True,
-                    credentials_valid=True,
-                    balance_allowance_ok=True,
-                    stale_submitted_orders=0,
-                    local_clob_drift_count=len(drifts),
-                )
-                freeze_new_entries_for_health_failures(
-                    tick_db, health, alert_sink=alert_sink
-                )
-                scheduler_smoke_blocked = True
-                return RunnerResult(
-                    notes=(
-                        f"live reconcile watchdog froze entries: {len(drifts)} local/CLOB drift items",
-                    )
-                )
+            fast_worker = FastDecisionWorker(
+                db_path=db_path,
+                event_queue=low_latency_queue,
+            )
+            fast_worker.start()
             try:
                 run_scheduled_paper_loop(
                     db,
                     fetch_since_midnight=lambda: _fetch_since_midnight(db),
-                    fetch_bulletin=lambda: _fetch_bulletin(
-                        db, event_queue=low_latency_queue
-                    ),
+                    fetch_bulletin=lambda: _fetch_bulletin(db, event_queue=low_latency_queue),
                     fetch_current_temperature=lambda: _fetch_current_temperature(
                         db, event_queue=low_latency_queue
                     ),
@@ -1083,185 +1196,75 @@ def main(argv: list[str] | None = None) -> int:
                     base_sleep_seconds=args.sleep,
                     max_ticks=args.ticks,
                     quiet=not args.verbose,
-                    run_tick_fn=lambda tick_db, today_hkt: run_live_tick(
-                        tick_db,
-                        client,
-                        today_hkt=today_hkt,
-                        order_cap_usd=Settings.live_scheduler_order_cap_usd,
-                        book_cache=websocket_runtime.book_cache
-                        if websocket_runtime is not None
-                        else None,
-                    ),
                     low_latency_event_queue=low_latency_queue,
-                    fast_event_handler=lambda tick_db, today_hkt: run_live_tick(
-                        tick_db,
-                        client,
-                        today_hkt=today_hkt,
-                        order_cap_usd=Settings.live_scheduler_order_cap_usd,
-                        book_cache=websocket_runtime.book_cache
-                        if websocket_runtime is not None
-                        else None,
-                    ),
-                    reconcile_watchdog_fn=reconcile_watchdog,
                     aws_actual_poll_fetch=aws_actual_poll_fetch,
                     aws_actual_poll_learned_times=aws_actual_poll_learned_times,
-                    output_label="live-scheduler",
-                    alert_sink=alert_sink,
                 )
-                if args.ticks is not None and not scheduler_smoke_blocked:
-                    _record_live_scheduler_smoke(
-                        db,
-                        ok=True,
-                        ticks=args.ticks,
-                        websockets_enabled=not args.no_websockets,
-                    )
-            except Exception as exc:
-                if args.ticks is not None:
-                    _record_live_scheduler_smoke(
-                        db,
-                        ok=False,
-                        ticks=args.ticks,
-                        websockets_enabled=not args.no_websockets,
-                        error=f"{type(exc).__name__}: {exc}",
-                    )
-                raise
             finally:
-                if websocket_runtime is not None:
-                    websocket_runtime.stop(timeout=5)
-                    print("live websocket runtime stopped", flush=True)
-        return 0
-    if args.command == "live-kill-switch":
-        migrate(db)
-        if args.block_new_entries and args.allow_new_entries:
-            print("choose only one of --block-new-entries or --allow-new-entries")
-            return 2
-        if args.exit_on_kill_switch and args.no_exit_on_kill_switch:
-            print("choose only one of --exit-on-kill-switch or --no-exit-on-kill-switch")
-            return 2
-        if args.block_new_entries:
-            set_live_setting(db, "block_new_entries", True)
-        if args.allow_new_entries:
-            set_live_setting(db, "block_new_entries", False)
-        if args.exit_on_kill_switch:
-            set_live_setting(db, "cancel_open_orders_and_exit_positions", True)
-        if args.no_exit_on_kill_switch:
-            set_live_setting(db, "cancel_open_orders_and_exit_positions", False)
-        if args.block_new_entries or args.allow_new_entries:
-            _record_live_kill_switch_verification(
-                db,
-                blocked=live_setting_enabled(db, "block_new_entries"),
-                exit_on_kill_switch=live_setting_enabled(
-                    db, "cancel_open_orders_and_exit_positions"
-                ),
-            )
-        print(
-            "live kill switch "
-            f"block_new_entries={live_setting_enabled(db, 'block_new_entries')} "
-            "cancel_open_orders_and_exit_positions="
-            f"{live_setting_enabled(db, 'cancel_open_orders_and_exit_positions')}"
-        )
-        return 0
-    if args.command == "paper-scheduler":
-        migrate(db)
-        if not args.no_startup_backup:
-            backup_path = backup_sqlite_database(db_path)
-            print(f"created startup backup {backup_path}")
-        low_latency_queue = LowLatencyEventQueue()
-        aws_actual_poll_fetch = lambda: _fetch_current_temperature_for_path(
-            db_path, event_queue=low_latency_queue
-        )
-        aws_actual_poll_learned_times = lambda: _list_hko_update_times_for_path(
-            db_path, "aws_gis_actual"
-        )
-        fast_worker = FastDecisionWorker(
-            db_path=db_path,
-            event_queue=low_latency_queue,
-        )
-        fast_worker.start()
-        try:
-            run_scheduled_paper_loop(
-                db,
-                fetch_since_midnight=lambda: _fetch_since_midnight(db),
-                fetch_bulletin=lambda: _fetch_bulletin(db, event_queue=low_latency_queue),
-                fetch_current_temperature=lambda: _fetch_current_temperature(
-                    db, event_queue=low_latency_queue
-                ),
-                learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
-                learned_actual_times=lambda: list_hko_update_times(db, "aws_gis_actual"),
-                discover_market=lambda target: _discover_markets_for_forecast_dates(
-                    db, target, event_queue=low_latency_queue
-                ),
-                fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
-                base_sleep_seconds=args.sleep,
-                max_ticks=args.ticks,
-                quiet=not args.verbose,
-                low_latency_event_queue=low_latency_queue,
-                aws_actual_poll_fetch=aws_actual_poll_fetch,
-                aws_actual_poll_learned_times=aws_actual_poll_learned_times,
-            )
-        finally:
-            fast_worker.stop(timeout=5)
-        return 0
-    if args.command == "sample-ocf":
-        migrate(db)
-        interval_seconds = max(args.interval_minutes * 60.0, 0.0)
-        ticks = args.ticks
-        if ticks is None:
-            if args.interval_minutes <= 0:
-                print("sample-ocf requires --ticks when --interval-minutes is 0")
-                return 2
-            ticks = int((args.hours * 60.0) / args.interval_minutes)
-        print(
-            "ocf-sampler started "
-            f"interval={args.interval_minutes:g}m ticks={ticks}"
-        )
-        previous_hash = None
-        for tick in range(ticks):
-            snapshot_hash, forecasts = _fetch_ocf_forecast(db)
-            changed = previous_hash is None or previous_hash != snapshot_hash
-            previous_hash = snapshot_hash
-            current = forecasts[0] if forecasts else None
+                fast_worker.stop(timeout=5)
+            return 0
+        if args.command == "sample-ocf":
+            migrate(db)
+            interval_seconds = max(args.interval_minutes * 60.0, 0.0)
+            ticks = args.ticks
+            if ticks is None:
+                if args.interval_minutes <= 0:
+                    print("sample-ocf requires --ticks when --interval-minutes is 0")
+                    return 2
+                ticks = int((args.hours * 60.0) / args.interval_minutes)
             print(
-                f"ocf-sample tick={tick + 1}/{ticks} changed={changed} "
-                f"rows={len(forecasts)} "
-                f"first={current.forecast_date_hkt.isoformat() if current and current.forecast_date_hkt else 'n/a'} "
-                f"high={current.forecast_max_c if current else 'n/a'}"
+                "ocf-sampler started "
+                f"interval={args.interval_minutes:g}m ticks={ticks}"
             )
-            if tick + 1 < ticks and interval_seconds:
-                time.sleep(interval_seconds)
-        return 0
-    if args.command == "reset-paper":
-        migrate(db)
-        if not args.yes:
-            print("refusing to reset paper state without --yes")
-            return 2
-        if not args.no_backup:
-            backup_path = backup_sqlite_database(db_path)
-            print(f"created backup {backup_path}")
-        reset_paper_state(db)
-        print("reset paper orders, positions, decisions, and signals")
-        return 0
-    if args.command == "research-forecast-accuracy":
-        end = date.fromisoformat(args.end) if args.end else datetime.now(HKT).date() - timedelta(days=1)
-        start = date.fromisoformat(args.start) if args.start else _months_before(end, args.months)
-        rows, summaries = build_forecast_accuracy_report(
-            start=start,
-            end=end,
-            cache_dir=Path(args.cache_dir),
-        )
-        report = render_accuracy_report(rows, summaries, start, end)
-        if args.output:
-            Path(args.output).write_text(report + "\n")
-        print(report)
-        return 0
-    if args.command == "research-hourly-accuracy":
-        rows, summaries = build_hourly_accuracy_report(db)
-        report = render_hourly_accuracy_report(rows, summaries)
-        if args.output:
-            Path(args.output).write_text(report + "\n")
-        print(report)
-        return 0
-    return 1
+            previous_hash = None
+            for tick in range(ticks):
+                snapshot_hash, forecasts = _fetch_ocf_forecast(db)
+                changed = previous_hash is None or previous_hash != snapshot_hash
+                previous_hash = snapshot_hash
+                current = forecasts[0] if forecasts else None
+                print(
+                    f"ocf-sample tick={tick + 1}/{ticks} changed={changed} "
+                    f"rows={len(forecasts)} "
+                    f"first={current.forecast_date_hkt.isoformat() if current and current.forecast_date_hkt else 'n/a'} "
+                    f"high={current.forecast_max_c if current else 'n/a'}"
+                )
+                if tick + 1 < ticks and interval_seconds:
+                    time.sleep(interval_seconds)
+            return 0
+        if args.command == "reset-paper":
+            migrate(db)
+            if not args.yes:
+                print("refusing to reset paper state without --yes")
+                return 2
+            if not args.no_backup:
+                backup_path = backup_sqlite_database(db_path)
+                print(f"created backup {backup_path}")
+            reset_paper_state(db)
+            print("reset paper orders, positions, decisions, and signals")
+            return 0
+        if args.command == "research-forecast-accuracy":
+            end = date.fromisoformat(args.end) if args.end else datetime.now(HKT).date() - timedelta(days=1)
+            start = date.fromisoformat(args.start) if args.start else _months_before(end, args.months)
+            rows, summaries = build_forecast_accuracy_report(
+                start=start,
+                end=end,
+                cache_dir=Path(args.cache_dir),
+            )
+            report = render_accuracy_report(rows, summaries, start, end)
+            if args.output:
+                Path(args.output).write_text(report + "\n")
+            print(report)
+            return 0
+        if args.command == "research-hourly-accuracy":
+            rows, summaries = build_hourly_accuracy_report(db)
+            report = render_hourly_accuracy_report(rows, summaries)
+            if args.output:
+                Path(args.output).write_text(report + "\n")
+            print(report)
+            return 0
+        return 1
+    finally:
+        db.close()
 
 
 def _fetch_hko(db) -> None:

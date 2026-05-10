@@ -4,6 +4,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from whenitrains.storage import (
     connect,
@@ -78,6 +79,7 @@ class LatencyReportTests(unittest.TestCase):
             self.assertAlmostEqual(summary["p50_seconds"], 0.2)
             self.assertAlmostEqual(summary["p95_seconds"], 0.4)
             self.assertAlmostEqual(summary["p99_seconds"], 0.4)
+            db.close()
 
     def test_latency_duration_summary_ignores_incomplete_events(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -91,6 +93,7 @@ class LatencyReportTests(unittest.TestCase):
 
             self.assertEqual(summary["count"], 1)
             self.assertAlmostEqual(summary["p50_seconds"], 0.5)
+            db.close()
 
     def test_latency_report_cli_prints_stage_percentiles(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -115,6 +118,51 @@ class LatencyReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("db_committed -> decision_started count=1", stdout.getvalue())
             self.assertIn("p50=0.500s", stdout.getvalue())
+
+    def test_latency_report_cli_closes_database_connection_on_return(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            record_latency_stage(db, "event-1", "db_committed", 10.0, "actual")
+            record_latency_stage(db, "event-1", "decision_started", 10.5, "actual")
+            db.close()
+            opened = []
+
+            class TrackingConnection:
+                def __init__(self, wrapped):
+                    self.wrapped = wrapped
+                    self.closed = False
+
+                def close(self):
+                    self.closed = True
+                    self.wrapped.close()
+
+                def __getattr__(self, name):
+                    return getattr(self.wrapped, name)
+
+            def tracked_connect(path):
+                connection = TrackingConnection(connect(path))
+                opened.append(connection)
+                return connection
+
+            with (
+                patch("whenitrains.cli.connect", tracked_connect),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "latency-report",
+                        "db_committed",
+                        "decision_started",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(opened), 1)
+            self.assertTrue(opened[0].closed)
 
     def test_low_latency_archive_evidence_writes_reports(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -142,6 +142,7 @@ class CliDiscoveryTests(unittest.TestCase):
                     ("yes27", 0.10, 0.20),
                 ],
             )
+            db.close()
 
     def test_live_env_exports_prints_shell_safe_required_exports(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1114,6 +1115,7 @@ class CliDiscoveryTests(unittest.TestCase):
                     "lowest-temperature-in-hong-kong-on-may-7-2026",
                 ],
             )
+            db.close()
 
     def test_fetch_current_temperature_records_aws_gis_actual_on_success(self):
         aws_payload = """Latest readings recorded at 14:30 Hong Kong Time 7 May 2026
@@ -1145,6 +1147,7 @@ HKO,,,,28.9,69,29.3,24.0,,,,1011.0,4.8,27.3,
                 for row in db.execute("select source from hko_source_update_minutes")
             ]
             self.assertEqual(sources, ["aws_gis_actual"])
+            db.close()
 
     def test_fetch_current_temperature_learns_aws_gis_publish_minute(self):
         aws_payload = """Latest readings recorded at 14:30 Hong Kong Time 7 May 2026
@@ -1176,6 +1179,7 @@ HKO,,,,28.9,69,29.3,24.0,,,,1011.0,4.8,27.3,
                 [(row["update_minute_hkt"], row["kind"]) for row in rows],
                 [("14:30", "payload_header"), ("14:38", "http_Last-Modified")],
             )
+            db.close()
 
     def test_fetch_current_temperature_persists_http_timing(self):
         aws_payload = """Latest readings recorded at 14:30 Hong Kong Time 7 May 2026
@@ -1212,6 +1216,7 @@ HKO,,,,28.9,69,29.3,24.0,,,,1011.0,4.8,27.3,
             self.assertEqual(row["headers_received_at_utc"], "2026-05-11T00:00:00.040000+00:00")
             self.assertEqual(row["payload_received_at_utc"], "2026-05-11T00:00:00.090000+00:00")
             self.assertAlmostEqual(row["response_elapsed_ms"], 90.2)
+            db.close()
 
     def test_hko_source_timing_report_summarizes_aws_fetch_attempts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1307,6 +1312,7 @@ HKO,,,,28.9,69,29.3,24.0,,,,1011.0,4.8,27.3,
                 for row in db.execute("select source from hko_source_update_minutes")
             ]
             self.assertEqual(sources, ["rhrread_actual"])
+            db.close()
 
     def test_fetch_forecast_prefers_aws_gis_station_forecast_payload(self):
         payload = """
@@ -1351,6 +1357,7 @@ HKO,,,,28.9,69,29.3,24.0,,,,1011.0,4.8,27.3,
             ).fetchone()
             self.assertEqual(sample["raw_max_c"], 29.0)
             self.assertIn("2026-05-08T13:00:00+08:00", sample["hourly_temperatures_json"])
+            db.close()
 
     def test_fetch_forecast_falls_back_to_ocf_station_url(self):
         payload = """
@@ -1384,6 +1391,7 @@ HKO,,,,28.9,69,29.3,24.0,,,,1011.0,4.8,27.3,
                 "select endpoint from raw_snapshots order by id desc limit 1"
             ).fetchone()
             self.assertEqual(snapshot["endpoint"], OCF_STATION_URL)
+            db.close()
 
 
 if __name__ == "__main__":

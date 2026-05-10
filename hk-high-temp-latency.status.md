@@ -226,6 +226,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-verifier live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` timed out after 8010 ms with `curl: (28) Connection timed out after 8010 milliseconds`. The checksum archive tooling and verifier are ready, but live/account evidence capture remains blocked until the LAN log endpoint is reachable.
 
+2026-05-11 CLI SQLite lifecycle cleanup pass: added a regression test proving `latency-report` closes the CLI-owned SQLite connection on early return, wrapped connected CLI command dispatch in `try/finally`, and closed direct test fixture connections flagged by tracemalloc. Verified with `PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_latency_report tests.test_cli`, which now passes without SQLite `ResourceWarning` output.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
