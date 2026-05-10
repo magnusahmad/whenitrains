@@ -2334,6 +2334,51 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(decision["label"], "29°C")
             self.assertEqual(decision["side"], "YES")
 
+    def test_actual_low_cross_uses_candidate_execution_bridge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_lowest_market(
+                db,
+                [
+                    Outcome(
+                        market_id="low29",
+                        label="29°C",
+                        predicate=parse_outcome_label("29°C"),
+                        yes_token_id="yes-low29",
+                        no_token_id="no-low29",
+                    )
+                ],
+            )
+            _store_forecast_range(db, low=29, high=33, update_time="2026-05-04T09:00:00+08:00")
+            _store_min_observation(db, low=30.2, hour=7)
+            _store_min_observation(db, low=29.4, hour=8)
+            _store_book_pair(db, "yes-low29", old_ask=0.25, new_ask=0.25)
+            bridge_calls = []
+
+            def bridge(actions, executor):
+                bridge_calls.append(actions)
+                return [
+                    CandidateAction(
+                        action.candidate_key,
+                        action.conflict_keys,
+                        lambda action=action: executor(action),
+                    )
+                    for action in actions
+                ]
+
+            with patch("whenitrains.runner.executable_candidate_actions", side_effect=bridge):
+                result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 1)
+            self.assertEqual(len(bridge_calls), 1)
+            action = bridge_calls[0][0]
+            self.assertEqual(action.intent, "buy_actual_low_cross_yes")
+            self.assertEqual(action.token_id, "yes-low29")
+            self.assertEqual(action.side, "BUY_YES")
+            self.assertTrue(action.candidate_key.startswith("actual_low_cross:2026-05-04:"))
+            self.assertIn("token:yes-low29", action.conflict_keys)
+            self.assertIn("risk:entry_budget", action.conflict_keys)
+
     def test_actual_low_cross_missing_orderbooks_is_retryable(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(Path(tmp) / "test.db")

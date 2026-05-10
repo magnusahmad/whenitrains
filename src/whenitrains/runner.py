@@ -700,6 +700,7 @@ def _process_actual_min_transition(
     buys_missed = 0
     signals = 0
     event_marked = False
+    pending_executions: list[tuple[PlannedCandidateAction, TradeCandidate, float | None]] = []
     for row in _lowest_temperature_rows(list_outcomes_for_date(db, today_hkt.isoformat())):
         predicate = parse_outcome_label(row["label"])
         side = _actual_low_cross_side(predicate, old_min, new_min)
@@ -777,16 +778,39 @@ def _process_actual_min_transition(
                 else "actual min invalidated warmer bucket before price moved"
             ),
         )
-        filled = _execute_candidate_buy(
+        intent = "buy_actual_low_cross_yes" if side == "YES" else "buy_actual_low_cross_no"
+        pending_executions.append(
+            (
+                PlannedCandidateAction(
+                    source_event_key=event_key,
+                    candidate_key=f"{event_key}:{intent}:{token_id}",
+                    intent=intent,
+                    token_id=token_id,
+                    side=f"BUY_{side}",
+                    conflict_keys=frozenset({f"token:{token_id}", "risk:entry_budget"}),
+                ),
+                candidate,
+                max_buy_price,
+            )
+        )
+    execution_lookup = {
+        action.candidate_key: (candidate, max_buy_price)
+        for action, candidate, max_buy_price in pending_executions
+    }
+    scheduled_actions = executable_candidate_actions(
+        [action for action, _, _ in pending_executions],
+        executor=lambda action: _execute_candidate_buy(
             db,
-            candidate,
+            execution_lookup[action.candidate_key][0],
             event_type="actual_low_cross",
             event_key=event_key,
-            max_buy_price=max_buy_price,
-        )
-        if filled is True:
+            max_buy_price=execution_lookup[action.candidate_key][1],
+        ),
+    )
+    for result in ExecutionScheduler(max_workers=1).run(scheduled_actions):
+        if result.value is True:
             buys_filled += 1
-        elif filled is False:
+        elif result.value is False:
             buys_missed += 1
     return RunnerResult(
         buys_filled=buys_filled,
