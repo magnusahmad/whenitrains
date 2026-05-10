@@ -89,6 +89,41 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(decision["status"], "filled")
 
+    def test_forecast_change_uses_candidate_execution_bridge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_forecast(db, 28, "2026-05-04T00:45:00+08:00")
+            _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
+            _store_book_pair(db, "yes29", old_ask=0.39, new_ask=0.395)
+            _store_book_pair(db, "no29", old_ask=0.60, new_ask=0.60)
+            bridge_calls = []
+
+            def bridge(actions, executor):
+                bridge_calls.append(actions)
+                return [
+                    CandidateAction(
+                        action.candidate_key,
+                        action.conflict_keys,
+                        lambda action=action: executor(action),
+                    )
+                    for action in actions
+                ]
+
+            with patch("whenitrains.runner.executable_candidate_actions", side_effect=bridge):
+                result = process_forecast_entries(
+                    db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+                )
+
+            self.assertEqual(result.buys_filled, 1)
+            self.assertEqual(len(bridge_calls), 1)
+            action = bridge_calls[0][0]
+            self.assertEqual(action.intent, "buy_forecast_change_yes")
+            self.assertEqual(action.token_id, "yes29")
+            self.assertEqual(action.side, "BUY_YES")
+            self.assertTrue(action.candidate_key.startswith("forecast_change:2026-05-04:"))
+            self.assertIn("token:yes29", action.conflict_keys)
+            self.assertIn("risk:entry_budget", action.conflict_keys)
+
     def test_lowest_forecast_change_buys_stale_new_minimum_bucket(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(Path(tmp) / "test.db")

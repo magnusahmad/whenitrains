@@ -253,14 +253,18 @@ def _process_forecast_change_entries_kind(
     buys_filled = 0
     buys_missed = 0
     max_entry_price = _forecast_change_max_entry_price(target_date, today)
-    for candidate in candidates:
-        filled = _execute_candidate_buy(
-            db,
-            candidate,
-            event_type=event_type,
-            event_key=event_key,
-            max_buy_price=max_entry_price,
-        )
+    planned_buys = [
+        _planned_candidate_buy(event_key, event_type, candidate)
+        for candidate in candidates
+    ]
+    for filled in _execute_planned_candidate_buys(
+        db,
+        planned_buys,
+        candidates,
+        event_type=event_type,
+        event_key=event_key,
+        max_buy_price=max_entry_price,
+    ):
         if filled is True:
             buys_filled += 1
         elif filled is False:
@@ -1872,6 +1876,60 @@ def _remaining_position_budget(db: sqlite3.Connection, token_id: str) -> float:
         return cap
     invested = float(position["net_shares"]) * float(position["avg_price"])
     return max(cap - invested, 0.0)
+
+
+def _planned_candidate_buy(
+    event_key: str,
+    event_type: str,
+    candidate: TradeCandidate,
+) -> PlannedCandidateAction:
+    token_id = _candidate_token_id(candidate)
+    side_name = "yes" if candidate.side == "BUY_YES" else "no"
+    intent_event = "buy_forecast_change" if event_type == "forecast_change" else f"buy_{event_type}"
+    return PlannedCandidateAction(
+        source_event_key=event_key,
+        candidate_key=f"{event_key}:{intent_event}_{side_name}:{token_id}",
+        intent=f"{intent_event}_{side_name}",
+        token_id=token_id,
+        side=candidate.side,
+        conflict_keys=frozenset({f"token:{token_id}", "risk:entry_budget"}),
+    )
+
+
+def _execute_planned_candidate_buys(
+    db: sqlite3.Connection,
+    planned_actions: list[PlannedCandidateAction],
+    candidates: list[TradeCandidate],
+    *,
+    event_type: str,
+    event_key: str,
+    max_buy_price: float | None,
+    allow_existing_position: bool = False,
+    size_usd: float | None = None,
+) -> list[bool | None]:
+    execution_lookup = {
+        action.candidate_key: candidate
+        for action, candidate in zip(planned_actions, candidates, strict=True)
+    }
+    scheduled_actions = executable_candidate_actions(
+        planned_actions,
+        executor=lambda action: _execute_candidate_buy(
+            db,
+            execution_lookup[action.candidate_key],
+            event_type=event_type,
+            event_key=event_key,
+            max_buy_price=max_buy_price,
+            allow_existing_position=allow_existing_position,
+            size_usd=size_usd,
+        ),
+    )
+    return [result.value for result in ExecutionScheduler(max_workers=1).run(scheduled_actions)]
+
+
+def _candidate_token_id(candidate: TradeCandidate) -> str:
+    if candidate.side == "BUY_YES":
+        return candidate.outcome.yes_token_id
+    return candidate.outcome.no_token_id
 
 
 def _actual_entry_guard_reason(
