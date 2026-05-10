@@ -2584,6 +2584,10 @@ def _live_reconcile_count(db) -> int:
         select count(*) as count
         from live_orders
         where reconciled_at_utc is not null
+          and length(trim(coalesce(clob_order_id, ''))) > 0
+          and status = 'filled'
+          and raw_reconcile_json is not null
+          and raw_reconcile_json <> '{}'
         """
     ).fetchone()
     return int(row["count"] or 0)

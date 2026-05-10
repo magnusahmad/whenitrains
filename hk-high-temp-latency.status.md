@@ -458,6 +458,12 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-kill-switch-verification-detail live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 1 ms: Couldn't connect to server`. Live/account evidence capture remains blocked on endpoint availability.
 
+2026-05-11 live-reconcile payload gate pass: tightened `low-latency-readiness-report --require-evidence` so `live_reconcile_observed` only counts filled live orders with a CLOB order id and non-empty reconcile payload. Empty reconcile placeholders no longer satisfy the REST/account reconciliation evidence gate. Verified red/green with `PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_readiness_report_require_evidence_fails_with_empty_live_reconcile`.
+
+2026-05-11 post-live-reconcile-payload verification: `PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.test_live tests.test_cli tests.test_low_latency tests.test_storage tests.test_markets tests.test_orderbook_cache tests.test_recorded_fixtures tests.test_latency_report tests.test_scheduler tests.test_operational_readiness tests.test_alerting tests.test_live_user_stream tests.test_user_websocket tests.test_execution_scheduler tests.test_candidate_planner tests.test_ladder_metadata` passed with 322 tests.
+
+2026-05-11 post-live-reconcile-payload live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 0 ms: Couldn't connect to server`. Live/account evidence capture remains blocked on endpoint availability.
+
 2026-05-11 post-empty-archive-verifier live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 0 ms: Couldn't connect to server`. Live/account evidence remains blocked on endpoint availability.
 
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
