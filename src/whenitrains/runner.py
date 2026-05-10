@@ -13,6 +13,7 @@ from .hko import HKT
 from .markets import PredicateType, parse_outcome_label, predicate_matches
 from .paper_db import execute_paper_buy, execute_paper_sell
 from .polymarket import Outcome, fetch_orderbook
+from .orderbook_cache import BookCacheMiss, BookCacheStale, OrderBookCache
 from .signals import DirectionalImpact, PriceResponse
 from .live import LiveClobClient, execute_live_buy, execute_live_sell
 from .storage import (
@@ -40,6 +41,7 @@ from .storage import (
 
 _LIVE_CLIENT: LiveClobClient | None = None
 _LIVE_ORDER_CAP_USD: float | None = None
+_BOOK_CACHE: OrderBookCache | None = None
 
 
 @dataclass(frozen=True)
@@ -72,17 +74,21 @@ def run_live_tick(
     client: LiveClobClient,
     today_hkt: date | None = None,
     order_cap_usd: float = Settings.live_scheduler_order_cap_usd,
+    book_cache: OrderBookCache | None = None,
 ) -> RunnerResult:
-    global _LIVE_CLIENT, _LIVE_ORDER_CAP_USD
+    global _LIVE_CLIENT, _LIVE_ORDER_CAP_USD, _BOOK_CACHE
     previous_client = _LIVE_CLIENT
     previous_cap = _LIVE_ORDER_CAP_USD
+    previous_cache = _BOOK_CACHE
     _LIVE_CLIENT = client
     _LIVE_ORDER_CAP_USD = order_cap_usd
+    _BOOK_CACHE = book_cache
     try:
         return run_paper_tick(db, today_hkt=today_hkt)
     finally:
         _LIVE_CLIENT = previous_client
         _LIVE_ORDER_CAP_USD = previous_cap
+        _BOOK_CACHE = previous_cache
 
 
 def process_all_forecast_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerResult:
@@ -1678,22 +1684,26 @@ def _execute_candidate_buy(
         book = None
     reference_best_ask = book.best_ask if book is not None else None
     if _LIVE_CLIENT is not None:
-        try:
-            book = fetch_orderbook(token_id)
-            store_orderbook(db, token_id, book)
-        except Exception as exc:
-            store_trading_decision(
-                db,
-                event_type,
-                token_id,
-                candidate.outcome.label,
-                side,
-                "BUY",
-                "missed",
-                f"fresh orderbook fetch failed: {type(exc).__name__}",
-                event_key=event_key,
-            )
-            return False
+        cached_book = _fresh_cached_orderbook(token_id)
+        if cached_book is not None:
+            book = cached_book
+        else:
+            try:
+                book = fetch_orderbook(token_id)
+                store_orderbook(db, token_id, book, metadata={"source": "rest_hot_path"})
+            except Exception as exc:
+                store_trading_decision(
+                    db,
+                    event_type,
+                    token_id,
+                    candidate.outcome.label,
+                    side,
+                    "BUY",
+                    "missed",
+                    f"fresh orderbook fetch failed: {type(exc).__name__}",
+                    event_key=event_key,
+                )
+                return False
     hard_entry_cap = max(Settings.max_entry_price, max_buy_price or 0)
     if book.best_ask is not None and book.best_ask > hard_entry_cap:
         store_trading_decision(
@@ -1770,6 +1780,18 @@ def _execute_candidate_buy(
         event_key=event_key,
     )
     return result.status == "filled"
+
+
+def _fresh_cached_orderbook(token_id: str):
+    if _BOOK_CACHE is None:
+        return None
+    try:
+        return _BOOK_CACHE.latest_orderbook(
+            token_id,
+            max_age_seconds=Settings.live_orderbook_cache_max_age_seconds,
+        )
+    except (BookCacheMiss, BookCacheStale):
+        return None
 
 
 def _remaining_position_budget(db: sqlite3.Connection, token_id: str) -> float:

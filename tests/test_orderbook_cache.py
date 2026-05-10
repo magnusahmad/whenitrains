@@ -1,0 +1,131 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from whenitrains.orderbook_cache import (
+    BookCacheStale,
+    MarketWebSocketSubscription,
+    OrderBookCache,
+)
+from whenitrains.polymarket import OrderBook
+from whenitrains.storage import connect, migrate, store_orderbook
+
+
+class OrderBookCacheTests(unittest.TestCase):
+    def test_subscription_payload_uses_custom_feature_flag(self):
+        subscription = MarketWebSocketSubscription(["yes26", "no26"])
+
+        self.assertEqual(
+            subscription.payload(),
+            {
+                "type": "market",
+                "assets_ids": ["yes26", "no26"],
+                "custom_feature_enabled": True,
+            },
+        )
+
+    def test_book_snapshot_and_price_change_remove_zero_size_levels(self):
+        cache = OrderBookCache(monotonic_fn=_FakeMonotonic([10.0, 10.1]))
+        cache.apply_message(
+            {
+                "event_type": "book",
+                "asset_id": "yes26",
+                "bids": [{"price": "0.30", "size": "100"}],
+                "asks": [{"price": "0.35", "size": "100"}],
+            }
+        )
+        cache.apply_message(
+            {
+                "event_type": "price_change",
+                "asset_id": "yes26",
+                "changes": [
+                    {"side": "BUY", "price": "0.31", "size": "50"},
+                    {"side": "SELL", "price": "0.35", "size": "0"},
+                ],
+            }
+        )
+
+        book = cache.latest_orderbook("yes26", max_age_seconds=1, now_monotonic=10.2)
+
+        self.assertEqual(book.bids, [(0.31, 50.0), (0.3, 100.0)])
+        self.assertEqual(book.asks, [])
+
+    def test_best_bid_ask_update_and_stale_rejection(self):
+        cache = OrderBookCache(monotonic_fn=_FakeMonotonic([20.0]))
+        cache.apply_message(
+            {
+                "event_type": "best_bid_ask",
+                "asset_id": "yes26",
+                "best_bid": "0.42",
+                "best_ask": "0.44",
+            }
+        )
+
+        fresh = cache.latest_orderbook("yes26", max_age_seconds=0.25, now_monotonic=20.2)
+        self.assertEqual(fresh.best_bid, 0.42)
+        self.assertEqual(fresh.best_ask, 0.44)
+        with self.assertRaises(BookCacheStale):
+            cache.latest_orderbook("yes26", max_age_seconds=0.25, now_monotonic=20.3)
+
+    def test_cache_persists_append_only_snapshots_for_market_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            cache = OrderBookCache(db=db, monotonic_fn=_FakeMonotonic([30.0, 30.1]))
+
+            cache.apply_message(
+                {
+                    "event_type": "book",
+                    "asset_id": "yes26",
+                    "bids": [{"price": "0.30", "size": "100"}],
+                    "asks": [{"price": "0.35", "size": "100"}],
+                }
+            )
+            cache.apply_message(
+                {
+                    "event_type": "last_trade_price",
+                    "asset_id": "yes26",
+                    "price": "0.34",
+                }
+            )
+
+            rows = db.execute(
+                """
+                select best_bid, best_ask, depth_json
+                from orderbook_snapshots
+                where outcome_id = 'yes26'
+                order by id asc
+                """
+            ).fetchall()
+
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["best_bid"], 0.30)
+            self.assertEqual(rows[1]["best_ask"], 0.35)
+            self.assertIn('"websocket_event_type": "last_trade_price"', rows[1]["depth_json"])
+
+    def test_seed_reconnect_snapshot_replaces_existing_levels(self):
+        cache = OrderBookCache(monotonic_fn=_FakeMonotonic([40.0, 40.1]))
+        cache.seed(OrderBook("yes26", bids=[(0.30, 100)], asks=[(0.35, 100)], tick_size=0.01, min_order_size=5))
+        cache.apply_message(
+            {
+                "event_type": "book",
+                "asset_id": "yes26",
+                "bids": [{"price": "0.25", "size": "25"}],
+                "asks": [{"price": "0.40", "size": "40"}],
+            }
+        )
+
+        book = cache.latest_orderbook("yes26", max_age_seconds=1, now_monotonic=40.2)
+
+        self.assertEqual(book.bids, [(0.25, 25.0)])
+        self.assertEqual(book.asks, [(0.40, 40.0)])
+
+
+class _FakeMonotonic:
+    def __init__(self, values):
+        self._values = list(values)
+
+    def __call__(self):
+        if not self._values:
+            raise AssertionError("fake monotonic exhausted")
+        return self._values.pop(0)

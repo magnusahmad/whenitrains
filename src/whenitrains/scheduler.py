@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time as day_time, timedelta
 
 from .hko import HKT, parse_aws_gis_current_temperature
+from .low_latency import LowLatencyEventQueue, process_next_fast_event
 from .runner import RunnerResult, run_paper_tick
 
 
@@ -211,6 +212,8 @@ def run_scheduled_paper_loop(
     now_fn=None,
     quiet: bool = True,
     run_tick_fn=None,
+    low_latency_event_queue: LowLatencyEventQueue | None = None,
+    fast_event_handler=None,
     aws_actual_poll_fetch=None,
     aws_actual_poll_learned_times=None,
     output_label: str = "paper-scheduler",
@@ -314,7 +317,20 @@ def run_scheduled_paper_loop(
                 )
             elif state.trading_warmed_up:
                 tick_fn = run_tick_fn or run_paper_tick
-                result = tick_fn(db, today_hkt=now.date())
+                if low_latency_event_queue is not None and not low_latency_event_queue.empty():
+                    handler = fast_event_handler or tick_fn
+                    result = RunnerResult(notes=("fast event queue drained",))
+                    while not low_latency_event_queue.empty():
+                        fast_result = process_next_fast_event(
+                            db,
+                            low_latency_event_queue,
+                            decision_handler=handler,
+                        )
+                        if isinstance(fast_result.result, RunnerResult):
+                            result = _merge_runner_results(result, fast_result.result)
+                    notes.append("fast hko events")
+                else:
+                    result = tick_fn(db, today_hkt=now.date())
             else:
                 state.trading_warmed_up = True
                 result = RunnerResult(notes=("startup warmup: trading skipped",))
@@ -420,6 +436,17 @@ def _try_run_action(action: str, action_fn, notes: list[str]) -> bool:
     except Exception as exc:
         notes.append(f"{action} failed: {type(exc).__name__}: {exc}")
         return False
+
+
+def _merge_runner_results(first: RunnerResult, second: RunnerResult) -> RunnerResult:
+    return RunnerResult(
+        buys_filled=first.buys_filled + second.buys_filled,
+        buys_missed=first.buys_missed + second.buys_missed,
+        sells_filled=first.sells_filled + second.sells_filled,
+        sells_missed=first.sells_missed + second.sells_missed,
+        signals=first.signals + second.signals,
+        notes=first.notes + second.notes,
+    )
 
 
 def _source_changed_note(source: str, payload: str) -> str:

@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import datetime, time as day_time, timezone
 from pathlib import Path
+from typing import Callable
 
 from .config import Settings
 from .hko import HKT, HkoCurrentTemperature, HkoForecast, HkoObservation, OcfForecastSample
@@ -285,6 +287,16 @@ def migrate(db: sqlite3.Connection) -> None:
             unique(source, update_minute_hkt)
         );
 
+        create table if not exists latency_trace_events (
+            id integer primary key autoincrement,
+            event_key text not null,
+            stage text not null,
+            event_type text,
+            monotonic_ts real not null,
+            recorded_at_utc text not null,
+            details_json text
+        );
+
         create table if not exists experiment_runs (
             id integer primary key autoincrement,
             name text not null,
@@ -363,6 +375,9 @@ def migrate(db: sqlite3.Connection) -> None:
 
         create index if not exists idx_hko_current_observations_latest
         on hko_current_observations(observed_at_hkt, id desc);
+
+        create index if not exists idx_latency_trace_events_key
+        on latency_trace_events(event_key, id);
         """
     )
     _add_column_if_missing(db, "raw_snapshots", "response_headers_json", "text")
@@ -517,9 +532,14 @@ def store_hko_observation(
 
 
 def store_hko_current_temperature(
-    db: sqlite3.Connection, snapshot_id: int, observation: HkoCurrentTemperature
+    db: sqlite3.Connection,
+    snapshot_id: int,
+    observation: HkoCurrentTemperature,
+    *,
+    event_queue=None,
+    monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> None:
-    db.execute(
+    cursor = db.execute(
         """
         insert into hko_current_observations
         (snapshot_id, observed_at_hkt, station, temperature_c,
@@ -537,6 +557,58 @@ def store_hko_current_temperature(
         ),
     )
     db.commit()
+    if event_queue is not None:
+        from .low_latency import enqueue_hko_actual_transition_events
+
+        enqueue_hko_actual_transition_events(
+            db,
+            event_queue,
+            observation_id=int(cursor.lastrowid),
+            committed_monotonic=monotonic_fn(),
+            monotonic_fn=monotonic_fn,
+        )
+
+
+def record_latency_stage(
+    db: sqlite3.Connection,
+    event_key: str,
+    stage: str,
+    monotonic_ts: float,
+    event_type: str | None = None,
+    details: dict | None = None,
+) -> None:
+    db.execute(
+        """
+        insert into latency_trace_events
+        (event_key, stage, event_type, monotonic_ts, recorded_at_utc, details_json)
+        values (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event_key,
+            stage,
+            event_type,
+            monotonic_ts,
+            datetime.now(timezone.utc).isoformat(),
+            json.dumps(details or {}),
+        ),
+    )
+    db.commit()
+
+
+def latency_stages_for_event(
+    db: sqlite3.Connection, event_key: str
+) -> list[sqlite3.Row]:
+    return list(
+        db.execute(
+            """
+            select event_key, stage, event_type, monotonic_ts, recorded_at_utc, details_json
+            from latency_trace_events
+            where event_key = ?
+            order by id asc
+            """,
+            (event_key,),
+        )
+    )
 
 
 def store_hko_forecasts(
@@ -691,7 +763,12 @@ def store_risk_event(
     db.commit()
 
 
-def store_orderbook(db: sqlite3.Connection, outcome_id: str, book: OrderBook) -> None:
+def store_orderbook(
+    db: sqlite3.Connection,
+    outcome_id: str,
+    book: OrderBook,
+    metadata: dict | None = None,
+) -> None:
     best_bid = book.best_bid
     best_ask = book.best_ask
     mid = (best_bid + best_ask) / 2 if best_bid is not None and best_ask is not None else None
@@ -707,7 +784,7 @@ def store_orderbook(db: sqlite3.Connection, outcome_id: str, book: OrderBook) ->
             best_bid,
             best_ask,
             mid,
-            json.dumps({"bids": book.bids, "asks": book.asks}),
+            json.dumps({"bids": book.bids, "asks": book.asks, **(metadata or {})}),
         ),
     )
     db.commit()
@@ -1261,6 +1338,8 @@ def store_trading_decision(
     details: dict | None = None,
     event_key: str | None = None,
 ) -> None:
+    decision_details = dict(details or {})
+    _add_orderbook_age_to_details(db, outcome_id, decision_details)
     db.execute(
         """
         insert into paper_decisions
@@ -1277,10 +1356,45 @@ def store_trading_decision(
             action,
             status,
             reason,
-            json.dumps(details or {}),
+            json.dumps(decision_details),
         ),
     )
     db.commit()
+
+
+def _add_orderbook_age_to_details(
+    db: sqlite3.Connection, outcome_id: str | None, details: dict
+) -> None:
+    if outcome_id is None or "orderbook_state_age_seconds" in details:
+        return
+    row = db.execute(
+        """
+        select fetched_at_utc
+        from orderbook_snapshots
+        where outcome_id = ?
+        order by fetched_at_utc desc, id desc
+        limit 1
+        """,
+        (outcome_id,),
+    ).fetchone()
+    if row is None or row["fetched_at_utc"] is None:
+        return
+    now_text = details.get("decision_now_utc")
+    try:
+        fetched_at = datetime.fromisoformat(row["fetched_at_utc"])
+        now = (
+            datetime.fromisoformat(now_text)
+            if isinstance(now_text, str)
+            else datetime.now(timezone.utc)
+        )
+    except ValueError:
+        return
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    age = max(0.0, (now - fetched_at).total_seconds())
+    details["orderbook_state_age_seconds"] = age
 
 
 def store_paper_decision(

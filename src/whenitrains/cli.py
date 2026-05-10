@@ -35,6 +35,7 @@ from .hko import (
     HKT,
 )
 from .hourly_accuracy import build_hourly_accuracy_report, render_hourly_accuracy_report
+from .low_latency import LowLatencyEventQueue
 from .polymarket import (
     event_slugs_for_date,
     fetch_hk_temperature_event,
@@ -673,7 +674,10 @@ def main(argv: list[str] | None = None) -> int:
         except LiveTradingError as exc:
             print(f"live scheduler failed: {exc}")
             return 2
-        aws_actual_poll_fetch = lambda: _fetch_current_temperature_for_path(db_path)
+        low_latency_queue = LowLatencyEventQueue()
+        aws_actual_poll_fetch = lambda: _fetch_current_temperature_for_path(
+            db_path, event_queue=low_latency_queue
+        )
         aws_actual_poll_learned_times = lambda: _list_hko_update_times_for_path(
             db_path, "aws_gis_actual"
         )
@@ -681,7 +685,9 @@ def main(argv: list[str] | None = None) -> int:
             db,
             fetch_since_midnight=lambda: _fetch_since_midnight(db),
             fetch_bulletin=lambda: _fetch_bulletin(db),
-            fetch_current_temperature=lambda: _fetch_current_temperature(db),
+            fetch_current_temperature=lambda: _fetch_current_temperature(
+                db, event_queue=low_latency_queue
+            ),
             learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
             learned_actual_times=lambda: list_hko_update_times(db, "aws_gis_actual"),
             discover_market=lambda target: _discover_markets_for_forecast_dates(db, target),
@@ -690,6 +696,13 @@ def main(argv: list[str] | None = None) -> int:
             max_ticks=args.ticks,
             quiet=not args.verbose,
             run_tick_fn=lambda tick_db, today_hkt: run_live_tick(
+                tick_db,
+                client,
+                today_hkt=today_hkt,
+                order_cap_usd=Settings.live_scheduler_order_cap_usd,
+            ),
+            low_latency_event_queue=low_latency_queue,
+            fast_event_handler=lambda tick_db, today_hkt: run_live_tick(
                 tick_db,
                 client,
                 today_hkt=today_hkt,
@@ -728,7 +741,10 @@ def main(argv: list[str] | None = None) -> int:
         if not args.no_startup_backup:
             backup_path = backup_sqlite_database(db_path)
             print(f"created startup backup {backup_path}")
-        aws_actual_poll_fetch = lambda: _fetch_current_temperature_for_path(db_path)
+        low_latency_queue = LowLatencyEventQueue()
+        aws_actual_poll_fetch = lambda: _fetch_current_temperature_for_path(
+            db_path, event_queue=low_latency_queue
+        )
         aws_actual_poll_learned_times = lambda: _list_hko_update_times_for_path(
             db_path, "aws_gis_actual"
         )
@@ -736,7 +752,9 @@ def main(argv: list[str] | None = None) -> int:
             db,
             fetch_since_midnight=lambda: _fetch_since_midnight(db),
             fetch_bulletin=lambda: _fetch_bulletin(db),
-            fetch_current_temperature=lambda: _fetch_current_temperature(db),
+            fetch_current_temperature=lambda: _fetch_current_temperature(
+                db, event_queue=low_latency_queue
+            ),
             learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
             learned_actual_times=lambda: list_hko_update_times(db, "aws_gis_actual"),
             discover_market=lambda target: _discover_markets_for_forecast_dates(db, target),
@@ -744,6 +762,7 @@ def main(argv: list[str] | None = None) -> int:
             base_sleep_seconds=args.sleep,
             max_ticks=args.ticks,
             quiet=not args.verbose,
+            low_latency_event_queue=low_latency_queue,
             aws_actual_poll_fetch=aws_actual_poll_fetch,
             aws_actual_poll_learned_times=aws_actual_poll_learned_times,
         )
@@ -816,10 +835,12 @@ def _fetch_hko(db) -> None:
     _fetch_current_temperature(db)
 
 
-def _fetch_current_temperature_for_path(db_path: Path) -> str:
+def _fetch_current_temperature_for_path(
+    db_path: Path, event_queue: LowLatencyEventQueue | None = None
+) -> str:
     worker_db = connect(db_path)
     try:
-        return _fetch_current_temperature(worker_db)
+        return _fetch_current_temperature(worker_db, event_queue=event_queue)
     finally:
         worker_db.close()
 
@@ -841,7 +862,7 @@ def _fetch_since_midnight(db) -> str:
     return response.text
 
 
-def _fetch_current_temperature(db) -> str:
+def _fetch_current_temperature(db, event_queue: LowLatencyEventQueue | None = None) -> str:
     try:
         response = fetch_response(AWS_GIS_READINGS_URL)
         observation = parse_aws_gis_current_temperature(response.text)
@@ -858,7 +879,7 @@ def _fetch_current_temperature(db) -> str:
         snapshot = store_raw_snapshot(
             db, "hko", response.url, response.text, response.headers
         )
-        store_hko_current_temperature(db, snapshot.id, observation)
+        store_hko_current_temperature(db, snapshot.id, observation, event_queue=event_queue)
         record_hko_update_minute(
             db,
             "rhrread_actual",
@@ -874,7 +895,7 @@ def _fetch_current_temperature(db) -> str:
             f"{type(aws_error).__name__}: {aws_error}"
         ) from aws_error
     snapshot = store_raw_snapshot(db, "hko", response.url, response.text, response.headers)
-    store_hko_current_temperature(db, snapshot.id, observation)
+    store_hko_current_temperature(db, snapshot.id, observation, event_queue=event_queue)
     _record_aws_actual_update_minutes(db, response, observation)
     return response.text
 
