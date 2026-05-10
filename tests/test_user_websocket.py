@@ -80,6 +80,10 @@ class UserWebSocketTests(unittest.IsolatedAsyncioTestCase):
             applied = await client.run_once()
 
             self.assertEqual(applied, 1)
+            self.assertEqual(client.status.connection_attempts, 1)
+            self.assertTrue(client.status.connected_once)
+            self.assertEqual(client.status.messages_applied, 1)
+            self.assertIsNone(client.status.last_error)
             self.assertEqual(
                 connection.sent,
                 [

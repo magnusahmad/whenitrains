@@ -6,15 +6,19 @@ from pathlib import Path
 
 from whenitrains.live import LiveConfig
 from whenitrains.live_runtime import LiveWebSocketRuntime
+from whenitrains.market_websocket import WebSocketConnectionStatus
 from whenitrains.storage import connect, migrate, store_live_order
 
 
 class _BlockingClient:
     def __init__(self):
         self.started = 0
+        self.status = WebSocketConnectionStatus()
 
     async def run_forever(self, stop_event, *, reconnect_delay_seconds=1.0):
         self.started += 1
+        self.status.connection_attempts += 1
+        self.status.connected_once = True
         while not stop_event.is_set():
             await asyncio.sleep(0.001)
 
@@ -29,10 +33,14 @@ class LiveRuntimeTests(unittest.TestCase):
         )
 
         runtime.start()
+        deadline = time.monotonic() + 1
+        while len(runtime.client_statuses) < 2 and time.monotonic() < deadline:
+            time.sleep(0.001)
         runtime.stop(timeout=2)
 
         self.assertEqual(market.started, 1)
         self.assertEqual(user.started, 1)
+        self.assertEqual(len(runtime.client_statuses), 2)
         self.assertFalse(runtime.running)
 
     def test_all_running_requires_both_websocket_workers_alive(self):

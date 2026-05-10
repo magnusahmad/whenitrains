@@ -549,6 +549,16 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(max(args.seconds, 0.0))
             all_running = websocket_runtime.all_running
             print(f"live network smoke websocket_all_running={all_running}")
+            for index, status in enumerate(
+                getattr(websocket_runtime, "client_statuses", ()), start=1
+            ):
+                print(
+                    "live network smoke "
+                    f"client{index}_connected_once={status.connected_once} "
+                    f"client{index}_attempts={status.connection_attempts} "
+                    f"client{index}_messages={status.messages_applied} "
+                    f"client{index}_last_error={status.last_error or 'n/a'}"
+                )
             return 0 if all_running else 2
         except LiveTradingError as exc:
             print(f"live network smoke failed: {exc}")

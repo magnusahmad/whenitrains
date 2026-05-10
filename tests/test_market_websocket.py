@@ -55,6 +55,10 @@ class MarketWebSocketTests(unittest.IsolatedAsyncioTestCase):
         applied = await client.run_once()
 
         self.assertEqual(applied, 1)
+        self.assertEqual(client.status.connection_attempts, 1)
+        self.assertTrue(client.status.connected_once)
+        self.assertEqual(client.status.messages_applied, 1)
+        self.assertIsNone(client.status.last_error)
         self.assertEqual(
             connection.sent,
             [
@@ -81,7 +85,31 @@ class MarketWebSocketTests(unittest.IsolatedAsyncioTestCase):
         applied = await client.run_once()
 
         self.assertEqual(applied, 0)
+        self.assertEqual(client.status.connection_attempts, 0)
+        self.assertFalse(client.status.connected_once)
         self.assertEqual(connections, [])
+
+    async def test_run_forever_records_connection_errors(self):
+        class StopAfterError:
+            def __init__(self):
+                self.calls = 0
+
+            def is_set(self):
+                self.calls += 1
+                return self.calls > 2
+
+        cache = OrderBookCache(persist_snapshots=False)
+        client = MarketWebSocketClient(
+            cache=cache,
+            token_ids_fn=lambda: ["yes26"],
+            connect_factory=lambda url: (_ for _ in ()).throw(RuntimeError("offline")),
+        )
+
+        await client.run_forever(StopAfterError(), reconnect_delay_seconds=0)
+
+        self.assertEqual(client.status.connection_attempts, 1)
+        self.assertFalse(client.status.connected_once)
+        self.assertIn("RuntimeError: offline", client.status.last_error)
 
     def test_default_url_is_polymarket_market_channel(self):
         self.assertEqual(

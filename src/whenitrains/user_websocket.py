@@ -4,11 +4,11 @@ import asyncio
 import json
 import sqlite3
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .live_user_stream import apply_user_channel_event
-from .market_websocket import _default_connect_factory
+from .market_websocket import WebSocketConnectionStatus, _default_connect_factory
 
 
 POLYMARKET_USER_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -40,17 +40,22 @@ class UserWebSocketClient:
     market_ids_fn: Callable[[], Iterable[str]]
     url: str = POLYMARKET_USER_WS_URL
     connect_factory: Callable[[str], Any] | None = None
+    status: WebSocketConnectionStatus = field(default_factory=WebSocketConnectionStatus)
 
     async def run_once(self) -> int:
         connect = self.connect_factory or _default_connect_factory()
         applied = 0
+        self.status.connection_attempts += 1
         async with connect(self.url) as websocket:
+            self.status.connected_once = True
+            self.status.last_error = None
             await websocket.send(json.dumps(self._subscription_payload()))
             async for raw_message in websocket:
                 for message in _decode_messages(raw_message):
                     result = apply_user_channel_event(self.db, message)
                     if result.stored:
                         applied += 1
+                        self.status.messages_applied += 1
         return applied
 
     async def run_forever(
@@ -62,7 +67,8 @@ class UserWebSocketClient:
         while not stop_event.is_set():
             try:
                 await self.run_once()
-            except Exception:
+            except Exception as exc:
+                self.status.last_error = f"{type(exc).__name__}: {exc}"
                 if stop_event.is_set():
                     return
                 await asyncio.sleep(reconnect_delay_seconds)

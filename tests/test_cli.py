@@ -272,6 +272,14 @@ class CliDiscoveryTests(unittest.TestCase):
 
             class FakeRuntime:
                 all_running = True
+                client_statuses = [
+                    SimpleNamespace(
+                        connected_once=True,
+                        connection_attempts=1,
+                        messages_applied=2,
+                        last_error=None,
+                    )
+                ]
 
                 def start(self):
                     runtime_events.append("start")
@@ -309,6 +317,10 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertEqual(runtime_events, ["start", ("stop", 5)])
             self.assertIn(
                 "live network smoke websocket_all_running=True",
+                stdout.getvalue(),
+            )
+            self.assertIn(
+                "client1_connected_once=True client1_attempts=1 client1_messages=2 client1_last_error=n/a",
                 stdout.getvalue(),
             )
 

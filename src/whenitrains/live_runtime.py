@@ -36,6 +36,7 @@ class LiveWebSocketRuntime:
     reconnect_delay_seconds: float = 1.0
     _threads: list[threading.Thread] = field(default_factory=list, init=False)
     _stop_events: list[threading.Event] = field(default_factory=list, init=False)
+    _clients: list[AsyncRuntimeClient] = field(default_factory=list, init=False)
 
     @classmethod
     def for_live_scheduler(
@@ -89,9 +90,18 @@ class LiveWebSocketRuntime:
     def all_running(self) -> bool:
         return len(self._threads) == 2 and all(thread.is_alive() for thread in self._threads)
 
+    @property
+    def client_statuses(self) -> list[object]:
+        return [
+            status
+            for client in self._clients
+            if (status := getattr(client, "status", None)) is not None
+        ]
+
     def start(self) -> None:
         if self.running:
             return
+        self._clients = []
         self._threads = [
             self._start_thread(lambda: self.market_client_factory(self.book_cache)),
             self._start_thread(self.user_client_factory),
@@ -114,8 +124,9 @@ class LiveWebSocketRuntime:
             asyncio.set_event_loop(loop)
             stop_event = threading.Event()
             self._stop_events.append(stop_event)
-            ready.set()
             client = client_factory()
+            self._clients.append(client)
+            ready.set()
             try:
                 loop.run_until_complete(
                     client.run_forever(
