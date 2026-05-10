@@ -2062,6 +2062,11 @@ def _readiness_gate_line_malformed(line: str) -> bool:
                 return True
             if seconds < 0:
                 return True
+        if key in {"block_new_entries", "exit_on_kill_switch"} and value not in {
+            "True",
+            "False",
+        }:
+            return True
         seen_fields.add(key)
     count_value = field_values.get("count")
     if status == "pass" and count_value == "0":
