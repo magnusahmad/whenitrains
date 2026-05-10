@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from math import floor
 
+from .candidate_planner import PlannedCandidateAction, executable_candidate_actions
 from .config import Settings
 from .engine import TradeCandidate
+from .execution_scheduler import ExecutionScheduler
 from .hko import HKT
 from .markets import PredicateType, parse_outcome_label, predicate_matches
 from .paper_db import execute_paper_buy, execute_paper_sell
@@ -814,6 +816,7 @@ def _process_actual_transition(
     buys_missed = 0
     signals = 0
     event_marked = False
+    pending_executions: list[tuple[PlannedCandidateAction, TradeCandidate, float | None]] = []
     for row in _highest_temperature_rows(list_outcomes_for_date(db, today_hkt.isoformat())):
         predicate = parse_outcome_label(row["label"])
         side = _actual_cross_side(predicate, old_max, new_max)
@@ -950,16 +953,48 @@ def _process_actual_transition(
             if peak_hour_sure_bet
             else Settings.actual_new_bucket_max_entry_price
         )
-        filled = _execute_candidate_buy(
+        intent = (
+            "buy_invalidated_bucket_no"
+            if is_invalidated_bucket
+            else "buy_crossed_bucket_yes"
+            if exact_fast_lane
+            else "buy_actual_cross_yes"
+        )
+        conflict_keys = [f"token:{token_id}", "risk:entry_budget"]
+        if is_invalidated_bucket:
+            conflict_keys.append(f"position:{token_id}")
+        pending_executions.append(
+            (
+                PlannedCandidateAction(
+                    source_event_key=event_key,
+                    candidate_key=f"{event_key}:{intent}:{token_id}",
+                    intent=intent,
+                    token_id=token_id,
+                    side=f"BUY_{side}",
+                    conflict_keys=frozenset(conflict_keys),
+                ),
+                candidate,
+                max_buy_price,
+            )
+        )
+    execution_lookup = {
+        action.candidate_key: (candidate, max_buy_price)
+        for action, candidate, max_buy_price in pending_executions
+    }
+    scheduled_actions = executable_candidate_actions(
+        [action for action, _, _ in pending_executions],
+        executor=lambda action: _execute_candidate_buy(
             db,
-            candidate,
+            execution_lookup[action.candidate_key][0],
             event_type="actual_cross",
             event_key=event_key,
-            max_buy_price=max_buy_price,
-        )
-        if filled is True:
+            max_buy_price=execution_lookup[action.candidate_key][1],
+        ),
+    )
+    for result in ExecutionScheduler(max_workers=1).run(scheduled_actions):
+        if result.value is True:
             buys_filled += 1
-        elif filled is False:
+        elif result.value is False:
             buys_missed += 1
     return RunnerResult(
         buys_filled=buys_filled,

@@ -24,6 +24,11 @@ class ExecutionScheduler:
 
     def run(self, actions: Iterable[CandidateAction]) -> list[CandidateResult]:
         action_list = list(actions)
+        if self.max_workers == 1:
+            return [
+                CandidateResult(action.key, action.run())
+                for action in action_list
+            ]
         action_positions = {id(action): index for index, action in enumerate(action_list)}
         batches = _serial_batches(action_list)
         results: list[CandidateResult | None] = [None] * len(action_list)

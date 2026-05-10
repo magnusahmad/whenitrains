@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from whenitrains.hko import HKT, HkoCurrentTemperature, HkoForecast, HkoObservation, OcfForecastSample
+from whenitrains.execution_scheduler import CandidateAction
 from whenitrains.orderbook_cache import OrderBookCache
 from whenitrains.markets import parse_outcome_label
 from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
@@ -1440,6 +1441,63 @@ class RunnerTests(unittest.TestCase):
                 )
             }
             self.assertEqual(bought, {"25°C NO", "26°C YES"})
+
+    def test_actual_cross_fast_lane_uses_candidate_execution_bridge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m25",
+                        label="25°C",
+                        predicate=parse_outcome_label("25°C"),
+                        yes_token_id="yes25",
+                        no_token_id="no25",
+                    ),
+                    Outcome(
+                        market_id="m26",
+                        label="26°C",
+                        predicate=parse_outcome_label("26°C"),
+                        yes_token_id="yes26",
+                        no_token_id="no26",
+                    ),
+                ],
+            )
+            _store_forecast(db, 25.8, "2026-05-04T00:45:00+08:00")
+            _set_latest_ocf_sample_fetched_at(db, "2026-05-04T00:45:00+08:00")
+            _store_peak_decline_hourly_forecast(
+                db, date(2026, 5, 4), peak=25.8, fetched_at_hkt="2026-05-04T13:55:00+08:00"
+            )
+            _store_current_hour_matches_actual_future_declines_forecast(
+                db, date(2026, 5, 4), actual=26.1, fetched_at_hkt="2026-05-04T14:01:00+08:00"
+            )
+            _store_aws_actual(db, high=25.6, hour=13, minute=50)
+            _store_aws_actual(db, high=26.1, hour=14, minute=0)
+            _store_book_pair(db, "no25", old_ask=0.74, new_ask=0.74)
+            _store_book_pair(db, "yes26", old_ask=0.50, new_ask=0.74)
+            bridge_calls = []
+
+            def bridge(actions, executor):
+                bridge_calls.append(actions)
+                return [
+                    CandidateAction(
+                        action.candidate_key,
+                        action.conflict_keys,
+                        lambda action=action: executor(action),
+                    )
+                    for action in actions
+                ]
+
+            with patch("whenitrains.runner.executable_candidate_actions", side_effect=bridge):
+                result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 2)
+            self.assertEqual(len(bridge_calls), 1)
+            self.assertEqual(
+                {action.intent for action in bridge_calls[0]},
+                {"buy_crossed_bucket_yes", "buy_invalidated_bucket_no"},
+            )
+            self.assertTrue(all(action.candidate_key.startswith("actual_cross:") for action in bridge_calls[0]))
 
     def test_actual_cross_fast_lane_skips_exact_yes_when_latest_forecast_later_hour_reaches_actual(self):
         with tempfile.TemporaryDirectory() as tmp:
