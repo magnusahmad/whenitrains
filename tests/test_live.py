@@ -12,6 +12,7 @@ from whenitrains.live import (
     PolymarketClobClient,
     execute_live_buy,
     execute_live_sell,
+    find_live_position_drifts,
     freeze_new_entries_for_stale_submitted_orders,
     reconcile_submitted_live_order,
     rebuild_live_positions_from_filled_orders,
@@ -869,6 +870,42 @@ class LiveTests(unittest.TestCase):
                 stages,
                 ["order_submitted", "clob_ack", "fill_matched", "fill_confirmed"],
             )
+
+    def test_find_live_position_drifts_compares_local_to_clob_sellable_balance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            upsert_live_position(db, "yes25", 12.5, 0.40, 0.0)
+            upsert_live_position(db, "yes26", 8.0, 0.50, 0.0)
+            upsert_live_position(db, "yes27", 5.0, 0.60, 0.0)
+            client = FakeClobClient(
+                token_balances={
+                    "yes25": 12.5,
+                    "yes26": 7.0,
+                    "yes27": None,
+                }
+            )
+
+            drifts = find_live_position_drifts(db, client, tolerance_shares=0.01)
+
+            self.assertEqual(len(drifts), 2)
+            self.assertEqual(drifts[0].token_id, "yes26")
+            self.assertAlmostEqual(drifts[0].local_shares, 8.0)
+            self.assertAlmostEqual(drifts[0].clob_sellable_shares, 7.0)
+            self.assertAlmostEqual(drifts[0].drift_shares, 1.0)
+            self.assertEqual(drifts[1].token_id, "yes27")
+            self.assertIsNone(drifts[1].clob_sellable_shares)
+
+    def test_find_live_position_drifts_ignores_balances_inside_tolerance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            upsert_live_position(db, "yes25", 12.5, 0.40, 0.0)
+            client = FakeClobClient(token_balances={"yes25": 12.495})
+
+            drifts = find_live_position_drifts(db, client, tolerance_shares=0.01)
+
+            self.assertEqual(drifts, [])
 
     def test_execute_live_sell_closes_position_from_fill(self):
         with tempfile.TemporaryDirectory() as tmp:

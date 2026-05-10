@@ -18,6 +18,7 @@ from .paper_db import calculate_entry
 from .storage import (
     get_live_position,
     get_live_setting,
+    list_open_live_positions,
     live_realized_pnl_since,
     live_setting_enabled,
     live_total_open_exposure,
@@ -83,6 +84,14 @@ class LiveExecutionResult:
     shares: float
     reason: str
     clob_order_id: str | None = None
+
+
+@dataclass(frozen=True)
+class LivePositionDrift:
+    token_id: str
+    local_shares: float
+    clob_sellable_shares: float | None
+    drift_shares: float | None
 
 
 class LiveClobClient(Protocol):
@@ -1252,6 +1261,40 @@ def freeze_new_entries_for_stale_submitted_orders(
         },
     )
     return len(stale_rows)
+
+
+def find_live_position_drifts(
+    db: sqlite3.Connection,
+    client: LiveClobClient,
+    *,
+    tolerance_shares: float = 0.01,
+) -> list[LivePositionDrift]:
+    drifts: list[LivePositionDrift] = []
+    for position in list_open_live_positions(db):
+        token_id = position["outcome_id"]
+        local_shares = float(position["net_shares"])
+        clob_shares = _sellable_token_balance(client, token_id)
+        if clob_shares is None:
+            drifts.append(
+                LivePositionDrift(
+                    token_id=token_id,
+                    local_shares=local_shares,
+                    clob_sellable_shares=None,
+                    drift_shares=None,
+                )
+            )
+            continue
+        drift = local_shares - clob_shares
+        if abs(drift) > tolerance_shares:
+            drifts.append(
+                LivePositionDrift(
+                    token_id=token_id,
+                    local_shares=local_shares,
+                    clob_sellable_shares=clob_shares,
+                    drift_shares=drift,
+                )
+            )
+    return drifts
 
 
 def _order_id(response: dict) -> str | None:

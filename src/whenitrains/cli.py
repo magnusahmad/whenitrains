@@ -37,7 +37,12 @@ from .hko import (
 from .hourly_accuracy import build_hourly_accuracy_report, render_hourly_accuracy_report
 from .low_latency import LowLatencyEventQueue
 from .live_runtime import LiveWebSocketRuntime
-from .operational import LiveSchedulerLock, LiveSchedulerLockError
+from .operational import (
+    LiveSchedulerLock,
+    LiveSchedulerLockError,
+    evaluate_live_startup_health,
+    freeze_new_entries_for_health_failures,
+)
 from .polymarket import (
     event_slugs_for_date,
     fetch_hk_temperature_event,
@@ -54,6 +59,7 @@ from .live import (
     PolymarketClobClient,
     execute_live_buy,
     execute_live_sell,
+    find_live_position_drifts,
     freeze_new_entries_for_stale_submitted_orders,
     load_live_config,
     preflight_live,
@@ -696,6 +702,22 @@ def main(argv: list[str] | None = None) -> int:
             if not preflight.ok:
                 print(f"live preflight failed: {preflight.reason}")
                 return 2
+            drift_count = len(find_live_position_drifts(db, client))
+            health = evaluate_live_startup_health(
+                market_websocket_connected=not args.no_websockets,
+                user_websocket_connected=not args.no_websockets,
+                rest_fallback_available=True,
+                credentials_valid=True,
+                balance_allowance_ok=True,
+                stale_submitted_orders=stale_submitted,
+                local_clob_drift_count=drift_count,
+            )
+            if freeze_new_entries_for_health_failures(db, health):
+                print(
+                    "blocked new entries: live startup health failed: "
+                    + "; ".join(health.reasons),
+                    flush=True,
+                )
         except LiveTradingError as exc:
             print(f"live scheduler failed: {exc}")
             return 2
