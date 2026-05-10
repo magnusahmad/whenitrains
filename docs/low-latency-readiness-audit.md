@@ -26,6 +26,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried on 2026-05-11 H
 - `fetch_response` and HKO raw snapshot storage persist fetch start, header receipt, payload receipt, and elapsed milliseconds.
 - Event-keyed live buy/sell execution records `order_submitted`, `clob_ack`, `fill_matched`, and `fill_confirmed`.
 - `latency-report` summarizes p50/p95/p99 between named stages.
+- `low-latency-readiness-report` prints the core latency stage pairs alongside live money-state and HKO source-timing evidence.
 - Compact fast-event latency lines are emitted during scheduler drain.
 - Evidence: `src/whenitrains/storage.py`, `src/whenitrains/live.py`, `src/whenitrains/low_latency.py`, `src/whenitrains/cli.py`.
 - Tests: `tests.test_low_latency`, `tests.test_latency_report`, focused live latency tests.
@@ -118,3 +119,4 @@ All passed. A single larger combined multi-module run still hit the repository's
 3. Run `live-auth-smoke --live` with credentials on the live machine.
 4. With explicit approval, run minimum-size manual live buy/sell and kill-switch verification.
 5. Run capped live scheduler and collect `latency-report` p50/p95/p99 evidence from the production DB.
+6. Run `low-latency-readiness-report` on the production DB and archive the output with the live scheduler logs.

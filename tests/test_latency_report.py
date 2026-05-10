@@ -7,8 +7,11 @@ from pathlib import Path
 from whenitrains.storage import (
     connect,
     latency_duration_summary,
+    live_setting_enabled,
     migrate,
     record_latency_stage,
+    set_live_setting,
+    store_live_order,
 )
 from whenitrains.cli import main
 
@@ -66,3 +69,44 @@ class LatencyReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("db_committed -> decision_started count=1", stdout.getvalue())
             self.assertIn("p50=0.500s", stdout.getvalue())
+
+    def test_low_latency_readiness_report_prints_latency_and_live_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            record_latency_stage(db, "event-1", "db_committed", 10.0, "actual")
+            record_latency_stage(db, "event-1", "decision_started", 10.4, "actual")
+            record_latency_stage(db, "event-1", "order_submitted", 10.45, "actual")
+            record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="BUY_YES",
+                action="BUY",
+                status="submitted",
+                clob_order_id="order-1",
+            )
+            set_live_setting(db, "block_new_entries", True)
+            self.assertTrue(live_setting_enabled(db, "block_new_entries"))
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn("low latency readiness report", text)
+            self.assertIn("db_committed -> decision_started count=1 p50=0.400s", text)
+            self.assertIn("decision_started -> order_submitted count=1 p50=0.050s", text)
+            self.assertIn("order_submitted -> fill_confirmed count=1 p50=0.350s", text)
+            self.assertIn("live orders total=1 submitted=1 error=0", text)
+            self.assertIn("live open_positions=0 open_exposure_usd=0.00", text)
+            self.assertIn("kill_switch block_new_entries=True exit_on_kill_switch=False", text)

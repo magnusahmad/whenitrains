@@ -98,6 +98,7 @@ from .storage import (
     store_risk_event,
     set_live_setting,
     live_setting_enabled,
+    live_dashboard_stats,
     latency_duration_summary,
 )
 
@@ -154,6 +155,9 @@ def main(argv: list[str] | None = None) -> int:
     hko_timing_report = sub.add_parser("hko-source-timing-report")
     hko_timing_report.add_argument("--endpoint-contains")
     hko_timing_report.add_argument("--limit", type=int, default=200)
+    readiness_report = sub.add_parser("low-latency-readiness-report")
+    readiness_report.add_argument("--hko-endpoint-contains", default="latestReadings")
+    readiness_report.add_argument("--hko-limit", type=int, default=200)
     accuracy = sub.add_parser("research-forecast-accuracy")
     accuracy.add_argument("--start")
     accuracy.add_argument("--end")
@@ -285,6 +289,16 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
         )
         print(report)
+        return 0
+    if args.command == "low-latency-readiness-report":
+        migrate(db)
+        print(
+            _low_latency_readiness_report(
+                db,
+                hko_endpoint_contains=args.hko_endpoint_contains,
+                hko_limit=args.hko_limit,
+            )
+        )
         return 0
     if args.command == "init-db":
         migrate(db)
@@ -1379,6 +1393,60 @@ def _hko_source_timing_report(
             f"{last['fetch_started_at_utc'] or last['fetched_at_utc']}"
         )
         lines.append(f"latest_endpoint={last['endpoint']}")
+    return "\n".join(lines)
+
+
+def _low_latency_readiness_report(
+    db,
+    *,
+    hko_endpoint_contains: str | None = "latestReadings",
+    hko_limit: int = 200,
+) -> str:
+    latency_pairs = [
+        ("db_committed", "decision_started"),
+        ("decision_started", "order_submitted"),
+        ("order_submitted", "fill_confirmed"),
+        ("db_committed", "decision_completed"),
+    ]
+    lines = ["low latency readiness report", "latency:"]
+    for start_stage, end_stage in latency_pairs:
+        summary = latency_duration_summary(db, start_stage, end_stage)
+        lines.append(
+            f"{start_stage} -> {end_stage} "
+            f"count={summary['count']} "
+            f"p50={_fmt_seconds(summary['p50_seconds'])} "
+            f"p95={_fmt_seconds(summary['p95_seconds'])} "
+            f"p99={_fmt_seconds(summary['p99_seconds'])}"
+        )
+    live = live_dashboard_stats(db)
+    counts = live["counts"]
+    lines.extend(
+        [
+            "live:",
+            (
+                f"live orders total={counts['orders']} "
+                f"submitted={counts['submitted']} "
+                f"error={counts['error']}"
+            ),
+            (
+                f"live open_positions={live['open_positions']} "
+                f"open_exposure_usd={live['open_exposure_usd']:.2f} "
+                f"missing_bid_positions={live['missing_bid_positions']}"
+            ),
+            (
+                "kill_switch "
+                f"block_new_entries={live['block_new_entries']} "
+                "exit_on_kill_switch="
+                f"{live['cancel_open_orders_and_exit_positions']}"
+            ),
+            "hko:",
+            _hko_source_timing_report(
+                db,
+                endpoint_contains=hko_endpoint_contains,
+                limit=hko_limit,
+            ),
+        ]
+    )
     return "\n".join(lines)
 
 
