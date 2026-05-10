@@ -1647,11 +1647,10 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             messages.append("evidence archive gates missing: " + missing_gates)
         else:
             messages.append("evidence archive gates missing: all_gates_passed is not True")
-    manifest_files = {
-        line[2:].strip()
-        for line in manifest.splitlines()
-        if line.startswith("- ")
-    }
+    manifest_file_list = _manifest_file_list(manifest)
+    manifest_files = set(manifest_file_list)
+    for name in _duplicate_values(manifest_file_list):
+        messages.append(f"evidence archive duplicate manifest entry: {name}")
     missing_manifest_entries = [
         name for name in required_files if name != "manifest.txt" and name not in manifest_files
     ]
@@ -1704,15 +1703,30 @@ def _manifest_checksums(manifest: str) -> dict[str, str]:
 
 
 def _manifest_duplicate_checksums(manifest: str) -> list[str]:
+    return _duplicate_values(
+        [
+            line[len("sha256 ") :].split("=", 1)[0]
+            for line in manifest.splitlines()
+            if line.startswith("sha256 ") and "=" in line
+        ]
+    )
+
+
+def _manifest_file_list(manifest: str) -> list[str]:
+    return [
+        line[2:].strip()
+        for line in manifest.splitlines()
+        if line.startswith("- ")
+    ]
+
+
+def _duplicate_values(values: list[str]) -> list[str]:
     seen: set[str] = set()
     duplicates: list[str] = []
-    for line in manifest.splitlines():
-        if not line.startswith("sha256 ") or "=" not in line:
-            continue
-        name, _digest = line[len("sha256 ") :].split("=", 1)
-        if name in seen and name not in duplicates:
-            duplicates.append(name)
-        seen.add(name)
+    for value in values:
+        if value in seen and value not in duplicates:
+            duplicates.append(value)
+        seen.add(value)
     return duplicates
 
 
