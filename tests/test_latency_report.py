@@ -51,6 +51,10 @@ def _write_complete_evidence_archive(output_dir: Path, *, checksums: bool = True
         (output_dir / name).write_text(_archive_report_fixture_content(name))
     manifest_lines = [
         "low latency evidence archive",
+        "created_at_utc=2026-05-11T00:00:00+00:00",
+        "db_path=/private/tmp/test.sqlite3",
+        "hko_endpoint_contains=latestReadings",
+        "hko_limit=200",
         "all_gates_passed=True",
         "files:",
         *[f"- {name}" for name in ARCHIVE_REPORT_FILES],
@@ -353,6 +357,33 @@ class LatencyReportTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 2)
             self.assertIn("evidence archive manifest header missing", stdout.getvalue())
+
+    def test_low_latency_verify_evidence_archive_fails_missing_manifest_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            manifest_lines = [
+                line
+                for line in (output_dir / "manifest.txt").read_text().splitlines()
+                if not line.startswith("created_at_utc=")
+            ]
+            (output_dir / "manifest.txt").write_text("\n".join(manifest_lines) + "\n")
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive manifest metadata missing: created_at_utc",
+                stdout.getvalue(),
+            )
 
     def test_low_latency_verify_evidence_archive_requires_exact_passed_gate(self):
         with tempfile.TemporaryDirectory() as tmp:

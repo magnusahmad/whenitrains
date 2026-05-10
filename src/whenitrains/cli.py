@@ -1647,6 +1647,20 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
     manifest = manifest_path.read_text() if manifest_path.is_file() else ""
     if not manifest.startswith("low latency evidence archive\n"):
         messages.append("evidence archive manifest header missing")
+    required_metadata_keys = [
+        "created_at_utc",
+        "db_path",
+        "hko_endpoint_contains",
+        "hko_limit",
+    ]
+    missing_metadata_keys = [
+        key for key in required_metadata_keys if _manifest_value(manifest, key) is None
+    ]
+    if missing_metadata_keys:
+        messages.append(
+            "evidence archive manifest metadata missing: "
+            + ", ".join(missing_metadata_keys)
+        )
     for key in _manifest_duplicate_keys(manifest, ["all_gates_passed", "missing_gates"]):
         messages.append(f"evidence archive duplicate manifest key: {key}")
     if _manifest_value(manifest, "all_gates_passed") != "True":
