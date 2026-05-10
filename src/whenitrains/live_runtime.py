@@ -85,6 +85,10 @@ class LiveWebSocketRuntime:
     def running(self) -> bool:
         return any(thread.is_alive() for thread in self._threads)
 
+    @property
+    def all_running(self) -> bool:
+        return len(self._threads) == 2 and all(thread.is_alive() for thread in self._threads)
+
     def start(self) -> None:
         if self.running:
             return

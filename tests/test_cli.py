@@ -167,6 +167,8 @@ class CliDiscoveryTests(unittest.TestCase):
             book_cache = object()
 
             class FakeRuntime:
+                all_running = True
+
                 def __init__(self):
                     self.book_cache = book_cache
 
@@ -313,6 +315,63 @@ class CliDiscoveryTests(unittest.TestCase):
                 ).fetchone()
                 self.assertEqual(risk["event_type"], "live_startup_health_failed")
                 self.assertEqual(risk["severity"], "critical")
+            finally:
+                db.close()
+
+    def test_live_scheduler_reconcile_watchdog_freezes_entries_when_websocket_runtime_stalls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+
+            class FakeRuntime:
+                book_cache = object()
+                all_running = False
+
+                def start(self):
+                    return None
+
+                def stop(self, timeout=None):
+                    return None
+
+            def run_loop(*args, **kwargs):
+                result = kwargs["reconcile_watchdog_fn"](args[0])
+                self.assertIn("live reconcile watchdog froze entries", result.notes[0])
+
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch("whenitrains.cli.PolymarketClobClient", return_value=object()),
+                patch(
+                    "whenitrains.cli.preflight_live",
+                    return_value=SimpleNamespace(ok=True, reason="ok"),
+                ),
+                patch("whenitrains.cli.find_live_position_drifts", return_value=[]),
+                patch(
+                    "whenitrains.cli.LiveWebSocketRuntime.for_live_scheduler",
+                    return_value=FakeRuntime(),
+                ),
+                patch("whenitrains.cli.run_scheduled_paper_loop", side_effect=run_loop),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-scheduler",
+                        "--live",
+                        "--ticks",
+                        "0",
+                        "--no-startup-backup",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            db = connect(db_path)
+            try:
+                self.assertTrue(live_setting_enabled(db, "block_new_entries"))
+                risk = db.execute(
+                    "select details_json from risk_events order by id desc limit 1"
+                ).fetchone()
+                self.assertIn("market websocket disconnected", risk["details_json"])
+                self.assertIn("user websocket disconnected", risk["details_json"])
             finally:
                 db.close()
 

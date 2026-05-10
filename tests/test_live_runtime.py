@@ -1,5 +1,6 @@
 import asyncio
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -33,6 +34,26 @@ class LiveRuntimeTests(unittest.TestCase):
         self.assertEqual(market.started, 1)
         self.assertEqual(user.started, 1)
         self.assertFalse(runtime.running)
+
+    def test_all_running_requires_both_websocket_workers_alive(self):
+        market = _BlockingClient()
+
+        class ExitingClient:
+            async def run_forever(self, stop_event, *, reconnect_delay_seconds=1.0):
+                return None
+
+        runtime = LiveWebSocketRuntime(
+            market_client_factory=lambda cache: market,
+            user_client_factory=ExitingClient,
+        )
+
+        runtime.start()
+        deadline = time.monotonic() + 1
+        while runtime.all_running and time.monotonic() < deadline:
+            time.sleep(0.001)
+
+        self.assertFalse(runtime.all_running)
+        runtime.stop(timeout=2)
 
     def test_default_user_client_uses_own_database_connection(self):
         with tempfile.TemporaryDirectory() as tmp:

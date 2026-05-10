@@ -751,11 +751,14 @@ def main(argv: list[str] | None = None) -> int:
             )
             def reconcile_watchdog(tick_db):
                 drifts = find_live_position_drifts(tick_db, client)
-                if not drifts:
+                websocket_stalled = (
+                    websocket_runtime is not None and not websocket_runtime.all_running
+                )
+                if not drifts and not websocket_stalled:
                     return RunnerResult()
                 health = evaluate_live_startup_health(
-                    market_websocket_connected=not args.no_websockets,
-                    user_websocket_connected=not args.no_websockets,
+                    market_websocket_connected=not args.no_websockets and not websocket_stalled,
+                    user_websocket_connected=not args.no_websockets and not websocket_stalled,
                     rest_fallback_available=True,
                     credentials_valid=True,
                     balance_allowance_ok=True,
