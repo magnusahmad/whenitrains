@@ -2621,6 +2621,7 @@ def _live_settlement_validation_count(db) -> int:
         join live_orders
           on live_orders.id = cast(json_extract(risk_events.details_json, '$.live_order_id') as integer)
         where risk_events.event_type = 'live_settlement_validation_ok'
+          and length(trim(coalesce(json_extract(risk_events.details_json, '$.reference'), ''))) > 0
           and live_orders.status = 'filled'
           and (
             live_orders.side = 'SETTLEMENT'
