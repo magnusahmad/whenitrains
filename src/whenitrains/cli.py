@@ -1963,9 +1963,13 @@ def _readiness_gate_lines(text: str) -> list[str]:
 
 def _readiness_sections_valid(text: str) -> bool:
     lines = text.splitlines()
-    if lines.count("evidence gates:") != 1 or lines.count("live:") != 1:
+    if (
+        lines.count("latency:") != 1
+        or lines.count("evidence gates:") != 1
+        or lines.count("live:") != 1
+    ):
         return False
-    return lines.index("evidence gates:") < lines.index("live:")
+    return lines.index("latency:") < lines.index("evidence gates:") < lines.index("live:")
 
 
 def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
