@@ -6,7 +6,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from whenitrains.hko import HKT, HkoCurrentTemperature, OcfForecastSample
-from whenitrains.low_latency import LowLatencyEventQueue, process_next_fast_event
+from whenitrains.low_latency import (
+    LowLatencyEventQueue,
+    compact_latency_event_line,
+    process_next_fast_event,
+)
 from whenitrains.storage import (
     connect,
     latency_stages_for_event,
@@ -128,6 +132,27 @@ class LowLatencyReadinessTests(unittest.TestCase):
                 1.0,
             )
             self.assertIn("decision_completed", [stage["stage"] for stage in stages])
+
+    def test_compact_latency_event_line_includes_event_timing(self):
+        event = _alpha_event(
+            kind="aws_actual_transition",
+            event_key="aws_actual_transition:max:2026-05-04:1:25.6->2:26.1",
+        )
+        event = type(event)(
+            **{
+                **event.__dict__,
+                "committed_monotonic": 100.0,
+                "detected_monotonic": 100.125,
+                "details": {"transition": "max"},
+            }
+        )
+
+        line = compact_latency_event_line(event)
+
+        self.assertIn("latency_event=aws_actual_transition", line)
+        self.assertIn("target=2026-05-04", line)
+        self.assertIn("commit_to_detect_ms=125.0", line)
+        self.assertIn("transition=max", line)
 
     def test_fast_worker_dispatches_forecast_sample_events_to_forecast_handler(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -9,7 +9,11 @@ from datetime import date, datetime, time as day_time, timedelta
 
 from .alerting import AlertMessage, AlertSink
 from .hko import HKT, parse_aws_gis_current_temperature
-from .low_latency import LowLatencyEventQueue, process_next_fast_event
+from .low_latency import (
+    LowLatencyEventQueue,
+    compact_latency_event_line,
+    process_next_fast_event,
+)
 from .runner import RunnerResult, run_paper_tick
 
 
@@ -361,6 +365,7 @@ def run_scheduled_paper_loop(
                             low_latency_event_queue,
                             decision_handler=fast_event_handler,
                         )
+                        notes.append(compact_latency_event_line(fast_result.event))
                         if isinstance(fast_result.result, RunnerResult):
                             result = _merge_runner_results(result, fast_result.result)
                     notes.append("fast hko events")

@@ -31,6 +31,7 @@ class AlphaEvent:
 @dataclass(frozen=True)
 class FastEventResult:
     event_key: str
+    event: AlphaEvent
     result: object
 
 
@@ -301,7 +302,23 @@ def process_next_fast_event(
         event.kind,
         _result_details(result),
     )
-    return FastEventResult(event_key=event.event_key, result=result)
+    return FastEventResult(event_key=event.event_key, event=event, result=result)
+
+
+def compact_latency_event_line(event: AlphaEvent) -> str:
+    commit_to_detect_ms = max(
+        0.0, (event.detected_monotonic - event.committed_monotonic) * 1000.0
+    )
+    bits = [
+        f"latency_event={event.kind}",
+        f"key={event.event_key}",
+        f"target={event.target_date_hkt}",
+        f"commit_to_detect_ms={commit_to_detect_ms:.1f}",
+    ]
+    transition = event.details.get("transition")
+    if transition is not None:
+        bits.append(f"transition={transition}")
+    return " ".join(bits)
 
 
 def _default_decision_handler(kind: str) -> Callable[[sqlite3.Connection, date], object]:

@@ -688,6 +688,7 @@ HKO,27.3,28.5,24.0
 
             self.assertEqual(calls, [("fast", now.date())])
             self.assertIn("fast hko events", output.getvalue())
+            self.assertIn("latency_event=aws_actual_transition", output.getvalue())
 
     def test_scheduler_uses_default_fast_event_dispatch_without_custom_handler(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -714,8 +715,12 @@ HKO,27.3,28.5,24.0
                 return RunnerResult(notes=("watchdog",))
 
             def fast_side_effect(_db, event_queue, **_kwargs):
-                event_queue.get_nowait()
-                return type("FastResult", (), {"result": RunnerResult(notes=("fast",))})()
+                event = event_queue.get_nowait()
+                return type(
+                    "FastResult",
+                    (),
+                    {"event": event, "result": RunnerResult(notes=("fast",))},
+                )()
 
             with patch(
                 "whenitrains.scheduler.process_next_fast_event",
