@@ -53,7 +53,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - Live tick receives a scheduler-owned cache and live buys reject missing/stale cache books when a cache is configured.
 - `live-network-smoke --live --require-connected` starts and stops the scheduler-owned market/user WebSocket runtime without running trading decisions, reports per-client connection attempts, connected-once state, applied messages, and last error, and exits nonzero if fewer than the market/user clients are reported or any client never connected.
 - `live-network-smoke --live --require-connected` records `live_network_smoke_ok`/`live_network_smoke_failed` evidence, and `low-latency-readiness-report --require-evidence` requires the latest network smoke event to be OK with both required WebSocket clients running and connected at least once.
-- `low-latency-readiness-report --require-evidence` requires at least one persisted orderbook snapshot with `polymarket_market_websocket` metadata so the production report cannot pass on connection liveness alone.
+- `low-latency-readiness-report --require-evidence` requires at least one persisted orderbook snapshot with `polymarket_market_websocket` metadata, usable bid/ask/mid prices, and non-empty bid/ask depth, so the production report cannot pass on connection liveness or placeholder snapshots alone.
 - Evidence: `src/whenitrains/orderbook_cache.py`, `src/whenitrains/market_websocket.py`, `src/whenitrains/live_runtime.py`, `src/whenitrains/runner.py`.
 - Tests: `tests.test_orderbook_cache`, `tests.test_market_websocket`, `tests.test_recorded_fixtures`, focused live runner tests.
 - Missing: real Polymarket WebSocket smoke and observed live book age at submission.

@@ -1381,6 +1381,44 @@ class LatencyReportTests(unittest.TestCase):
                 text,
             )
 
+    def test_low_latency_readiness_report_fails_on_placeholder_websocket_orderbook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            db.execute(
+                """
+                insert into orderbook_snapshots
+                (outcome_id, fetched_at_utc, best_bid, best_ask, mid, depth_json)
+                values (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "yes25",
+                    "2026-05-11T00:00:00+00:00",
+                    None,
+                    None,
+                    None,
+                    '{"source": "polymarket_market_websocket"}',
+                ),
+            )
+            db.commit()
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("gate websocket_orderbook_snapshots_observed=missing count=0", text)
+
     def test_low_latency_readiness_report_require_evidence_fails_when_gates_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

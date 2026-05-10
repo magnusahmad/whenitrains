@@ -2805,6 +2805,11 @@ def _websocket_orderbook_snapshot_count(db) -> int:
         select count(*) as count
         from orderbook_snapshots
         where depth_json like '%"source": "polymarket_market_websocket"%'
+          and best_bid is not null
+          and best_ask is not null
+          and mid is not null
+          and json_array_length(json_extract(depth_json, '$.bids')) > 0
+          and json_array_length(json_extract(depth_json, '$.asks')) > 0
         """
     ).fetchone()
     return int(row["count"] or 0)
