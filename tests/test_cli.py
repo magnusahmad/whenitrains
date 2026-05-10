@@ -372,6 +372,53 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("client1_connected_once=False", text)
             self.assertIn("live network smoke connected_once_all=False", text)
 
+    def test_live_network_smoke_require_connected_requires_market_and_user_clients(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+
+            class FakeRuntime:
+                all_running = True
+                client_statuses = [
+                    SimpleNamespace(
+                        connected_once=True,
+                        connection_attempts=1,
+                        messages_applied=1,
+                        last_error=None,
+                    )
+                ]
+
+                def start(self):
+                    pass
+
+                def stop(self, timeout=None):
+                    pass
+
+            stdout = StringIO()
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch(
+                    "whenitrains.cli.LiveWebSocketRuntime.for_live_scheduler",
+                    return_value=FakeRuntime(),
+                ),
+                patch("whenitrains.cli.time.sleep"),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-network-smoke",
+                        "--live",
+                        "--seconds",
+                        "0",
+                        "--require-connected",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("live network smoke client_count=1 required_clients=2", text)
+
     def test_live_scheduler_freezes_entries_when_startup_drift_is_detected(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

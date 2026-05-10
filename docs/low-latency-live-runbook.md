@@ -16,7 +16,7 @@ This runbook covers the low-latency live scheduler path for HK temperature marke
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-network-smoke --live --seconds 10 --require-connected
 ```
 
-Expected output includes `live network smoke websocket_all_running=True`, per-client `connected_once=True` lines, and `live network smoke connected_once_all=True`; the command exits `0` only when both runtime liveness and connection evidence pass. This command starts and stops the market/user WebSocket runtime but does not run trading decisions.
+Expected output includes `live network smoke websocket_all_running=True`, at least two reported clients, per-client `connected_once=True` lines, and `live network smoke connected_once_all=True`; the command exits `0` only when runtime liveness, market/user client count, and connection evidence pass. This command starts and stops the market/user WebSocket runtime but does not run trading decisions.
 
 4. Confirm there is no emergency entry block unless intentional:
 

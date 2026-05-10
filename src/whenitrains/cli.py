@@ -571,11 +571,18 @@ def main(argv: list[str] | None = None) -> int:
                 status.connected_once for status in client_statuses
             )
             if args.require_connected:
+                required_clients = 2
+                print(
+                    "live network smoke "
+                    f"client_count={len(client_statuses)} "
+                    f"required_clients={required_clients}"
+                )
                 print(
                     "live network smoke "
                     f"connected_once_all={connected_once_all}"
                 )
-                return 0 if all_running and connected_once_all else 2
+                has_required_clients = len(client_statuses) >= required_clients
+                return 0 if all_running and connected_once_all and has_required_clients else 2
             return 0 if all_running else 2
         except LiveTradingError as exc:
             print(f"live network smoke failed: {exc}")
