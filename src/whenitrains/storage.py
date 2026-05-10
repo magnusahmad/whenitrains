@@ -858,7 +858,15 @@ def store_orderbook(
             best_bid,
             best_ask,
             mid,
-            json.dumps({"bids": book.bids, "asks": book.asks, **(metadata or {})}),
+            json.dumps(
+                {
+                    "bids": book.bids,
+                    "asks": book.asks,
+                    "tick_size": book.tick_size,
+                    "min_order_size": book.min_order_size,
+                    **(metadata or {}),
+                }
+            ),
         ),
     )
     db.commit()
@@ -879,7 +887,13 @@ def latest_orderbook(db: sqlite3.Connection, token_id: str) -> OrderBook:
     depth = json.loads(row["depth_json"])
     bids = sorted([tuple(item) for item in depth.get("bids", [])], reverse=True)
     asks = sorted([tuple(item) for item in depth.get("asks", [])])
-    return OrderBook(token_id=token_id, bids=bids, asks=asks, tick_size=0.01, min_order_size=5)
+    return OrderBook(
+        token_id=token_id,
+        bids=bids,
+        asks=asks,
+        tick_size=float(depth.get("tick_size", 0.01)),
+        min_order_size=float(depth.get("min_order_size", 5)),
+    )
 
 
 def list_outcomes(db: sqlite3.Connection) -> list[sqlite3.Row]:
