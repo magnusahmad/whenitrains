@@ -432,6 +432,42 @@ HKO,,,,28.9,69,29.3,24.0,,,,1011.0,4.8,27.3,
                 [("14:30", "payload_header"), ("14:38", "http_Last-Modified")],
             )
 
+    def test_fetch_current_temperature_persists_http_timing(self):
+        aws_payload = """Latest readings recorded at 14:30 Hong Kong Time 7 May 2026
+STN,WINDDIRECTION,WINDSPEED,GUST,TEMP,RH,MAXTEMP,MINTEMP,GRASSTEMP,GRASSMINTEMP,VISIBILITY,PRESSURE,TEMPDIFFERENCE,HEATINDEX,
+HKO,,,,28.9,69,29.3,24.0,,,,1011.0,4.8,27.3,
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+
+            with patch(
+                "whenitrains.cli.fetch_response",
+                return_value=FetchResponse(
+                    AWS_GIS_READINGS_URL,
+                    aws_payload,
+                    {"Last-Modified": "Thu, 07 May 2026 06:38:01 GMT"},
+                    fetch_started_at_utc="2026-05-11T00:00:00+00:00",
+                    headers_received_at_utc="2026-05-11T00:00:00.040000+00:00",
+                    payload_received_at_utc="2026-05-11T00:00:00.090000+00:00",
+                    response_elapsed_ms=90.2,
+                ),
+            ):
+                _fetch_current_temperature(db)
+
+            row = db.execute(
+                """
+                select fetch_started_at_utc, headers_received_at_utc,
+                       payload_received_at_utc, response_elapsed_ms
+                from raw_snapshots
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(row["fetch_started_at_utc"], "2026-05-11T00:00:00+00:00")
+            self.assertEqual(row["headers_received_at_utc"], "2026-05-11T00:00:00.040000+00:00")
+            self.assertEqual(row["payload_received_at_utc"], "2026-05-11T00:00:00.090000+00:00")
+            self.assertAlmostEqual(row["response_elapsed_ms"], 90.2)
+
     def test_fetch_current_temperature_labels_rhrread_fallback_and_keeps_aws_failed(self):
         rhrread_payload = """
         {

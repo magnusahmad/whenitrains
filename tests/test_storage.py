@@ -165,6 +165,36 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(row["http_date"], "Mon, 04 May 2026 05:45:06 GMT")
             self.assertEqual(row["http_etag"], "abc")
 
+    def test_store_raw_snapshot_records_fetch_timing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+
+            snapshot = store_raw_snapshot(
+                db,
+                "hko",
+                "endpoint",
+                "{}",
+                fetch_started_at_utc="2026-05-11T00:00:00+00:00",
+                headers_received_at_utc="2026-05-11T00:00:00.050000+00:00",
+                payload_received_at_utc="2026-05-11T00:00:00.125000+00:00",
+                response_elapsed_ms=125.4,
+            )
+
+            row = db.execute(
+                """
+                select fetch_started_at_utc, headers_received_at_utc,
+                       payload_received_at_utc, response_elapsed_ms
+                from raw_snapshots
+                where id = ?
+                """,
+                (snapshot.id,),
+            ).fetchone()
+            self.assertEqual(row["fetch_started_at_utc"], "2026-05-11T00:00:00+00:00")
+            self.assertEqual(row["headers_received_at_utc"], "2026-05-11T00:00:00.050000+00:00")
+            self.assertEqual(row["payload_received_at_utc"], "2026-05-11T00:00:00.125000+00:00")
+            self.assertAlmostEqual(row["response_elapsed_ms"], 125.4)
+
     def test_record_hko_update_minute_upserts_learned_scheduler_times(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

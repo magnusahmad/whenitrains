@@ -4,6 +4,7 @@ import csv
 import html
 import json
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
@@ -76,6 +77,10 @@ class FetchResponse:
     url: str
     text: str
     headers: dict[str, str]
+    fetch_started_at_utc: str | None = None
+    headers_received_at_utc: str | None = None
+    payload_received_at_utc: str | None = None
+    response_elapsed_ms: float | None = None
 
     @property
     def http_date(self) -> datetime | None:
@@ -104,11 +109,20 @@ def fetch_response(url: str) -> FetchResponse:
     if "maps.weather.gov.hk/ocf/" in url:
         headers["Referer"] = OCF_TEXT_URL
     request = Request(url, headers=headers)
+    started_mono = time.perf_counter()
+    fetch_started_at_utc = datetime.now(timezone.utc).isoformat()
     with urlopen(request, timeout=15) as response:
+        headers_received_at_utc = datetime.now(timezone.utc).isoformat()
+        text = response.read().decode("utf-8-sig")
+        payload_received_at_utc = datetime.now(timezone.utc).isoformat()
         return FetchResponse(
             url=url,
-            text=response.read().decode("utf-8-sig"),
+            text=text,
             headers=dict(response.headers.items()),
+            fetch_started_at_utc=fetch_started_at_utc,
+            headers_received_at_utc=headers_received_at_utc,
+            payload_received_at_utc=payload_received_at_utc,
+            response_elapsed_ms=(time.perf_counter() - started_mono) * 1000,
         )
 
 

@@ -955,11 +955,23 @@ def _list_hko_update_times_for_path(db_path: Path, source: str):
         worker_db.close()
 
 
+def _store_hko_raw_snapshot(db, response) -> object:
+    return store_raw_snapshot(
+        db,
+        "hko",
+        response.url,
+        response.text,
+        response.headers,
+        fetch_started_at_utc=response.fetch_started_at_utc,
+        headers_received_at_utc=response.headers_received_at_utc,
+        payload_received_at_utc=response.payload_received_at_utc,
+        response_elapsed_ms=response.response_elapsed_ms,
+    )
+
+
 def _fetch_since_midnight(db) -> str:
     response = fetch_response(SINCE_MIDNIGHT_URL)
-    obs_snapshot = store_raw_snapshot(
-        db, "hko", SINCE_MIDNIGHT_URL, response.text, response.headers
-    )
+    obs_snapshot = _store_hko_raw_snapshot(db, response)
     store_hko_observation(db, obs_snapshot.id, parse_since_midnight_csv(response.text))
     return response.text
 
@@ -978,9 +990,7 @@ def _fetch_current_temperature(db, event_queue: LowLatencyEventQueue | None = No
                 f"{type(aws_error).__name__}: {aws_error}; "
                 f"{type(fallback_error).__name__}: {fallback_error}"
             ) from aws_error
-        snapshot = store_raw_snapshot(
-            db, "hko", response.url, response.text, response.headers
-        )
+        snapshot = _store_hko_raw_snapshot(db, response)
         store_hko_current_temperature(db, snapshot.id, observation, event_queue=event_queue)
         record_hko_update_minute(
             db,
@@ -996,7 +1006,7 @@ def _fetch_current_temperature(db, event_queue: LowLatencyEventQueue | None = No
             "AWS GIS actual fetch failed; stored rhrread observation fallback only: "
             f"{type(aws_error).__name__}: {aws_error}"
         ) from aws_error
-    snapshot = store_raw_snapshot(db, "hko", response.url, response.text, response.headers)
+    snapshot = _store_hko_raw_snapshot(db, response)
     store_hko_current_temperature(db, snapshot.id, observation, event_queue=event_queue)
     _record_aws_actual_update_minutes(db, response, observation)
     return response.text
@@ -1044,9 +1054,7 @@ def _fetch_ocf_forecast(db) -> tuple[str, list]:
         response = fetch_response(AWS_GIS_FORECAST_URL)
     except Exception:
         response = fetch_response(OCF_STATION_URL)
-    ocf_snapshot = store_raw_snapshot(
-        db, "hko", response.url, response.text, response.headers
-    )
+    ocf_snapshot = _store_hko_raw_snapshot(db, response)
     forecasts, samples = parse_ocf_station_json(response.text)
     store_hko_forecasts(db, ocf_snapshot.id, forecasts)
     store_ocf_forecast_samples(db, ocf_snapshot.id, samples)
@@ -1081,20 +1089,12 @@ def _record_ocf_update_minutes(db, headers: dict[str, str], forecasts: list) -> 
 
 def _fetch_flw_bulletin(db) -> str:
     flw_response = fetch_response(FLW_PAGE_URL)
-    flw_snapshot = store_raw_snapshot(
-        db, "hko", FLW_PAGE_URL, flw_response.text, flw_response.headers
-    )
+    flw_snapshot = _store_hko_raw_snapshot(db, flw_response)
     flw_forecast = parse_flw_page(flw_response.text)
     payload = flw_response.text
     if flw_forecast.parse_warning:
         flw_data_response = fetch_response(FLW_PAGE_DATA_URL)
-        flw_snapshot = store_raw_snapshot(
-            db,
-            "hko",
-            FLW_PAGE_DATA_URL,
-            flw_data_response.text,
-            flw_data_response.headers,
-        )
+        flw_snapshot = _store_hko_raw_snapshot(db, flw_data_response)
         flw_forecast = parse_flw_page_data_json(flw_data_response.text)
         payload = flw_data_response.text
     store_hko_forecasts(db, flw_snapshot.id, [flw_forecast])

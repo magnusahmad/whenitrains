@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import patch
 
 from whenitrains.hko import (
+    fetch_response,
     parse_aws_gis_current_temperature,
     parse_flw_page,
     parse_flw_page_data_json,
@@ -17,6 +19,32 @@ SINCE_MIDNIGHT_CSV = """\ufeffDate time (Year),Date time (Month),Date time (Day)
 
 
 class HkoParserTests(unittest.TestCase):
+    def test_fetch_response_records_fetch_and_payload_timing(self):
+        class FakeResponse:
+            headers = {"Date": "Mon, 11 May 2026 00:00:00 GMT"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b"payload"
+
+        with patch("whenitrains.hko.urlopen", return_value=FakeResponse()) as urlopen, patch(
+            "whenitrains.hko.time.perf_counter", side_effect=[10.0, 10.125]
+        ):
+            response = fetch_response("https://example.test/data")
+
+        self.assertEqual(response.text, "payload")
+        self.assertEqual(response.headers["Date"], "Mon, 11 May 2026 00:00:00 GMT")
+        self.assertIsNotNone(response.fetch_started_at_utc)
+        self.assertIsNotNone(response.headers_received_at_utc)
+        self.assertIsNotNone(response.payload_received_at_utc)
+        self.assertAlmostEqual(response.response_elapsed_ms, 125.0)
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 15)
+
     def test_parse_since_midnight_hk_observatory_row(self):
         obs = parse_since_midnight_csv(SINCE_MIDNIGHT_CSV)
         self.assertEqual(obs.station, "HK Observatory")

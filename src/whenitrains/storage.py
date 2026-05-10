@@ -90,7 +90,11 @@ def migrate(db: sqlite3.Connection) -> None:
             response_headers_json text,
             http_date text,
             http_last_modified text,
-            http_etag text
+            http_etag text,
+            fetch_started_at_utc text,
+            headers_received_at_utc text,
+            payload_received_at_utc text,
+            response_elapsed_ms real
         );
 
         create table if not exists hko_forecasts (
@@ -399,6 +403,10 @@ def migrate(db: sqlite3.Connection) -> None:
     _add_column_if_missing(db, "raw_snapshots", "http_date", "text")
     _add_column_if_missing(db, "raw_snapshots", "http_last_modified", "text")
     _add_column_if_missing(db, "raw_snapshots", "http_etag", "text")
+    _add_column_if_missing(db, "raw_snapshots", "fetch_started_at_utc", "text")
+    _add_column_if_missing(db, "raw_snapshots", "headers_received_at_utc", "text")
+    _add_column_if_missing(db, "raw_snapshots", "payload_received_at_utc", "text")
+    _add_column_if_missing(db, "raw_snapshots", "response_elapsed_ms", "real")
     _add_column_if_missing(db, "paper_decisions", "event_key", "text")
     _add_column_if_missing(db, "hko_forecasts", "update_time", "text")
     _add_column_if_missing(
@@ -437,7 +445,11 @@ def _rebuild_raw_snapshots_without_unique_hash(db: sqlite3.Connection) -> None:
             response_headers_json text,
             http_date text,
             http_last_modified text,
-            http_etag text
+            http_etag text,
+            fetch_started_at_utc text,
+            headers_received_at_utc text,
+            payload_received_at_utc text,
+            response_elapsed_ms real
         );
         insert into raw_snapshots
         (id, source, endpoint, fetched_at_utc, content_hash, payload)
@@ -454,6 +466,11 @@ def store_raw_snapshot(
     endpoint: str,
     payload: str,
     response_headers: dict[str, str] | None = None,
+    *,
+    fetch_started_at_utc: str | None = None,
+    headers_received_at_utc: str | None = None,
+    payload_received_at_utc: str | None = None,
+    response_elapsed_ms: float | None = None,
 ) -> RawSnapshotRecord:
     content_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     now = datetime.now(timezone.utc).isoformat()
@@ -462,8 +479,10 @@ def store_raw_snapshot(
         """
         insert into raw_snapshots
         (source, endpoint, fetched_at_utc, content_hash, payload,
-         response_headers_json, http_date, http_last_modified, http_etag)
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         response_headers_json, http_date, http_last_modified, http_etag,
+         fetch_started_at_utc, headers_received_at_utc, payload_received_at_utc,
+         response_elapsed_ms)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             source,
@@ -475,6 +494,10 @@ def store_raw_snapshot(
             headers.get("Date"),
             headers.get("Last-Modified"),
             headers.get("Etag") or headers.get("ETag"),
+            fetch_started_at_utc,
+            headers_received_at_utc,
+            payload_received_at_utc,
+            response_elapsed_ms,
         ),
     )
     db.commit()
