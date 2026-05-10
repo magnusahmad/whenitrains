@@ -2026,7 +2026,14 @@ def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
 
 
 def _missing_gates_malformed(value: str) -> bool:
-    return any(not item.strip() for item in value.split(","))
+    observed: set[str] = set()
+    expected = set(LOW_LATENCY_READINESS_GATE_NAMES)
+    for item in value.split(","):
+        gate = item.strip()
+        if not gate or gate not in expected or gate in observed:
+            return True
+        observed.add(gate)
+    return False
 
 
 def _sha256_file(path: Path) -> str:
