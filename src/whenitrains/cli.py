@@ -2025,8 +2025,21 @@ def _readiness_gate_line_malformed(line: str) -> bool:
         return True
     if not gate_tokens[1]:
         return True
-    status = rest.split(" ", 1)[0]
-    return status not in {"pass", "missing"}
+    rest_parts = rest.split()
+    if not rest_parts:
+        return True
+    status = rest_parts[0]
+    if status not in {"pass", "missing"}:
+        return True
+    seen_fields: set[str] = set()
+    for field in rest_parts[1:]:
+        if "=" not in field:
+            return True
+        key, _value = field.split("=", 1)
+        if not key or key in seen_fields:
+            return True
+        seen_fields.add(key)
+    return False
 
 
 def _readiness_sections_valid(text: str) -> bool:
