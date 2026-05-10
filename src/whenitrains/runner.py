@@ -56,6 +56,19 @@ class RunnerResult:
     notes: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class _SellPlan:
+    token_id: str
+    outcome: sqlite3.Row
+    side: str
+    bids: list[tuple[float, float]]
+    best_bid: float | None
+    reason: str
+    details: dict[str, object]
+    event_type: str
+    event_key: str | None
+
+
 def run_paper_tick(db: sqlite3.Connection, today_hkt: date | None = None) -> RunnerResult:
     today = today_hkt or datetime.now(HKT).date()
     forecast_result = process_all_forecast_entries(db, today)
@@ -514,6 +527,7 @@ def process_forecast_position_exits(
     sells_filled = 0
     sells_missed = 0
     notes: list[str] = []
+    pending_sells: list[tuple[PlannedCandidateAction, _SellPlan]] = []
     positions = list_open_live_positions(db) if _LIVE_CLIENT is not None else list_open_paper_positions(db)
     for pos in positions:
         token_id = pos["outcome_id"]
@@ -555,61 +569,116 @@ def process_forecast_position_exits(
             )
             sells_missed += 1
             continue
-        if _LIVE_CLIENT is not None:
-            result = execute_live_sell(
-                db,
-                _LIVE_CLIENT,
-                token_id=token_id,
-                bids=book.bids,
-                reason=reason,
-                label=outcome["label"],
-                event_type="forecast_exit",
-                event_key=event_key,
+        source_event_key = event_key or f"forecast_exit:{target_date.isoformat()}:{token_id}"
+        pending_sells.append(
+            (
+                PlannedCandidateAction(
+                    source_event_key=source_event_key,
+                    candidate_key=f"{source_event_key}:sell_forecast_exit:{token_id}",
+                    intent="sell_forecast_exit",
+                    token_id=token_id,
+                    side="SELL",
+                    conflict_keys=frozenset({f"token:{token_id}", f"position:{token_id}"}),
+                ),
+                _SellPlan(
+                    token_id=token_id,
+                    outcome=outcome,
+                    side=side,
+                    bids=book.bids,
+                    best_bid=book.best_bid,
+                    reason=reason,
+                    details={"forecast_max": new_forecast_max_c, "bid": book.best_bid},
+                    event_type="forecast_exit",
+                    event_key=event_key,
+                ),
             )
-        else:
-            result = execute_paper_sell(db, token_id, book.bids, reason)
-        if result.status == "filled":
-            store_trading_decision(
-                db,
-                "forecast_exit",
-                token_id,
-                outcome["label"],
-                side,
-                "SELL",
-                "filled",
-                reason,
-                {"forecast_max": new_forecast_max_c, "bid": book.best_bid},
-                event_key=event_key,
-            )
+        )
+    for status, note in _execute_planned_position_sells(db, pending_sells):
+        if status == "filled":
             sells_filled += 1
-            notes.append(f"sold forecast-invalidated {outcome['label']} {side}")
         else:
-            notes.append(
-                _sell_miss_note(
-                    outcome["label"],
-                    side,
-                    result.reason,
-                    reason,
-                    book.best_bid,
-                )
-            )
-            store_trading_decision(
-                db,
-                "forecast_exit",
-                token_id,
-                outcome["label"],
-                side,
-                "SELL",
-                "missed",
-                result.reason,
-                {"forecast_max": new_forecast_max_c, "bid": book.best_bid},
-                event_key=event_key,
-            )
             sells_missed += 1
+        if note is not None:
+            notes.append(note)
     return RunnerResult(
         sells_filled=sells_filled,
         sells_missed=sells_missed,
         notes=tuple(notes),
+    )
+
+
+def _execute_planned_position_sells(
+    db: sqlite3.Connection,
+    planned_sells: list[tuple[PlannedCandidateAction, _SellPlan]],
+) -> list[tuple[str, str | None]]:
+    if not planned_sells:
+        return []
+    sell_lookup = {
+        action.candidate_key: sell_plan
+        for action, sell_plan in planned_sells
+    }
+    scheduled_actions = executable_candidate_actions(
+        [action for action, _ in planned_sells],
+        executor=lambda action: _execute_position_sell(db, sell_lookup[action.candidate_key]),
+    )
+    return [
+        result.value
+        for result in ExecutionScheduler(max_workers=1).run(scheduled_actions)
+    ]
+
+
+def _execute_position_sell(
+    db: sqlite3.Connection,
+    sell_plan: _SellPlan,
+) -> tuple[str, str | None]:
+    if _LIVE_CLIENT is not None:
+        result = execute_live_sell(
+            db,
+            _LIVE_CLIENT,
+            token_id=sell_plan.token_id,
+            bids=sell_plan.bids,
+            reason=sell_plan.reason,
+            label=sell_plan.outcome["label"],
+            event_type=sell_plan.event_type,
+            event_key=sell_plan.event_key,
+        )
+    else:
+        result = execute_paper_sell(db, sell_plan.token_id, sell_plan.bids, sell_plan.reason)
+    if result.status == "filled":
+        store_trading_decision(
+            db,
+            sell_plan.event_type,
+            sell_plan.token_id,
+            sell_plan.outcome["label"],
+            sell_plan.side,
+            "SELL",
+            "filled",
+            sell_plan.reason,
+            sell_plan.details,
+            event_key=sell_plan.event_key,
+        )
+        return "filled", f"sold forecast-invalidated {sell_plan.outcome['label']} {sell_plan.side}"
+    store_trading_decision(
+        db,
+        sell_plan.event_type,
+        sell_plan.token_id,
+        sell_plan.outcome["label"],
+        sell_plan.side,
+        "SELL",
+        "missed",
+        result.reason,
+        sell_plan.details,
+        event_key=sell_plan.event_key,
+    )
+    return (
+        "missed",
+        _sell_miss_note(
+            sell_plan.outcome["label"],
+            sell_plan.side,
+            result.reason,
+            sell_plan.reason,
+            sell_plan.best_bid,
+        ),
     )
 
 
@@ -1933,6 +2002,8 @@ def _execute_planned_candidate_buys(
     allow_existing_position: bool = False,
     size_usd: float | None = None,
 ) -> list[bool | None]:
+    if not planned_actions:
+        return []
     execution_lookup = {
         action.candidate_key: candidate
         for action, candidate in zip(planned_actions, candidates, strict=True)

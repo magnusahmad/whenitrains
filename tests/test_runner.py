@@ -1779,6 +1779,61 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(decision["reason"], "position invalidated by hourly forecast")
 
+    def test_forecast_position_exit_uses_candidate_execution_bridge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_forecast_bucket_outcomes(),
+            )
+            from whenitrains.paper_db import execute_paper_buy
+
+            execute_paper_buy(
+                db,
+                token_id="yes23",
+                side="YES",
+                size_usd=100,
+                asks=[(0.30, 1000)],
+                max_order_usd=250,
+                reason="test",
+            )
+            _store_forecast(db, 23, "2026-05-05T04:11:45+08:00")
+            _store_forecast(db, 24, "2026-05-05T05:31:39+08:00")
+            store_orderbook(
+                db,
+                "yes23",
+                OrderBook("yes23", bids=[(0.25, 1000)], asks=[(0.26, 1000)], tick_size=0.01, min_order_size=5),
+            )
+            bridge_calls = []
+
+            def bridge(actions, executor):
+                bridge_calls.append(actions)
+                return [
+                    CandidateAction(
+                        action.candidate_key,
+                        action.conflict_keys,
+                        lambda action=action: executor(action),
+                    )
+                    for action in actions
+                ]
+
+            with patch("whenitrains.runner.executable_candidate_actions", side_effect=bridge):
+                result = process_forecast_position_exits(
+                    db,
+                    date(2026, 5, 4),
+                    24.0,
+                    event_key="forecast_change:test",
+                )
+
+            self.assertEqual(result.sells_filled, 1)
+            self.assertEqual(len(bridge_calls), 1)
+            action = bridge_calls[0][0]
+            self.assertEqual(action.intent, "sell_forecast_exit")
+            self.assertEqual(action.token_id, "yes23")
+            self.assertEqual(action.side, "SELL")
+            self.assertEqual(action.candidate_key, "forecast_change:test:sell_forecast_exit:yes23")
+            self.assertIn("token:yes23", action.conflict_keys)
+            self.assertIn("position:yes23", action.conflict_keys)
+
     def test_forecast_value_buys_cheap_forecast_bucket_when_favorite_is_lower(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
