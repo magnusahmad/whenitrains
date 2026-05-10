@@ -324,6 +324,54 @@ class CliDiscoveryTests(unittest.TestCase):
                 stdout.getvalue(),
             )
 
+    def test_live_network_smoke_require_connected_fails_when_client_never_connected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+
+            class FakeRuntime:
+                all_running = True
+                client_statuses = [
+                    SimpleNamespace(
+                        connected_once=False,
+                        connection_attempts=1,
+                        messages_applied=0,
+                        last_error="connect failed",
+                    )
+                ]
+
+                def start(self):
+                    pass
+
+                def stop(self, timeout=None):
+                    pass
+
+            stdout = StringIO()
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch(
+                    "whenitrains.cli.LiveWebSocketRuntime.for_live_scheduler",
+                    return_value=FakeRuntime(),
+                ),
+                patch("whenitrains.cli.time.sleep"),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-network-smoke",
+                        "--live",
+                        "--seconds",
+                        "0",
+                        "--require-connected",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("client1_connected_once=False", text)
+            self.assertIn("live network smoke connected_once_all=False", text)
+
     def test_live_scheduler_freezes_entries_when_startup_drift_is_detected(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

@@ -208,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     live_network_smoke = sub.add_parser("live-network-smoke")
     live_network_smoke.add_argument("--live", action="store_true")
     live_network_smoke.add_argument("--seconds", type=float, default=5.0)
+    live_network_smoke.add_argument("--require-connected", action="store_true")
     live_buy = sub.add_parser("live-buy")
     live_buy.add_argument("label")
     live_buy.add_argument("side", choices=["YES", "NO"])
@@ -555,8 +556,9 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(max(args.seconds, 0.0))
             all_running = websocket_runtime.all_running
             print(f"live network smoke websocket_all_running={all_running}")
+            client_statuses = list(getattr(websocket_runtime, "client_statuses", ()))
             for index, status in enumerate(
-                getattr(websocket_runtime, "client_statuses", ()), start=1
+                client_statuses, start=1
             ):
                 print(
                     "live network smoke "
@@ -565,6 +567,15 @@ def main(argv: list[str] | None = None) -> int:
                     f"client{index}_messages={status.messages_applied} "
                     f"client{index}_last_error={status.last_error or 'n/a'}"
                 )
+            connected_once_all = bool(client_statuses) and all(
+                status.connected_once for status in client_statuses
+            )
+            if args.require_connected:
+                print(
+                    "live network smoke "
+                    f"connected_once_all={connected_once_all}"
+                )
+                return 0 if all_running and connected_once_all else 2
             return 0 if all_running else 2
         except LiveTradingError as exc:
             print(f"live network smoke failed: {exc}")
