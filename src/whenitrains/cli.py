@@ -1484,6 +1484,8 @@ def _low_latency_readiness_report(
     commit_to_decision = latency_duration_summary(db, "db_committed", "decision_started")
     decision_to_submit = latency_duration_summary(db, "decision_started", "order_submitted")
     submit_to_fill = latency_duration_summary(db, "order_submitted", "fill_confirmed")
+    submit_to_ack = latency_duration_summary(db, "order_submitted", "clob_ack")
+    submit_to_match = latency_duration_summary(db, "order_submitted", "fill_matched")
     orderbook_age = _decision_orderbook_age_summary(db)
     hko_timing_count = _hko_source_timing_count(
         db,
@@ -1504,6 +1506,14 @@ def _low_latency_readiness_report(
         _latency_observed_gate(
             "submit_to_fill_observed",
             submit_to_fill,
+        ),
+        _latency_observed_gate(
+            "clob_ack_observed",
+            submit_to_ack,
+        ),
+        _latency_observed_gate(
+            "fill_matched_observed",
+            submit_to_match,
         ),
         _value_threshold_gate(
             "orderbook_age_under_cap",

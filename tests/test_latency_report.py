@@ -121,6 +121,8 @@ class LatencyReportTests(unittest.TestCase):
             record_latency_stage(db, "event-1", "db_committed", 10.0, "actual")
             record_latency_stage(db, "event-1", "decision_started", 10.4, "actual")
             record_latency_stage(db, "event-1", "order_submitted", 10.45, "actual")
+            record_latency_stage(db, "event-1", "clob_ack", 10.5, "actual")
+            record_latency_stage(db, "event-1", "fill_matched", 10.7, "actual")
             record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
             db.close()
             stdout = StringIO()
@@ -150,6 +152,8 @@ class LatencyReportTests(unittest.TestCase):
                 "gate submit_to_fill_observed=pass count=1 p95=0.350s",
                 text,
             )
+            self.assertIn("gate clob_ack_observed=pass count=1 p95=0.050s", text)
+            self.assertIn("gate fill_matched_observed=pass count=1 p95=0.250s", text)
             self.assertIn(
                 "gate orderbook_age_under_cap=missing count=0 "
                 "p95=n/a threshold=0.250s",
@@ -226,6 +230,8 @@ class LatencyReportTests(unittest.TestCase):
             record_latency_stage(db, "event-1", "db_committed", 10.0, "actual")
             record_latency_stage(db, "event-1", "decision_started", 10.4, "actual")
             record_latency_stage(db, "event-1", "order_submitted", 10.45, "actual")
+            record_latency_stage(db, "event-1", "clob_ack", 10.5, "actual")
+            record_latency_stage(db, "event-1", "fill_matched", 10.7, "actual")
             record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
             store_trading_decision(
                 db,
@@ -272,6 +278,8 @@ class LatencyReportTests(unittest.TestCase):
             record_latency_stage(db, "event-1", "db_committed", 10.0, "actual")
             record_latency_stage(db, "event-1", "decision_started", 10.4, "actual")
             record_latency_stage(db, "event-1", "order_submitted", 10.45, "actual")
+            record_latency_stage(db, "event-1", "clob_ack", 10.5, "actual")
+            record_latency_stage(db, "event-1", "fill_matched", 10.7, "actual")
             record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
             store_trading_decision(
                 db,
