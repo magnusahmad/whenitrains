@@ -1647,6 +1647,14 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
     manifest = manifest_path.read_text() if manifest_path.is_file() else ""
     if not manifest.startswith("low latency evidence archive\n"):
         messages.append("evidence archive manifest header missing")
+    missing_sections = [
+        section for section in ["files", "checksums"] if f"{section}:" not in manifest.splitlines()
+    ]
+    if missing_sections:
+        messages.append(
+            "evidence archive manifest sections missing: "
+            + ", ".join(missing_sections)
+        )
     required_metadata_keys = [
         "created_at_utc",
         "db_path",
