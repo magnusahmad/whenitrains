@@ -845,7 +845,9 @@ def main(argv: list[str] | None = None) -> int:
                     f"rebuilt_positions={reconcile_result.rebuilt_positions}",
                     flush=True,
                 )
-            drift_count = len(find_live_position_drifts(db, client))
+            drifts = find_live_position_drifts(db, client)
+            _record_live_clob_drift_scan(db, phase="startup", drifts=drifts)
+            drift_count = len(drifts)
             health = evaluate_live_startup_health(
                 market_websocket_connected=not args.no_websockets,
                 user_websocket_connected=not args.no_websockets,
@@ -906,6 +908,12 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     if repaired:
                         drifts = find_live_position_drifts(tick_db, client)
+                _record_live_clob_drift_scan(
+                    tick_db,
+                    phase="reconcile_watchdog",
+                    drifts=drifts,
+                    repaired=repaired,
+                )
                 websocket_stalled = (
                     websocket_runtime is not None and not websocket_runtime.all_running
                 )
@@ -1471,6 +1479,39 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
     return "\n".join(lines)
 
 
+def _record_live_clob_drift_scan(
+    db,
+    *,
+    phase: str,
+    drifts: list[object],
+    repaired: int = 0,
+) -> None:
+    drift_details = []
+    for drift in drifts:
+        drift_details.append(
+            {
+                "token_id": getattr(drift, "token_id", None),
+                "local_shares": getattr(drift, "local_shares", None),
+                "clob_sellable_shares": getattr(drift, "clob_sellable_shares", None),
+                "drift_shares": getattr(drift, "drift_shares", None),
+            }
+        )
+    drift_count = len(drifts)
+    store_risk_event(
+        db,
+        "live_clob_drift_scan_clear"
+        if drift_count == 0
+        else "live_clob_drift_scan_drift",
+        "info" if drift_count == 0 else "critical",
+        {
+            "phase": phase,
+            "drift_count": drift_count,
+            "repaired": repaired,
+            "drifts": drift_details,
+        },
+    )
+
+
 def _hko_source_timing_report(
     db,
     *,
@@ -1594,6 +1635,7 @@ def _low_latency_readiness_report(
     user_trade_applied_count = _live_user_trade_applied_count(db)
     live_reconcile_count = _live_reconcile_count(db)
     live_settlement_count = _live_settlement_count(db)
+    live_clob_drift_scan_clear_count = _live_clob_drift_scan_clear_count(db)
     live = live_dashboard_stats(db)
     counts = live["counts"]
     gates = [
@@ -1647,6 +1689,10 @@ def _low_latency_readiness_report(
         _count_observed_gate("user_channel_trade_applied", user_trade_applied_count),
         _count_observed_gate("live_reconcile_observed", live_reconcile_count),
         _count_observed_gate("live_settlement_observed", live_settlement_count),
+        _count_observed_gate(
+            "live_clob_drift_scan_clear",
+            live_clob_drift_scan_clear_count,
+        ),
         _live_money_state_gate(db, live),
         _kill_switch_clear_gate(live),
     ]
@@ -1808,6 +1854,17 @@ def _live_settlement_count(db) -> int:
             or event_type = 'market_resolution'
             or reason = 'resolved market settlement'
           )
+        """
+    ).fetchone()
+    return int(row["count"] or 0)
+
+
+def _live_clob_drift_scan_clear_count(db) -> int:
+    row = db.execute(
+        """
+        select count(*) as count
+        from risk_events
+        where event_type = 'live_clob_drift_scan_clear'
         """
     ).fetchone()
     return int(row["count"] or 0)

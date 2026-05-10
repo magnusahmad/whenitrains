@@ -675,6 +675,17 @@ class CliDiscoveryTests(unittest.TestCase):
                 "live reconcile checked=1 filled=1 open=0 errors=0 rebuilt_positions=1",
                 stdout.getvalue(),
             )
+            db = connect(db_path)
+            try:
+                clear_scan_count = db.execute(
+                    """
+                    select count(*) from risk_events
+                    where event_type = 'live_clob_drift_scan_clear'
+                    """
+                ).fetchone()[0]
+                self.assertEqual(clear_scan_count, 2)
+            finally:
+                db.close()
 
     def test_live_scheduler_reconcile_watchdog_freezes_entries_when_drift_appears(self):
         with tempfile.TemporaryDirectory() as tmp:

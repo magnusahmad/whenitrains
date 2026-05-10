@@ -15,6 +15,7 @@ from whenitrains.storage import (
     store_live_order,
     store_orderbook,
     store_trading_decision,
+    store_risk_event,
 )
 from whenitrains.cli import main
 from whenitrains.live_user_stream import apply_user_channel_event
@@ -189,6 +190,7 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("gate hko_source_timing_observed=missing count=0", text)
             self.assertIn("gate websocket_orderbook_snapshots_observed=missing count=0", text)
             self.assertIn("gate user_channel_events_observed=missing count=0", text)
+            self.assertIn("gate live_clob_drift_scan_clear=missing count=0", text)
 
     def test_low_latency_readiness_report_prints_orderbook_age_gate(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -334,6 +336,12 @@ class LatencyReportTests(unittest.TestCase):
                 fill_shares=25.0,
                 reason="resolved market settlement",
             )
+            store_risk_event(
+                db,
+                "live_clob_drift_scan_clear",
+                "info",
+                {"phase": "readiness-fixture", "drift_count": 0},
+            )
             db.close()
             stdout = StringIO()
 
@@ -360,6 +368,7 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("gate user_channel_trade_applied=pass count=1", text)
             self.assertIn("gate live_reconcile_observed=pass count=1", text)
             self.assertIn("gate live_settlement_observed=pass count=1", text)
+            self.assertIn("gate live_clob_drift_scan_clear=pass count=1", text)
             self.assertNotIn("readiness evidence missing", text)
 
     def test_low_latency_readiness_report_require_evidence_fails_without_live_settlement(self):
