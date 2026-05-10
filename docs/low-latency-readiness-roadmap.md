@@ -25,7 +25,7 @@ Remaining readiness gaps require live-environment evidence rather than more loca
 - Real-account kill-switch and settlement validation.
 - Production p50/p95/p99 evidence for DB commit to decision, decision to submit, submit to fill/reject, and local-vs-CLOB drift.
 
-The live-log endpoint `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT and failed with `curl: (28) Connection timed out after 8003 milliseconds`, so live evidence remains blocked on endpoint availability.
+The live-log endpoint `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT after adding evidence archiving and failed with `curl: (28) Connection timed out after 8003 milliseconds`, so live evidence remains blocked on endpoint availability.
 
 ## Research Findings
 

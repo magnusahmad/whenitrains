@@ -216,6 +216,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 evidence archive command pass: added `low-latency-archive-evidence --output-dir ... --require-evidence`, which writes latency reports, HKO source timing, readiness output, and a manifest into a durable evidence directory. The command writes artifacts before returning `2` when readiness gates are missing. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_archive_evidence_writes_reports tests.test_latency_report.LatencyReportTests.test_low_latency_archive_evidence_require_evidence_returns_missing_status_after_writing`.
 
+2026-05-11 post-archive live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` timed out after 8003 ms with `curl: (28) Connection timed out after 8003 milliseconds`, so the archive command is ready but production evidence capture still cannot proceed from this development machine until the LAN log endpoint is reachable.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
