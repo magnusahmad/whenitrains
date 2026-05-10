@@ -4,8 +4,10 @@ import argparse
 import getpass
 import os
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from .backtest import dumps_result_json, render_backtest_result, run_backtest_day
@@ -149,6 +151,9 @@ def main(argv: list[str] | None = None) -> int:
     latency_report = sub.add_parser("latency-report")
     latency_report.add_argument("start_stage")
     latency_report.add_argument("end_stage")
+    hko_timing_report = sub.add_parser("hko-source-timing-report")
+    hko_timing_report.add_argument("--endpoint-contains")
+    hko_timing_report.add_argument("--limit", type=int, default=200)
     accuracy = sub.add_parser("research-forecast-accuracy")
     accuracy.add_argument("--start")
     accuracy.add_argument("--end")
@@ -271,6 +276,15 @@ def main(argv: list[str] | None = None) -> int:
             f"p95={_fmt_seconds(summary['p95_seconds'])} "
             f"p99={_fmt_seconds(summary['p99_seconds'])}"
         )
+        return 0
+    if args.command == "hko-source-timing-report":
+        migrate(db)
+        report = _hko_source_timing_report(
+            db,
+            endpoint_contains=args.endpoint_contains,
+            limit=args.limit,
+        )
+        print(report)
         return 0
     if args.command == "init-db":
         migrate(db)
@@ -1299,6 +1313,100 @@ def _fmt(value: float | None) -> str:
 
 def _fmt_seconds(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.3f}s"
+
+
+def _hko_source_timing_report(
+    db,
+    *,
+    endpoint_contains: str | None = None,
+    limit: int = 200,
+) -> str:
+    filters = ["source = 'hko'"]
+    params: list[object] = []
+    if endpoint_contains:
+        filters.append("endpoint like ?")
+        params.append(f"%{endpoint_contains}%")
+    params.append(limit)
+    rows = db.execute(
+        f"""
+        select endpoint, fetched_at_utc, http_last_modified, fetch_started_at_utc,
+               headers_received_at_utc, payload_received_at_utc, response_elapsed_ms
+        from raw_snapshots
+        where {" and ".join(filters)}
+        order by coalesce(fetch_started_at_utc, fetched_at_utc) desc, id desc
+        limit ?
+        """,
+        params,
+    ).fetchall()
+    ordered = list(reversed(rows))
+    response_ms = [
+        float(row["response_elapsed_ms"])
+        for row in ordered
+        if row["response_elapsed_ms"] is not None
+    ]
+    fetch_offsets = Counter()
+    last_modified_offsets = Counter()
+    for row in ordered:
+        fetch_started = _parse_iso_datetime(row["fetch_started_at_utc"] or row["fetched_at_utc"])
+        if fetch_started is not None:
+            fetch_offsets[f"{fetch_started.second:02d}"] += 1
+        last_modified = row["http_last_modified"]
+        if last_modified:
+            try:
+                parsed_last_modified = parsedate_to_datetime(last_modified)
+            except (TypeError, ValueError):
+                parsed_last_modified = None
+            if parsed_last_modified is not None:
+                last_modified_offsets[f"{parsed_last_modified.minute:02d}"] += 1
+
+    lines = [
+        f"hko source timing rows={len(ordered)}",
+        (
+            "response_ms "
+            f"p50={_fmt_ms(_nearest_rank(response_ms, 50))} "
+            f"p95={_fmt_ms(_nearest_rank(response_ms, 95))} "
+            f"p99={_fmt_ms(_nearest_rank(response_ms, 99))}"
+        ),
+        f"fetch_second_offsets={_format_counter(fetch_offsets)}",
+        f"last_modified_minute_offsets={_format_counter(last_modified_offsets)}",
+    ]
+    if ordered:
+        first = ordered[0]
+        last = ordered[-1]
+        lines.append(
+            "window="
+            f"{first['fetch_started_at_utc'] or first['fetched_at_utc']}.."
+            f"{last['fetch_started_at_utc'] or last['fetched_at_utc']}"
+        )
+        lines.append(f"latest_endpoint={last['endpoint']}")
+    return "\n".join(lines)
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _nearest_rank(values: list[float], percentile: int) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, (percentile * len(ordered) + 99) // 100 - 1))
+    return ordered[index]
+
+
+def _fmt_ms(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.1f}"
+
+
+def _format_counter(counter: Counter) -> str:
+    if not counter:
+        return "n/a"
+    return ", ".join(f"{key}:{count}" for key, count in counter.items())
 
 
 def _months_before(day: date, months: int) -> date:

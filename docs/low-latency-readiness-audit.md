@@ -80,10 +80,11 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried on 2026-05-11 H
 - Learned AWS GIS publish windows include sub-second burst cadence.
 - Non-critical source backoff does not suppress AWS actual polling.
 - HKO source timing is persisted for audit.
+- `hko-source-timing-report` summarizes persisted HKO raw snapshot timings, response latency percentiles, fetch-second offsets, and HTTP `Last-Modified` minute offsets for live dry-run evidence.
 - Live hot-path buys fail closed when configured WebSocket book cache is stale or missing.
 - Evidence: `src/whenitrains/scheduler.py`, `src/whenitrains/hko.py`, `src/whenitrains/storage.py`, `src/whenitrains/runner.py`.
 - Tests: `tests.test_scheduler`, `tests.test_storage`, focused live runner tests.
-- Missing: live dry-run report showing actual fetch attempts clustered around learned public availability and not blocked by orderbook work.
+- Missing: captured live dry-run report output showing actual fetch attempts clustered around learned public availability and not blocked by orderbook work.
 
 ### M6: Operational Readiness
 
@@ -104,6 +105,7 @@ PYTHONPATH=src python3 -m unittest tests.test_runner
 PYTHONPATH=src python3 -m unittest tests.test_live
 PYTHONPATH=src python3 -m unittest tests.test_cli tests.test_low_latency
 PYTHONPATH=src python3 -m unittest tests.test_storage tests.test_markets tests.test_orderbook_cache
+PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_hko_source_timing_report_summarizes_aws_fetch_attempts
 git diff --check
 ```
 

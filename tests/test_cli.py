@@ -25,7 +25,13 @@ from whenitrains.hko import (
 )
 from whenitrains.markets import parse_outcome_label
 from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
-from whenitrains.storage import connect, live_setting_enabled, migrate, store_polymarket_event
+from whenitrains.storage import (
+    connect,
+    live_setting_enabled,
+    migrate,
+    store_polymarket_event,
+    store_raw_snapshot,
+)
 
 
 class CliDiscoveryTests(unittest.TestCase):
@@ -744,6 +750,54 @@ HKO,,,,28.9,69,29.3,24.0,,,,1011.0,4.8,27.3,
             self.assertEqual(row["headers_received_at_utc"], "2026-05-11T00:00:00.040000+00:00")
             self.assertEqual(row["payload_received_at_utc"], "2026-05-11T00:00:00.090000+00:00")
             self.assertAlmostEqual(row["response_elapsed_ms"], 90.2)
+
+    def test_hko_source_timing_report_summarizes_aws_fetch_attempts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_raw_snapshot(
+                db,
+                "hko",
+                AWS_GIS_READINGS_URL,
+                "payload",
+                {"Last-Modified": "Thu, 07 May 2026 06:38:01 GMT"},
+                fetch_started_at_utc="2026-05-11T06:37:59+00:00",
+                headers_received_at_utc="2026-05-11T06:37:59.040000+00:00",
+                payload_received_at_utc="2026-05-11T06:37:59.090000+00:00",
+                response_elapsed_ms=90.2,
+            )
+            store_raw_snapshot(
+                db,
+                "hko",
+                AWS_GIS_READINGS_URL,
+                "payload-2",
+                {"Last-Modified": "Thu, 07 May 2026 06:38:01 GMT"},
+                fetch_started_at_utc="2026-05-11T06:38:00+00:00",
+                headers_received_at_utc="2026-05-11T06:38:00.050000+00:00",
+                payload_received_at_utc="2026-05-11T06:38:00.120000+00:00",
+                response_elapsed_ms=120.4,
+            )
+            db.close()
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "hko-source-timing-report",
+                        "--endpoint-contains",
+                        "latestReadings",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            text = stdout.getvalue()
+            self.assertIn("hko source timing rows=2", text)
+            self.assertIn("response_ms p50=90.2 p95=120.4 p99=120.4", text)
+            self.assertIn("fetch_second_offsets=59:1, 00:1", text)
+            self.assertIn("last_modified_minute_offsets=38:2", text)
 
     def test_fetch_current_temperature_labels_rhrread_fallback_and_keeps_aws_failed(self):
         rhrread_payload = """
