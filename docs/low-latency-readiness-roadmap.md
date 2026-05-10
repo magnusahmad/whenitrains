@@ -161,6 +161,7 @@ Deliverables:
 
 - Keep learned AWS GIS publish-minute windows, but add adaptive sub-second burst polling only inside the highest-value 10-20 second intervals around learned public availability.
 - Record HTTP response timing and header timings for every HKO source.
+- Report fetch-to-public-availability offsets and fail readiness evidence when the production DB lacks clustered AWS actual fetches inside the configured burst window.
 - Add backoff state that slows non-critical sources without slowing the actual worker.
 - Add freshness gates per signal type: if HKO source fresh but Polymarket cache stale, skip trading; if Polymarket fresh but HKO stale, do not infer a signal.
 

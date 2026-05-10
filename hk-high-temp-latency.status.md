@@ -174,6 +174,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 kill-switch evidence gate pass: `low-latency-readiness-report --require-evidence` now fails while `block_new_entries` or `cancel_open_orders_and_exit_positions` is enabled, so readiness evidence cannot pass with an emergency kill-switch state still active. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
 
+2026-05-11 HKO public-availability cluster gate pass: `hko-source-timing-report` now includes signed fetch-to-HTTP-`Last-Modified` offsets, and `low-latency-readiness-report --require-evidence` now requires at least two HKO fetch attempts within the 20-second public-availability burst window. This makes the M5 dry-run requirement objective in the production report instead of only proving generic HKO timing rows exist. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report tests.test_cli.CliDiscoveryTests.test_hko_source_timing_report_summarizes_aws_fetch_attempts`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

@@ -271,7 +271,17 @@ class LatencyReportTests(unittest.TestCase):
                 source="hko",
                 endpoint="https://example.test/latestReadings",
                 payload="{}",
+                response_headers={"Last-Modified": "Mon, 11 May 2026 00:00:02 GMT"},
                 fetch_started_at_utc="2026-05-11T00:00:01+00:00",
+                response_elapsed_ms=123.0,
+            )
+            store_raw_snapshot(
+                db,
+                source="hko",
+                endpoint="https://example.test/latestReadings",
+                payload="{}",
+                response_headers={"Last-Modified": "Mon, 11 May 2026 00:00:02 GMT"},
+                fetch_started_at_utc="2026-05-11T00:00:03+00:00",
                 response_elapsed_ms=123.0,
             )
             store_orderbook(
@@ -304,10 +314,83 @@ class LatencyReportTests(unittest.TestCase):
 
             text = stdout.getvalue()
             self.assertEqual(exit_code, 0)
-            self.assertIn("gate hko_source_timing_observed=pass count=1", text)
+            self.assertIn("gate hko_source_timing_observed=pass count=2", text)
+            self.assertIn(
+                "gate hko_public_availability_cluster_observed=pass "
+                "count=2 threshold=20.000s",
+                text,
+            )
             self.assertIn("gate websocket_orderbook_snapshots_observed=pass count=1", text)
             self.assertIn("gate user_channel_events_observed=pass count=1", text)
             self.assertNotIn("readiness evidence missing", text)
+
+    def test_low_latency_readiness_report_require_evidence_fails_without_hko_burst_cluster(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            record_latency_stage(db, "event-1", "db_committed", 10.0, "actual")
+            record_latency_stage(db, "event-1", "decision_started", 10.4, "actual")
+            record_latency_stage(db, "event-1", "order_submitted", 10.45, "actual")
+            record_latency_stage(db, "event-1", "clob_ack", 10.5, "actual")
+            record_latency_stage(db, "event-1", "fill_matched", 10.7, "actual")
+            record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
+            record_latency_stage(db, "event-1", "decision_completed", 10.9, "actual")
+            store_trading_decision(
+                db,
+                event_type="actual",
+                outcome_id="yes25",
+                label="25C",
+                side="YES",
+                action="BUY",
+                status="filled",
+                reason="test",
+                details={"orderbook_state_age_seconds": 0.2},
+            )
+            store_raw_snapshot(
+                db,
+                source="hko",
+                endpoint="https://example.test/latestReadings",
+                payload="{}",
+                response_headers={"Last-Modified": "Mon, 11 May 2026 00:00:02 GMT"},
+                fetch_started_at_utc="2026-05-11T00:05:00+00:00",
+                response_elapsed_ms=123.0,
+            )
+            store_orderbook(
+                db,
+                "yes25",
+                _websocket_orderbook(),
+                metadata={"source": "polymarket_market_websocket"},
+            )
+            apply_user_channel_event(
+                db,
+                {
+                    "id": "user-event-1",
+                    "event_type": "order",
+                    "order_id": "order-1",
+                    "status": "PLACEMENT",
+                },
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "gate hko_public_availability_cluster_observed=missing "
+                "count=0 threshold=20.000s",
+                text,
+            )
 
     def test_low_latency_readiness_report_require_evidence_fails_on_ambiguous_live_money_state(self):
         with tempfile.TemporaryDirectory() as tmp:

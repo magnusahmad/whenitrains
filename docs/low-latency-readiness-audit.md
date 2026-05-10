@@ -26,7 +26,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried on 2026-05-11 H
 - `fetch_response` and HKO raw snapshot storage persist fetch start, header receipt, payload receipt, and elapsed milliseconds.
 - Event-keyed live buy/sell execution records `order_submitted`, `clob_ack`, `fill_matched`, and `fill_confirmed`.
 - `latency-report` summarizes p50/p95/p99 between named stages.
-- `low-latency-readiness-report` prints the core latency stage pairs, explicit evidence gates including commit-to-decision-completed, CLOB ack, fill-match, WebSocket orderbook snapshot, orderbook-age-under-cap, user-channel-event, live-money-state-clear, and kill-switch-clear evidence, live money-state, and HKO source-timing evidence; `--require-evidence` exits nonzero when any measurable local evidence gate is missing.
+- `low-latency-readiness-report` prints the core latency stage pairs, explicit evidence gates including commit-to-decision-completed, CLOB ack, fill-match, WebSocket orderbook snapshot, orderbook-age-under-cap, user-channel-event, HKO public-availability fetch clustering, live-money-state-clear, and kill-switch-clear evidence, live money-state, and HKO source-timing evidence; `--require-evidence` exits nonzero when any measurable local evidence gate is missing.
 - Compact fast-event latency lines are emitted during scheduler drain.
 - Evidence: `src/whenitrains/storage.py`, `src/whenitrains/live.py`, `src/whenitrains/low_latency.py`, `src/whenitrains/cli.py`.
 - Tests: `tests.test_low_latency`, `tests.test_latency_report`, focused live latency tests.
@@ -85,11 +85,12 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried on 2026-05-11 H
 - Learned AWS GIS publish windows include sub-second burst cadence.
 - Non-critical source backoff does not suppress AWS actual polling.
 - HKO source timing is persisted for audit.
-- `hko-source-timing-report` summarizes persisted HKO raw snapshot timings, response latency percentiles, fetch-second offsets, and HTTP `Last-Modified` minute offsets for live dry-run evidence.
+- `hko-source-timing-report` summarizes persisted HKO raw snapshot timings, response latency percentiles, fetch-second offsets, HTTP `Last-Modified` minute offsets, and fetch-to-public-availability offsets for live dry-run evidence.
+- `low-latency-readiness-report --require-evidence` requires at least two HKO fetches within the configured burst window around observed public availability, so the production report cannot pass with arbitrary background timing rows alone.
 - Live hot-path buys fail closed when configured WebSocket book cache is stale or missing.
 - Evidence: `src/whenitrains/scheduler.py`, `src/whenitrains/hko.py`, `src/whenitrains/storage.py`, `src/whenitrains/runner.py`.
 - Tests: `tests.test_scheduler`, `tests.test_storage`, focused live runner tests.
-- Missing: captured live dry-run report output showing actual fetch attempts clustered around learned public availability and not blocked by orderbook work.
+- Missing: captured live dry-run report output from the production DB showing the public-availability clustering gate passed and HKO fetch attempts were not blocked by orderbook work.
 
 ### M6: Operational Readiness
 

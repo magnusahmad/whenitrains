@@ -952,6 +952,10 @@ HKO,,,,28.9,69,29.3,24.0,,,,1011.0,4.8,27.3,
             self.assertIn("response_ms p50=90.2 p95=120.4 p99=120.4", text)
             self.assertIn("fetch_second_offsets=59:1, 00:1", text)
             self.assertIn("last_modified_minute_offsets=38:2", text)
+            self.assertIn(
+                "public_availability_fetch_offsets_seconds=-2.0:1, -1.0:1",
+                text,
+            )
 
     def test_fetch_current_temperature_labels_rhrread_fallback_and_keeps_aws_failed(self):
         rhrread_payload = """

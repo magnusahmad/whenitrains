@@ -103,6 +103,9 @@ from .storage import (
     latency_duration_summary,
 )
 
+HKO_PUBLIC_AVAILABILITY_CLUSTER_SECONDS = 20.0
+HKO_PUBLIC_AVAILABILITY_MIN_CLUSTERED_FETCHES = 2
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="whenitrains")
@@ -1423,6 +1426,7 @@ def _hko_source_timing_report(
     ]
     fetch_offsets = Counter()
     last_modified_offsets = Counter()
+    public_availability_offsets = Counter()
     for row in ordered:
         fetch_started = _parse_iso_datetime(row["fetch_started_at_utc"] or row["fetched_at_utc"])
         if fetch_started is not None:
@@ -1435,6 +1439,12 @@ def _hko_source_timing_report(
                 parsed_last_modified = None
             if parsed_last_modified is not None:
                 last_modified_offsets[f"{parsed_last_modified.minute:02d}"] += 1
+                if fetch_started is not None:
+                    offset_seconds = _time_of_day_offset_seconds(
+                        fetch_started,
+                        parsed_last_modified,
+                    )
+                    public_availability_offsets[f"{offset_seconds:.1f}"] += 1
 
     lines = [
         f"hko source timing rows={len(ordered)}",
@@ -1446,6 +1456,10 @@ def _hko_source_timing_report(
         ),
         f"fetch_second_offsets={_format_counter(fetch_offsets)}",
         f"last_modified_minute_offsets={_format_counter(last_modified_offsets)}",
+        (
+            "public_availability_fetch_offsets_seconds="
+            f"{_format_counter(public_availability_offsets)}"
+        ),
     ]
     if ordered:
         first = ordered[0]
@@ -1492,6 +1506,11 @@ def _low_latency_readiness_report(
         db,
         endpoint_contains=hko_endpoint_contains,
     )
+    hko_public_availability_cluster_count = _hko_public_availability_cluster_count(
+        db,
+        endpoint_contains=hko_endpoint_contains,
+        threshold_seconds=HKO_PUBLIC_AVAILABILITY_CLUSTER_SECONDS,
+    )
     websocket_orderbook_count = _websocket_orderbook_snapshot_count(db)
     user_event_count = _live_user_event_count(db)
     live = live_dashboard_stats(db)
@@ -1529,6 +1548,12 @@ def _low_latency_readiness_report(
             threshold_seconds=Settings.live_orderbook_cache_max_age_seconds,
         ),
         _count_observed_gate("hko_source_timing_observed", hko_timing_count),
+        _minimum_count_gate(
+            "hko_public_availability_cluster_observed",
+            hko_public_availability_cluster_count,
+            minimum_count=HKO_PUBLIC_AVAILABILITY_MIN_CLUSTERED_FETCHES,
+            threshold_seconds=HKO_PUBLIC_AVAILABILITY_CLUSTER_SECONDS,
+        ),
         _count_observed_gate(
             "websocket_orderbook_snapshots_observed",
             websocket_orderbook_count,
@@ -1620,6 +1645,42 @@ def _hko_source_timing_count(
     return int(row["count"] or 0)
 
 
+def _hko_public_availability_cluster_count(
+    db,
+    *,
+    endpoint_contains: str | None = None,
+    threshold_seconds: float,
+) -> int:
+    filters = ["source = 'hko'", "http_last_modified is not null"]
+    params: list[object] = []
+    if endpoint_contains:
+        filters.append("endpoint like ?")
+        params.append(f"%{endpoint_contains}%")
+    rows = db.execute(
+        f"""
+        select fetched_at_utc, fetch_started_at_utc, http_last_modified
+        from raw_snapshots
+        where {" and ".join(filters)}
+        """,
+        params,
+    ).fetchall()
+    clustered = 0
+    for row in rows:
+        fetch_started = _parse_iso_datetime(row["fetch_started_at_utc"] or row["fetched_at_utc"])
+        if fetch_started is None:
+            continue
+        try:
+            last_modified = parsedate_to_datetime(row["http_last_modified"])
+        except (TypeError, ValueError):
+            continue
+        if last_modified is None:
+            continue
+        offset_seconds = abs(_time_of_day_offset_seconds(fetch_started, last_modified))
+        if offset_seconds <= threshold_seconds:
+            clustered += 1
+    return clustered
+
+
 def _live_user_event_count(db) -> int:
     row = db.execute("select count(*) as count from live_user_events").fetchone()
     return int(row["count"] or 0)
@@ -1683,6 +1744,21 @@ def _count_observed_gate(name: str, count: int) -> dict[str, object]:
     return {"name": name, "status": status, "line": line}
 
 
+def _minimum_count_gate(
+    name: str,
+    count: int,
+    *,
+    minimum_count: int,
+    threshold_seconds: float,
+) -> dict[str, object]:
+    status = "pass" if count >= minimum_count else "missing"
+    line = (
+        f"gate {name}={status} count={count} "
+        f"threshold={_fmt_seconds(threshold_seconds)}"
+    )
+    return {"name": name, "status": status, "line": line}
+
+
 def _live_money_state_gate(db, live: dict[str, object]) -> dict[str, object]:
     counts = live["counts"]
     submitted = int(counts["submitted"])
@@ -1739,6 +1815,27 @@ def _parse_iso_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _time_of_day_offset_seconds(start: datetime, reference: datetime) -> float:
+    start_seconds = (
+        start.hour * 3600
+        + start.minute * 60
+        + start.second
+        + start.microsecond / 1_000_000
+    )
+    reference_seconds = (
+        reference.hour * 3600
+        + reference.minute * 60
+        + reference.second
+        + reference.microsecond / 1_000_000
+    )
+    offset = start_seconds - reference_seconds
+    if offset > 43200:
+        offset -= 86400
+    elif offset < -43200:
+        offset += 86400
+    return offset
 
 
 def _nearest_rank(values: list[float], percentile: int) -> float | None:
