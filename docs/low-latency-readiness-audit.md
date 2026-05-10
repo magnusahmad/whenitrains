@@ -106,6 +106,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - `live-readiness-checklist` prints the ordered live evidence commands for network smoke, auth smoke, kill-switch status, minimum-size manual buy/sell, reconciliation, real-account kill-switch verification, capped scheduler smoke, live settlement validation, latency percentiles, and `low-latency-readiness-report --require-evidence`.
 - `low-latency-readiness-report --require-evidence` requires filled `manual_live` BUY and SELL order rows, so scheduler fills cannot substitute for the explicit minimum-size manual buy/sell smoke.
 - A capped `live-scheduler --live --ticks N` records `live_scheduler_smoke_ok`/`live_scheduler_smoke_failed` evidence, and `low-latency-readiness-report --require-evidence` requires the latest scheduler smoke event to be OK.
+- `live-kill-switch --block-new-entries` and `--allow-new-entries` record persistent kill-switch verification evidence, and `low-latency-readiness-report --require-evidence` requires the latest verification event to be allowed/clear.
 - Health failures freeze new entries and can emit alerts.
 - Trade alerts, source-freshness breach alerts, stalled-WebSocket freezes, stale submitted-order watchdog, persistent kill-switch exits, pending-order reconciliation, and live runbook are implemented.
 - Evidence: `src/whenitrains/operational.py`, `src/whenitrains/alerting.py`, `src/whenitrains/live.py`, `src/whenitrains/cli.py`, `docs/low-latency-live-runbook.md`.

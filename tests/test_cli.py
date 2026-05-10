@@ -470,6 +470,49 @@ class CliDiscoveryTests(unittest.TestCase):
             text,
         )
 
+    def test_live_kill_switch_records_block_and_allow_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+
+            with redirect_stdout(StringIO()):
+                block_exit = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-kill-switch",
+                        "--block-new-entries",
+                    ]
+                )
+                allow_exit = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-kill-switch",
+                        "--allow-new-entries",
+                    ]
+                )
+
+            self.assertEqual(block_exit, 0)
+            self.assertEqual(allow_exit, 0)
+            db = connect(db_path)
+            try:
+                events = db.execute(
+                    """
+                    select event_type, severity, details_json
+                    from risk_events
+                    order by id
+                    """
+                ).fetchall()
+                self.assertEqual(
+                    [event["event_type"] for event in events],
+                    ["live_kill_switch_blocked", "live_kill_switch_allowed"],
+                )
+                self.assertEqual(events[-1]["severity"], "info")
+                self.assertIn('"block_new_entries": false', events[-1]["details_json"])
+                self.assertFalse(live_setting_enabled(db, "block_new_entries"))
+            finally:
+                db.close()
+
     def test_live_network_smoke_require_connected_fails_when_client_never_connected(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

@@ -206,6 +206,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 capped live scheduler evidence gate pass: capped `live-scheduler --live --ticks N` runs now record `live_scheduler_smoke_ok` on normal loop completion and `live_scheduler_smoke_failed` if the loop raises. `low-latency-readiness-report --require-evidence` now requires the latest scheduler smoke event to be OK. Verified with `PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_live_scheduler_starts_websocket_runtime_and_passes_book_cache_to_ticks tests.test_latency_report.LatencyReportTests.test_low_latency_readiness_report_fails_when_latest_scheduler_smoke_failed`.
 
+2026-05-11 kill-switch verification evidence gate pass: `live-kill-switch --block-new-entries` and `--allow-new-entries` now record `live_kill_switch_blocked`/`live_kill_switch_allowed` risk events, and `low-latency-readiness-report --require-evidence` now requires the latest persistent kill-switch verification event to be allowed/clear. Verified with `PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_live_kill_switch_records_block_and_allow_verification tests.test_latency_report.LatencyReportTests.test_low_latency_readiness_report_fails_when_latest_kill_switch_verification_blocked`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

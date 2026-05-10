@@ -1084,6 +1084,14 @@ def main(argv: list[str] | None = None) -> int:
             set_live_setting(db, "cancel_open_orders_and_exit_positions", True)
         if args.no_exit_on_kill_switch:
             set_live_setting(db, "cancel_open_orders_and_exit_positions", False)
+        if args.block_new_entries or args.allow_new_entries:
+            _record_live_kill_switch_verification(
+                db,
+                blocked=live_setting_enabled(db, "block_new_entries"),
+                exit_on_kill_switch=live_setting_enabled(
+                    db, "cancel_open_orders_and_exit_positions"
+                ),
+            )
         print(
             "live kill switch "
             f"block_new_entries={live_setting_enabled(db, 'block_new_entries')} "
@@ -1650,6 +1658,23 @@ def _record_live_scheduler_smoke(
     )
 
 
+def _record_live_kill_switch_verification(
+    db,
+    *,
+    blocked: bool,
+    exit_on_kill_switch: bool,
+) -> None:
+    store_risk_event(
+        db,
+        "live_kill_switch_blocked" if blocked else "live_kill_switch_allowed",
+        "critical" if blocked else "info",
+        {
+            "block_new_entries": blocked,
+            "exit_on_kill_switch": exit_on_kill_switch,
+        },
+    )
+
+
 def _hko_source_timing_report(
     db,
     *,
@@ -1777,6 +1802,7 @@ def _low_latency_readiness_report(
     live_auth_smoke = _live_auth_smoke_summary(db)
     live_network_smoke = _live_network_smoke_summary(db)
     live_scheduler_smoke = _live_scheduler_smoke_summary(db)
+    live_kill_switch_verification = _live_kill_switch_verification_summary(db)
     manual_live_buy_count = _manual_live_order_count(db, action="BUY")
     manual_live_sell_count = _manual_live_order_count(db, action="SELL")
     live = live_dashboard_stats(db)
@@ -1836,6 +1862,7 @@ def _low_latency_readiness_report(
         _live_auth_smoke_gate(live_auth_smoke),
         _live_network_smoke_gate(live_network_smoke),
         _live_scheduler_smoke_gate(live_scheduler_smoke),
+        _live_kill_switch_verification_gate(live_kill_switch_verification),
         _count_observed_gate("manual_live_buy_observed", manual_live_buy_count),
         _count_observed_gate("manual_live_sell_observed", manual_live_sell_count),
         _live_money_state_gate(db, live),
@@ -2108,6 +2135,29 @@ def _live_scheduler_smoke_summary(db) -> dict[str, object]:
     return {"ok_count": int(ok_row["count"] or 0), "latest": latest}
 
 
+def _live_kill_switch_verification_summary(db) -> dict[str, object]:
+    allowed_row = db.execute(
+        """
+        select count(*) as count
+        from risk_events
+        where event_type = 'live_kill_switch_allowed'
+        """
+    ).fetchone()
+    latest_row = db.execute(
+        """
+        select event_type
+        from risk_events
+        where event_type in ('live_kill_switch_allowed', 'live_kill_switch_blocked')
+        order by id desc
+        limit 1
+        """
+    ).fetchone()
+    latest = "missing"
+    if latest_row is not None:
+        latest = "allowed" if latest_row["event_type"] == "live_kill_switch_allowed" else "blocked"
+    return {"allowed_count": int(allowed_row["count"] or 0), "latest": latest}
+
+
 def _manual_live_order_count(db, *, action: str) -> int:
     row = db.execute(
         """
@@ -2244,6 +2294,18 @@ def _live_scheduler_smoke_gate(summary: dict[str, object]) -> dict[str, object]:
     status = "pass" if passed else "missing"
     line = f"gate live_scheduler_smoke_ok={status} count={ok_count} latest={latest}"
     return {"name": "live_scheduler_smoke_ok", "status": status, "line": line}
+
+
+def _live_kill_switch_verification_gate(summary: dict[str, object]) -> dict[str, object]:
+    allowed_count = int(summary["allowed_count"])
+    latest = str(summary["latest"])
+    passed = allowed_count > 0 and latest == "allowed"
+    status = "pass" if passed else "missing"
+    line = (
+        f"gate live_kill_switch_verification={status} "
+        f"count={allowed_count} latest={latest}"
+    )
+    return {"name": "live_kill_switch_verification", "status": status, "line": line}
 
 
 def _live_money_state_gate(db, live: dict[str, object]) -> dict[str, object]:
