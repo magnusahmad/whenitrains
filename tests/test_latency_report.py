@@ -71,7 +71,13 @@ def _archive_report_fixture_content(name: str) -> str:
     if name == "hko_source_timing_report.txt":
         return "hko source timing rows=1\nresponse_ms p50=10.000ms p95=10.000ms p99=10.000ms\n"
     if name == "readiness_report.txt":
-        return "low latency readiness report\nlatency:\nevidence gates:\n"
+        return (
+            "low latency readiness report\n"
+            "latency:\n"
+            "evidence gates:\n"
+            "gate hko_commit_to_decision_under_1s=pass count=1 p95=0.100s threshold=1.000s\n"
+            "live:\n"
+        )
     if name.startswith("latency_") and name.endswith(".txt"):
         stage_pair = name[len("latency_") : -len(".txt")].replace("_to_", " -> ")
         return f"{stage_pair} count=1 p50=0.100s p95=0.100s p99=0.100s\n"
@@ -940,6 +946,38 @@ class LatencyReportTests(unittest.TestCase):
                 "evidence archive file malformed: latency_db_committed_to_decision_started.txt",
                 stdout.getvalue(),
             )
+
+    def test_low_latency_verify_evidence_archive_fails_readiness_report_without_gate_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            name = "readiness_report.txt"
+            report = output_dir / name
+            report.write_text("low latency readiness report\nlatency:\nevidence gates:\nlive:\n")
+            digest = hashlib.sha256(report.read_bytes()).hexdigest()
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                "\n".join(
+                    f"sha256 {name}={digest}"
+                    if line.startswith(f"sha256 {name}=")
+                    else line
+                    for line in manifest.splitlines()
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("evidence archive file malformed: readiness_report.txt", stdout.getvalue())
 
     def test_low_latency_readiness_report_prints_latency_and_live_state(self):
         with tempfile.TemporaryDirectory() as tmp:

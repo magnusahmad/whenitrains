@@ -1756,7 +1756,11 @@ def _is_sha256_digest(value: str) -> bool:
 
 def _evidence_report_content_valid(name: str, text: str) -> bool:
     if name == "readiness_report.txt":
-        return text.startswith("low latency readiness report\n") and "evidence gates:" in text
+        return (
+            text.startswith("low latency readiness report\n")
+            and "evidence gates:" in text
+            and "\ngate " in text
+        )
     if name == "hko_source_timing_report.txt":
         return text.startswith("hko source timing rows=") and "response_ms " in text
     if name.startswith("latency_") and name.endswith(".txt"):
