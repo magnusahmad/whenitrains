@@ -180,6 +180,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live auth evidence output pass: `live-auth-smoke --live` now prints the required scheduler balance threshold alongside signer/funder, observed balance, allowance state, and reason, and the low-latency live runbook includes the auth smoke before kill-switch status and scheduler start. Verification covers refusal without `--live` and archived threshold output.
 
+2026-05-11 live readiness checklist pass: added read-only `live-readiness-checklist`, which renders the exact command sequence for live network smoke, auth smoke, kill-switch status, minimum-size manual buy/sell with explicit approval flags, reconcile checks, capped scheduler smoke, latency reports, and `low-latency-readiness-report --require-evidence`. This makes the remaining live evidence run repeatable once the live endpoint is reachable. Verified with `PYTHONPATH=src python3 -m unittest tests.test_cli`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

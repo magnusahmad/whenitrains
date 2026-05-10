@@ -371,6 +371,50 @@ class CliDiscoveryTests(unittest.TestCase):
                 stdout.getvalue(),
             )
 
+    def test_live_readiness_checklist_prints_ordered_evidence_commands(self):
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            exit_code = main(
+                [
+                    "--db",
+                    "data/whenitrains.sqlite3",
+                    "live-readiness-checklist",
+                    "--label",
+                    "30",
+                    "--side",
+                    "YES",
+                    "--date",
+                    "2026-05-11",
+                    "--market-kind",
+                    "highest",
+                    "--size-usd",
+                    "5",
+                    "--scheduler-ticks",
+                    "3",
+                ]
+            )
+
+        text = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("1. live-network-smoke --live --require-connected", text)
+        self.assertIn(
+            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
+            "live-buy 30 YES 5.00 --date 2026-05-11 --market-kind highest "
+            "--live --yes-i-understand",
+            text,
+        )
+        self.assertIn(
+            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
+            "live-scheduler --live --ticks 3 --verbose",
+            text,
+        )
+        self.assertIn(
+            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
+            "low-latency-readiness-report --require-evidence",
+            text,
+        )
+
     def test_live_network_smoke_require_connected_fails_when_client_never_connected(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

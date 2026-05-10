@@ -4,6 +4,7 @@ import argparse
 import getpass
 import json
 import os
+import shlex
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -213,6 +214,13 @@ def main(argv: list[str] | None = None) -> int:
     live_network_smoke.add_argument("--live", action="store_true")
     live_network_smoke.add_argument("--seconds", type=float, default=5.0)
     live_network_smoke.add_argument("--require-connected", action="store_true")
+    live_readiness_checklist = sub.add_parser("live-readiness-checklist")
+    live_readiness_checklist.add_argument("--label", required=True)
+    live_readiness_checklist.add_argument("--side", choices=["YES", "NO"], required=True)
+    live_readiness_checklist.add_argument("--size-usd", type=float, required=True)
+    live_readiness_checklist.add_argument("--date")
+    live_readiness_checklist.add_argument("--market-kind", choices=["highest", "lowest"])
+    live_readiness_checklist.add_argument("--scheduler-ticks", type=int, default=3)
     live_buy = sub.add_parser("live-buy")
     live_buy.add_argument("label")
     live_buy.add_argument("side", choices=["YES", "NO"])
@@ -276,6 +284,9 @@ def main(argv: list[str] | None = None) -> int:
             keep=args.keep,
         )
         print(f"created backup {backup_path}")
+        return 0
+    if args.command == "live-readiness-checklist":
+        print(_render_live_readiness_checklist(args, db_path))
         return 0
 
     db = connect(db_path)
@@ -1394,6 +1405,62 @@ def _fmt(value: float | None) -> str:
 
 def _fmt_seconds(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.3f}s"
+
+
+def _render_live_readiness_checklist(args, db_path: Path) -> str:
+    base = [
+        "PYTHONPATH=src",
+        "python3",
+        "-m",
+        "whenitrains.cli",
+        "--db",
+        str(db_path),
+    ]
+
+    def command(*parts: object) -> str:
+        return " ".join(shlex.quote(str(part)) for part in [*base, *parts])
+
+    buy_parts: list[object] = [
+        "live-buy",
+        args.label,
+        args.side,
+        f"{args.size_usd:.2f}",
+    ]
+    sell_parts: list[object] = ["live-sell", args.label, args.side]
+    if args.date:
+        buy_parts.extend(["--date", args.date])
+        sell_parts.extend(["--date", args.date])
+    if args.market_kind:
+        buy_parts.extend(["--market-kind", args.market_kind])
+        sell_parts.extend(["--market-kind", args.market_kind])
+    buy_parts.extend(["--live", "--yes-i-understand"])
+    sell_parts.extend(["--live", "--yes-i-understand"])
+
+    lines = [
+        "low latency live readiness evidence checklist",
+        "1. live-network-smoke --live --require-connected",
+        command("live-network-smoke", "--live", "--seconds", "10", "--require-connected"),
+        "2. live-auth-smoke --live",
+        command("live-auth-smoke", "--live"),
+        "3. confirm kill-switch state is intentionally clear",
+        command("live-kill-switch"),
+        "4. minimum-size manual live buy with explicit approval",
+        command(*buy_parts),
+        "5. reconcile and validate the account after the buy",
+        command("live-reconcile", "--live"),
+        "6. manual live sell with explicit approval",
+        command(*sell_parts),
+        "7. reconcile and validate the account after the sell",
+        command("live-reconcile", "--live"),
+        "8. capped live scheduler smoke with explicit approval",
+        command("live-scheduler", "--live", "--ticks", args.scheduler_ticks, "--verbose"),
+        "9. archive latency percentiles and readiness gates from the production DB",
+        command("latency-report", "db_committed", "decision_started"),
+        command("latency-report", "decision_started", "order_submitted"),
+        command("latency-report", "order_submitted", "fill_confirmed"),
+        command("low-latency-readiness-report", "--require-evidence"),
+    ]
+    return "\n".join(lines)
 
 
 def _hko_source_timing_report(

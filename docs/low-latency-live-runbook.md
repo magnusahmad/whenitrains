@@ -10,7 +10,15 @@ This runbook covers the low-latency live scheduler path for HK temperature marke
 
 1. Confirm the working tree is on the intended branch and no unrelated database operation is in progress.
 2. Confirm live credentials are available with `whenitrains live-env-exports`.
-3. Run a no-trade live network smoke to confirm both scheduler-owned WebSocket workers can start:
+3. Generate the concrete live evidence command list for the target market before running any live-money command:
+
+```bash
+PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-readiness-checklist --label <label> --side <YES-or-NO> --size-usd <minimum-size> --date <YYYY-MM-DD> --market-kind <highest-or-lowest> --scheduler-ticks 3
+```
+
+Archive this output with the scheduler logs. It is read-only and does not touch the database.
+
+4. Run a no-trade live network smoke to confirm both scheduler-owned WebSocket workers can start:
 
 ```bash
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-network-smoke --live --seconds 10 --require-connected
@@ -18,7 +26,7 @@ PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-net
 
 Expected output includes `live network smoke websocket_all_running=True`, at least two reported clients, per-client `connected_once=True` lines, and `live network smoke connected_once_all=True`; the command exits `0` only when runtime liveness, market/user client count, and connection evidence pass. This command starts and stops the market/user WebSocket runtime but does not run trading decisions.
 
-4. Run a no-trade live auth smoke to confirm CLOB credentials, signer/funder addresses, balance, and allowance:
+5. Run a no-trade live auth smoke to confirm CLOB credentials, signer/funder addresses, balance, and allowance:
 
 ```bash
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-auth-smoke --live
@@ -26,13 +34,13 @@ PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-aut
 
 Expected output includes `auth ok=True`, `required_balance_usd=...`, `allowance_ok=True`, signer/funder addresses, and exits `0`. This command performs preflight checks only and does not place orders.
 
-5. Confirm there is no emergency entry block unless intentional:
+6. Confirm there is no emergency entry block unless intentional:
 
 ```bash
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch
 ```
 
-6. Start the live scheduler:
+7. Start the live scheduler:
 
 ```bash
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live --verbose
