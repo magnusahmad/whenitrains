@@ -218,6 +218,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-archive live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` timed out after 8003 ms with `curl: (28) Connection timed out after 8003 milliseconds`, so the archive command is ready but production evidence capture still cannot proceed from this development machine until the LAN log endpoint is reachable.
 
+2026-05-11 current production-like archive check: ran `low-latency-archive-evidence --output-dir /private/tmp/whenitrains-low-latency-current-evidence --require-evidence` against `data/whenitrains.sqlite3`. It wrote the manifest and report files, then exited `2` as expected. Current DB evidence has `hko_source_timing_observed=pass` and `hko_public_availability_cluster_observed=pass`, but latency traces are still absent (`db_committed -> decision_started count=0`) and all live WebSocket/user/reconcile/settlement/auth/network/scheduler/manual-money gates are missing. This confirms the remaining work is live evidence capture, not local archive/report plumbing.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
