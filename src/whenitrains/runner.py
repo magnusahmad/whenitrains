@@ -37,9 +37,13 @@ from .storage import (
     list_tradeable_forecast_dates,
     observed_min_decreases,
     observed_max_increases,
+    store_live_order,
+    store_paper_order_result,
     store_signal,
     store_orderbook,
     store_trading_decision,
+    upsert_live_position,
+    upsert_paper_position,
 )
 
 
@@ -1307,6 +1311,46 @@ def process_open_position_exits(
             )
         invalidated = _position_invalidated(outcome, side, actual_value_for_outcome)
         hourly_reason = _hourly_forecast_invalidation_reason(db, outcome, side)
+        settled_price = _resolved_market_settlement_price(db, outcome, side)
+        if settled_price is not None:
+            shares = float(pos["net_shares"])
+            proceeds = shares * settled_price
+            avg_price = float(pos["avg_price"])
+            realized_pnl = float(pos["realized_pnl"]) + proceeds - shares * avg_price
+            if _LIVE_CLIENT is not None:
+                store_live_order(
+                    db,
+                    outcome_id=token_id,
+                    label=outcome["label"],
+                    side="SETTLEMENT",
+                    action="SELL",
+                    status="filled",
+                    fill_price=settled_price,
+                    fill_size_usd=proceeds,
+                    fill_shares=shares,
+                    reason="resolved market settlement",
+                    event_type="market_resolution",
+                    event_key=f"market_resolution:{outcome['target_date_hkt']}:{token_id}",
+                )
+                upsert_live_position(db, token_id, 0.0, 0.0, realized_pnl)
+            else:
+                store_paper_order_result(
+                    db,
+                    token_id,
+                    "SETTLEMENT",
+                    settled_price,
+                    proceeds,
+                    settled_price,
+                    proceeds,
+                    "filled",
+                    "resolved market settlement",
+                )
+                upsert_paper_position(db, token_id, 0.0, 0.0, realized_pnl)
+            sells_filled += 1
+            notes.append(
+                f"settled resolved {outcome['label']} {side} @ {settled_price:.2f}"
+            )
+            continue
         hold_to_maturity = _position_can_hold_to_maturity(
             outcome, side, actual_value_for_outcome
         )
@@ -2391,6 +2435,28 @@ def _position_invalidated(outcome: sqlite3.Row, side: str, current_value: float 
     if predicate.type.value == "BOTTOM_BUCKET_LTE_C":
         return current_value >= predicate.value_c + 1
     return False
+
+
+def _resolved_market_settlement_price(
+    db: sqlite3.Connection, outcome: sqlite3.Row, side: str
+) -> float | None:
+    status = str(outcome["status"] or "").lower() if "status" in outcome.keys() else ""
+    if status not in {"resolved", "closed"}:
+        return None
+    target_date = outcome["target_date_hkt"]
+    if not target_date:
+        return None
+    if _temperature_market_kind_for_row(outcome) == "lowest":
+        actual = latest_observed_min_for_date(db, target_date)
+        final_value = float(actual["since_midnight_min_c"]) if actual else None
+    else:
+        actual = latest_observed_max_for_date(db, target_date)
+        final_value = float(actual["since_midnight_max_c"]) if actual else None
+    if final_value is None:
+        return None
+    predicate = parse_outcome_label(outcome["label"])
+    yes_wins = predicate_matches(predicate, final_value)
+    return 1.0 if (side == "YES") == yes_wins else 0.0
 
 
 def _position_invalidated_by_forecast(

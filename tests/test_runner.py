@@ -811,6 +811,76 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result.sells_missed, 0)
             self.assertEqual(result.notes, ())
 
+    def test_exit_loop_settles_resolved_past_date_position_without_bid_depth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            db.execute("update markets set status = 'resolved'")
+            db.commit()
+            from whenitrains.paper_db import execute_paper_buy
+
+            execute_paper_buy(
+                db,
+                token_id="yes29",
+                side="YES",
+                size_usd=100,
+                asks=[(0.40, 1000)],
+                max_order_usd=250,
+                reason="test",
+            )
+            _store_observation(db, 29.5)
+
+            result = process_open_position_exits(db, today_hkt=date(2026, 5, 5))
+
+            self.assertEqual(result.sells_filled, 1)
+            self.assertIn("settled resolved 29°C YES @ 1.00", result.notes)
+            position = db.execute(
+                "select net_shares, realized_pnl from paper_positions where outcome_id = 'yes29'"
+            ).fetchone()
+            self.assertAlmostEqual(position["net_shares"], 0.0)
+            self.assertGreater(position["realized_pnl"], 0)
+            order = db.execute(
+                """
+                select status, simulated_fill_price, reason
+                from paper_orders
+                where outcome_id = 'yes29'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(order["status"], "filled")
+            self.assertEqual(order["simulated_fill_price"], 1.0)
+            self.assertEqual(order["reason"], "resolved market settlement")
+
+    def test_live_tick_settles_resolved_past_date_position_locally(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            db.execute("update markets set status = 'resolved'")
+            db.commit()
+            upsert_live_position(db, "no29", 25.0, 0.40, 0.0)
+            _store_observation(db, 29.5)
+            client = _FakeLiveClient()
+
+            result = run_live_tick(db, client, today_hkt=date(2026, 5, 5), order_cap_usd=5)
+
+            self.assertEqual(result.sells_filled, 1)
+            self.assertIn("settled resolved 29°C NO @ 0.00", result.notes)
+            position = db.execute(
+                "select net_shares, realized_pnl from live_positions where outcome_id = 'no29'"
+            ).fetchone()
+            self.assertAlmostEqual(position["net_shares"], 0.0)
+            self.assertLess(position["realized_pnl"], 0)
+            order = db.execute(
+                """
+                select side, status, fill_price, reason
+                from live_orders
+                where outcome_id = 'no29'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(order["side"], "SETTLEMENT")
+            self.assertEqual(order["status"], "filled")
+            self.assertEqual(order["fill_price"], 0.0)
+            self.assertEqual(order["reason"], "resolved market settlement")
+
     def test_exit_loop_signposts_no_bid_depth_for_invalidated_sell(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(Path(tmp) / "test.db")

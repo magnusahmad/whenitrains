@@ -955,7 +955,7 @@ def list_outcomes_for_date(db: sqlite3.Connection, target_date_hkt: str) -> list
             """
             select o.id, o.market_id, o.polymarket_market_id, o.label,
                    o.predicate_type, o.predicate_value_c, o.yes_token_id, o.no_token_id,
-                   m.target_date_hkt, m.slug
+                   m.target_date_hkt, m.slug, m.status
             from outcomes o
             join markets m on m.id = o.market_id
             where m.target_date_hkt = ?
@@ -972,7 +972,7 @@ def list_outcomes_from_date(db: sqlite3.Connection, min_date_hkt: str) -> list[s
             """
             select o.id, o.market_id, o.polymarket_market_id, o.label,
                    o.predicate_type, o.predicate_value_c, o.yes_token_id, o.no_token_id,
-                   m.target_date_hkt, m.slug
+                   m.target_date_hkt, m.slug, m.status
             from outcomes o
             join markets m on m.id = o.market_id
             where m.target_date_hkt >= ?
@@ -1119,7 +1119,7 @@ def find_outcome_by_label_and_filters(
             f"""
             select o.id, o.market_id, o.polymarket_market_id, o.label,
                    o.predicate_type, o.predicate_value_c, o.yes_token_id, o.no_token_id,
-                   m.target_date_hkt, m.slug
+                   m.target_date_hkt, m.slug, m.status
             from outcomes o
             join markets m on m.id = o.market_id
             where {" and ".join(filters)}
@@ -1145,7 +1145,7 @@ def find_outcome_by_token(db: sqlite3.Connection, token_id: str) -> sqlite3.Row 
         """
         select o.id, o.market_id, o.polymarket_market_id, o.label,
                o.predicate_type, o.predicate_value_c, o.yes_token_id, o.no_token_id,
-               m.target_date_hkt, m.slug
+               m.target_date_hkt, m.slug, m.status
         from outcomes o
         join markets m on m.id = o.market_id
         where o.yes_token_id = ? or o.no_token_id = ?
