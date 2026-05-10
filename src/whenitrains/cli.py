@@ -1765,11 +1765,7 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
             and "\ngate " in text
         )
     if name == "hko_source_timing_report.txt":
-        return (
-            text.startswith("hko source timing rows=")
-            and "response_ms " in text
-            and "public_availability_fetch_offsets_seconds=" in text
-        )
+        return _hko_source_timing_report_content_valid(text)
     if name.startswith("latency_") and name.endswith(".txt"):
         pair = name[len("latency_") : -len(".txt")].replace("_to_", " -> ")
         return (
@@ -1778,6 +1774,30 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
             and " p95=" in text
             and " p99=" in text
         )
+    return False
+
+
+def _hko_source_timing_report_content_valid(text: str) -> bool:
+    lines = text.splitlines()
+    if not lines:
+        return False
+    prefix = "hko source timing rows="
+    if not lines[0].startswith(prefix):
+        return False
+    try:
+        row_count = int(lines[0][len(prefix) :])
+    except ValueError:
+        return False
+    if row_count <= 0:
+        return False
+    if "response_ms " not in text:
+        return False
+    offset_prefix = "public_availability_fetch_offsets_seconds="
+    for line in lines:
+        if not line.startswith(offset_prefix):
+            continue
+        offset_value = line[len(offset_prefix) :].strip()
+        return bool(offset_value) and offset_value != "none"
     return False
 
 

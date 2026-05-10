@@ -1021,6 +1021,42 @@ class LatencyReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn("evidence archive file malformed: hko_source_timing_report.txt", stdout.getvalue())
 
+    def test_low_latency_verify_evidence_archive_fails_hko_report_without_observed_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            name = "hko_source_timing_report.txt"
+            report = output_dir / name
+            report.write_text(
+                "hko source timing rows=0\n"
+                "response_ms p50=n/a p95=n/a p99=n/a\n"
+                "public_availability_fetch_offsets_seconds=none\n"
+            )
+            digest = hashlib.sha256(report.read_bytes()).hexdigest()
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                "\n".join(
+                    f"sha256 {name}={digest}"
+                    if line.startswith(f"sha256 {name}=")
+                    else line
+                    for line in manifest.splitlines()
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("evidence archive file malformed: hko_source_timing_report.txt", stdout.getvalue())
+
     def test_low_latency_verify_evidence_archive_fails_readiness_report_without_gate_lines(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "evidence"
