@@ -475,15 +475,17 @@ def _process_forecast_value_entry_kind(
             else "lowest forecast bucket priced unrealistically low vs HKO forecast"
         ),
     )
-    filled = _execute_candidate_buy(
+    planned_buys = [_planned_candidate_buy(event_key, event_type, candidate)]
+    filled = _execute_planned_candidate_buys(
         db,
-        candidate,
+        planned_buys,
+        [candidate],
         event_type=event_type,
         event_key=event_key,
         max_buy_price=Settings.forecast_value_max_yes_ask,
         allow_existing_position=True,
         size_usd=_remaining_position_budget(db, forecast_row["yes_token_id"]),
-    )
+    )[0]
     store_signal(
         db,
         market_id=target_date.isoformat(),
