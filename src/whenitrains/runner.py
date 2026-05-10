@@ -67,6 +67,7 @@ class _SellPlan:
     details: dict[str, object]
     event_type: str
     event_key: str | None
+    success_note: str | None = None
 
 
 def run_paper_tick(db: sqlite3.Connection, today_hkt: date | None = None) -> RunnerResult:
@@ -590,6 +591,7 @@ def process_forecast_position_exits(
                     details={"forecast_max": new_forecast_max_c, "bid": book.best_bid},
                     event_type="forecast_exit",
                     event_key=event_key,
+                    success_note=f"sold forecast-invalidated {outcome['label']} {side}",
                 ),
             )
         )
@@ -657,7 +659,7 @@ def _execute_position_sell(
             sell_plan.details,
             event_key=sell_plan.event_key,
         )
-        return "filled", f"sold forecast-invalidated {sell_plan.outcome['label']} {sell_plan.side}"
+        return "filled", sell_plan.success_note
     store_trading_decision(
         db,
         sell_plan.event_type,
@@ -1196,6 +1198,7 @@ def process_open_position_exits(
     sells_filled = 0
     sells_missed = 0
     notes: list[str] = []
+    pending_sells: list[tuple[PlannedCandidateAction, _SellPlan]] = []
     positions = list_open_live_positions(db) if _LIVE_CLIENT is not None else list_open_paper_positions(db)
     for pos in positions:
         token_id = pos["outcome_id"]
@@ -1276,61 +1279,41 @@ def process_open_position_exits(
             if market_kind == "lowest"
             else "position invalidated by observed max"
         )
-        if _LIVE_CLIENT is not None:
-            result = execute_live_sell(
-                db,
-                _LIVE_CLIENT,
-                token_id=token_id,
-                bids=book.bids,
-                reason=reason,
-                label=outcome["label"],
-                event_type="exit_check",
+        source_event_key = f"exit_check:{outcome['target_date_hkt']}:{token_id}"
+        pending_sells.append(
+            (
+                PlannedCandidateAction(
+                    source_event_key=source_event_key,
+                    candidate_key=f"{source_event_key}:sell_exit_check:{token_id}",
+                    intent="sell_exit_check",
+                    token_id=token_id,
+                    side="SELL",
+                    conflict_keys=frozenset({f"token:{token_id}", f"position:{token_id}"}),
+                ),
+                _SellPlan(
+                    token_id=token_id,
+                    outcome=outcome,
+                    side=side,
+                    bids=book.bids,
+                    best_bid=book.best_bid,
+                    reason=reason,
+                    details={
+                        "current_value": actual_value_for_outcome,
+                        "bid": book.best_bid,
+                        "hourly_forecast_reason": hourly_reason,
+                    },
+                    event_type="exit_check",
+                    event_key=None,
+                ),
             )
-        else:
-            result = execute_paper_sell(db, token_id, book.bids, reason)
-        if result.status == "filled":
-            store_trading_decision(
-                db,
-                "exit_check",
-                token_id,
-                outcome["label"],
-                side,
-                "SELL",
-                "filled",
-                reason,
-                {
-                    "current_value": actual_value_for_outcome,
-                    "bid": book.best_bid,
-                    "hourly_forecast_reason": hourly_reason,
-                },
-            )
+        )
+    for status, note in _execute_planned_position_sells(db, pending_sells):
+        if status == "filled":
             sells_filled += 1
         else:
-            notes.append(
-                _sell_miss_note(
-                    outcome["label"],
-                    side,
-                    result.reason,
-                    reason,
-                    book.best_bid,
-                )
-            )
-            store_trading_decision(
-                db,
-                "exit_check",
-                token_id,
-                outcome["label"],
-                side,
-                "SELL",
-                "missed",
-                result.reason,
-                {
-                    "current_value": actual_value_for_outcome,
-                    "bid": book.best_bid,
-                    "hourly_forecast_reason": hourly_reason,
-                },
-            )
             sells_missed += 1
+        if note is not None:
+            notes.append(note)
     return RunnerResult(sells_filled=sells_filled, sells_missed=sells_missed, notes=tuple(notes))
 
 

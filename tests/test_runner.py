@@ -856,6 +856,52 @@ class RunnerTests(unittest.TestCase):
 
             self.assertEqual(result.sells_filled, 1)
 
+    def test_open_position_exit_uses_candidate_execution_bridge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            from whenitrains.paper_db import execute_paper_buy
+
+            execute_paper_buy(
+                db,
+                token_id="yes29",
+                side="YES",
+                size_usd=100,
+                asks=[(0.40, 1000)],
+                max_order_usd=250,
+                reason="test",
+            )
+            store_orderbook(
+                db,
+                "yes29",
+                OrderBook("yes29", bids=[(0.35, 1000)], asks=[(0.36, 1000)], tick_size=0.01, min_order_size=5),
+            )
+            _store_observation(db, 30.0)
+            bridge_calls = []
+
+            def bridge(actions, executor):
+                bridge_calls.append(actions)
+                return [
+                    CandidateAction(
+                        action.candidate_key,
+                        action.conflict_keys,
+                        lambda action=action: executor(action),
+                    )
+                    for action in actions
+                ]
+
+            with patch("whenitrains.runner.executable_candidate_actions", side_effect=bridge):
+                result = process_open_position_exits(db, today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(result.sells_filled, 1)
+            self.assertEqual(len(bridge_calls), 1)
+            action = bridge_calls[0][0]
+            self.assertEqual(action.intent, "sell_exit_check")
+            self.assertEqual(action.token_id, "yes29")
+            self.assertEqual(action.side, "SELL")
+            self.assertEqual(action.candidate_key, "exit_check:2026-05-04:yes29:sell_exit_check:yes29")
+            self.assertIn("token:yes29", action.conflict_keys)
+            self.assertIn("position:yes29", action.conflict_keys)
+
     def test_actual_cross_buys_stale_gte_outcome(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
