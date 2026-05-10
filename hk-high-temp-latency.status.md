@@ -24,7 +24,7 @@ Low-latency readiness M4 groundwork is partially implemented. `live_user_events`
 
 Low-latency readiness M5 polling groundwork is partially implemented. Learned AWS actual publish windows now include a 10-second pre/post burst plan with 0.5-second cadence, while broader catchup polling remains. Scheduler source backoff can slow non-critical HKO sources without suppressing `aws_actual` polling. Live hot-path buys now fail closed when a configured Polymarket WebSocket orderbook cache is missing or stale instead of silently falling back to REST.
 
-Low-latency readiness M6 groundwork has started with a DB-specific exclusive live scheduler lock and stale submitted-order watchdog. `live-scheduler` now fails closed if another process already holds the lock for the same SQLite database, and it freezes new entries when previously submitted live orders are older than the configured watchdog threshold. Broader live startup health checks, external alerting, and a complete runbook remain pending.
+Low-latency readiness M6 groundwork has started with a DB-specific exclusive live scheduler lock, stale submitted-order watchdog, and structured startup-health evaluator. `live-scheduler` now fails closed if another process already holds the lock for the same SQLite database, and it freezes new entries when previously submitted live orders are older than the configured watchdog threshold. Startup health can now report disconnected market/user WebSockets, missing REST fallback, invalid credentials, insufficient balance/allowance, stale submitted orders, and local/CLOB drift as explicit fail-closed reasons. External alerting and a complete runbook remain pending.
 
 Latency reporting can now summarize trace rows directly from the database. `latency-report <start_stage> <end_stage>` prints count plus p50/p95/p99 nearest-rank durations. Event-keyed live buy/sell execution records `order_submitted`, `clob_ack`, `fill_matched`, and `fill_confirmed` stages when the order fills, allowing live checks for HKO commit-to-decision and submit/fill timing.
 
@@ -73,6 +73,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 2026-05-11 orderbook freshness gate pass: live hot-path buys with a configured `OrderBookCache` now skip trading when the cache is missing or stale, preserving REST fallback only when no WebSocket cache has been configured. Verified with focused live runner tests for stale cache skip, fresh cache no-REST execution, and no-cache REST refresh.
 
 2026-05-11 operational lock pass: added `src/whenitrains/operational.py`, `tests/test_operational_readiness.py`, and live-scheduler lock wiring. Verification covers rejecting a second lock holder for the same DB and lock path selection.
+
+2026-05-11 startup health evaluator pass: added structured `evaluate_live_startup_health` checks for market/user WebSocket connectivity, REST fallback, credentials, balance/allowance, stale submitted orders, and local/CLOB drift. Verification covers single and aggregate fail-closed reasons.
 
 2026-05-11 latency reporting pass: added `latency_duration_summary` and `whenitrains latency-report`. Verification covers percentile calculation, ignoring incomplete events, and CLI output.
 

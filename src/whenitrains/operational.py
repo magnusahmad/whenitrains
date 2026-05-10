@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -43,3 +44,37 @@ class LiveSchedulerLock:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.release()
+
+
+@dataclass(frozen=True)
+class LiveStartupHealth:
+    ok: bool
+    reasons: tuple[str, ...]
+
+
+def evaluate_live_startup_health(
+    *,
+    market_websocket_connected: bool,
+    user_websocket_connected: bool,
+    rest_fallback_available: bool,
+    credentials_valid: bool,
+    balance_allowance_ok: bool,
+    stale_submitted_orders: int,
+    local_clob_drift_count: int,
+) -> LiveStartupHealth:
+    reasons: list[str] = []
+    if not market_websocket_connected:
+        reasons.append("market websocket disconnected")
+    if not user_websocket_connected:
+        reasons.append("user websocket disconnected")
+    if not rest_fallback_available:
+        reasons.append("REST fallback unavailable")
+    if not credentials_valid:
+        reasons.append("CLOB credentials invalid")
+    if not balance_allowance_ok:
+        reasons.append("balance or allowance insufficient")
+    if stale_submitted_orders:
+        reasons.append(f"{stale_submitted_orders} stale submitted live orders")
+    if local_clob_drift_count:
+        reasons.append(f"{local_clob_drift_count} local/CLOB drift items")
+    return LiveStartupHealth(ok=not reasons, reasons=tuple(reasons))
