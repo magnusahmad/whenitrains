@@ -1667,6 +1667,7 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
     missing_files = [name for name in required_files if not (input_dir / name).is_file()]
     if missing_files:
         messages.append("evidence archive files missing: " + ", ".join(missing_files))
+    readiness_report_missing_gates: list[str] | None = None
     for name in required_files:
         if name == "manifest.txt":
             continue
@@ -1684,7 +1685,8 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
                     messages.append(f"evidence archive readiness gate duplicate: {gate}")
                 for gate in _unexpected_readiness_gate_names(text):
                     messages.append(f"evidence archive readiness gate unexpected: {gate}")
-                for gate in _non_passing_readiness_gates(text):
+                readiness_report_missing_gates = _non_passing_readiness_gates(text)
+                for gate in readiness_report_missing_gates:
                     messages.append(f"evidence archive readiness gate not passing: {gate}")
     manifest_path = input_dir / "manifest.txt"
     manifest = manifest_path.read_text() if manifest_path.is_file() else ""
@@ -1742,6 +1744,13 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
         )
     if missing_gates and _missing_gates_malformed(missing_gates):
         messages.append("evidence archive missing_gates malformed")
+    elif missing_gates and readiness_report_missing_gates is not None:
+        manifest_missing_gates = [gate.strip() for gate in missing_gates.split(",")]
+        if manifest_missing_gates != readiness_report_missing_gates:
+            messages.append(
+                "evidence archive gates inconsistent: "
+                "missing_gates does not match readiness_report.txt"
+            )
     if all_gates_passed != "True":
         if missing_gates:
             messages.append("evidence archive gates missing: " + missing_gates)
