@@ -14,7 +14,7 @@ Milestones 1-5 are implemented for local paper trading:
 
 Live trading scaffolding is now implemented behind explicit fail-closed gates. Paper trading remains the default. Live mode has additive storage, Keychain hot-key setup, pre-derived credential loading, manual FAK buy/sell/cancel/reconcile commands, kill-switch settings, live tick/scheduler wiring, WebSocket market/user runtime wiring, and a live dashboard route. Real-auth smoke and real-money trading remain pending credentials, dependency validation, and explicit user approval. Low-latency readiness review now has a concrete roadmap in `docs/low-latency-readiness-roadmap.md`; the remaining readiness gaps are live network smoke, real-auth/manual-money smoke, and production proof of sub-second live DB-commit-to-decision latency.
 
-Low-latency readiness M0/M1 groundwork is now implemented for AWS actual transitions. The storage layer can write append-only `latency_trace_events`, records orderbook state age on token-level paper decisions, and can enqueue max/min actual transition events immediately after the HKO current-temperature row commit. Paper and live scheduler loops now create a shared low-latency queue for AWS actual ingestion and drain queued fast events before the normal watchdog tick, with latency stages for `db_committed`, `event_detected`, `decision_started`, and `decision_completed`. This does not yet complete the full roadmap: live network smoke, real-auth smoke, full hot-path precomputation, and production proof of sub-second DB-commit-to-decision latency remain pending.
+Low-latency readiness M0/M1 groundwork is now implemented for AWS actual transitions. The storage layer can write append-only `latency_trace_events`, records orderbook state age on token-level paper decisions, and can enqueue max/min actual transition events immediately after the HKO current-temperature row commit. Paper and live scheduler loops now create a shared low-latency queue for AWS actual ingestion and drain queued fast events before the normal watchdog tick, with latency stages for `db_committed`, `event_detected`, `decision_started`, and `decision_completed`. This does not yet complete the full roadmap: live network smoke, real-auth smoke, and production proof of sub-second DB-commit-to-decision latency remain pending.
 
 Low-latency readiness M2 groundwork is also partially implemented. `OrderBookCache` can apply Polymarket market-channel `book`, `price_change`, `best_bid_ask`, and `last_trade_price` fixture messages, persist append-only snapshots with WebSocket metadata, reject stale cached books at the configured 250 ms cap, and seed reconnect snapshots. Live buy execution now uses a fresh cache book before falling back to REST `/book`. Active-market YES/NO token listing and subscription-change payload planning are covered so market discovery can drive resubscribe messages without restarting the scheduler. `MarketWebSocketClient` can connect to the Polymarket market channel, send the active-token subscription payload, feed messages into the cache, and reconnect in a loop. `live-scheduler` now starts a scheduler-owned WebSocket runtime by default and passes its shared book cache into live tick and fast-event handlers. Live network smoke remains pending.
 
@@ -654,13 +654,13 @@ Interpretation:
 
 ## Remaining Work
 
-Paper-mode milestones 1-5 are complete as local building blocks, one-shot CLI commands, an autonomous local paper loop, and a polling-window scheduler. Remaining work is now the live-trading validation layer and richer operations:
+Paper-mode milestones 1-5 are complete as local building blocks, one-shot CLI commands, an autonomous local paper loop, and a polling-window scheduler. Remaining work is now the live-trading validation layer and production evidence:
 
-- Add external alerting beyond the current terminal output.
+- Restore or verify live-log LAN access from this development machine.
 - Run real-auth CLOB smoke with installed dependency and credentials.
 - Run explicit manual real-money buy/sell smoke before any scheduler use.
-- Add or verify live kill-switch behavior that cancels live open orders and exits positions only when the explicit exit setting is enabled.
-- Expand operational runbook coverage for live startup, shutdown, cancel-all, reconciliation, and recovery from ambiguous order status.
+- Verify production p50/p95/p99 latency from HKO DB commit through decision start and live order submission.
+- Verify live kill-switch behavior against the real account before scheduler use.
 - Add integration tests using recorded HKO/Gamma/CLOB fixtures.
 
 ## Scheduler/Alert/Dashboard Decisions
