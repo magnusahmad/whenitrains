@@ -473,6 +473,11 @@ class CliDiscoveryTests(unittest.TestCase):
         )
         self.assertIn(
             "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
+            "hko-source-timing-report",
+            text,
+        )
+        self.assertIn(
+            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
             "latency-report db_committed decision_completed",
             text,
         )

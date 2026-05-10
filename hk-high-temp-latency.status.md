@@ -242,6 +242,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-decision-completion-checklist live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 1 ms: Couldn't connect to server`. The remaining roadmap exit criteria still require live/account evidence that cannot be captured from this machine while the endpoint is unreachable.
 
+2026-05-11 checklist HKO timing evidence pass: tightened `live-readiness-checklist` so the production evidence plan explicitly runs `hko-source-timing-report`, matching the M5 live dry-run requirement to capture HKO source timing/public-availability evidence directly rather than relying only on the readiness/archive outputs. Verified red/green with `PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_live_readiness_checklist_prints_ordered_evidence_commands`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

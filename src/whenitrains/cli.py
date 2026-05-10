@@ -1773,6 +1773,7 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         command("latency-report", "order_submitted", "fill_matched"),
         command("latency-report", "order_submitted", "fill_confirmed"),
         command("latency-report", "order_submitted", "order_rejected"),
+        command("hko-source-timing-report"),
         command("low-latency-readiness-report", "--require-evidence"),
         command(
             "low-latency-archive-evidence",
