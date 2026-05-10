@@ -927,6 +927,31 @@ def list_active_market_token_ids(db: sqlite3.Connection, min_date_hkt: str) -> l
     return token_ids
 
 
+def list_active_market_condition_ids(
+    db: sqlite3.Connection, min_date_hkt: str
+) -> list[str]:
+    rows = db.execute(
+        """
+        select o.polymarket_market_id
+        from outcomes o
+        join markets m on m.id = o.market_id
+        where m.target_date_hkt >= ?
+          and coalesce(m.status, 'active') = 'active'
+          and o.polymarket_market_id is not null
+        order by m.target_date_hkt, o.id
+        """,
+        (min_date_hkt,),
+    )
+    condition_ids: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        condition_id = row["polymarket_market_id"]
+        if condition_id and condition_id not in seen:
+            seen.add(condition_id)
+            condition_ids.append(condition_id)
+    return condition_ids
+
+
 def list_hko_forecast_dates(
     db: sqlite3.Connection, min_date_hkt: str | None = None
 ) -> list[str]:

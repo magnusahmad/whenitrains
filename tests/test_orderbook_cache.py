@@ -13,6 +13,7 @@ from whenitrains.markets import parse_outcome_label
 from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
 from whenitrains.storage import (
     connect,
+    list_active_market_condition_ids,
     list_active_market_token_ids,
     migrate,
     store_polymarket_event,
@@ -138,6 +139,19 @@ class OrderBookCacheTests(unittest.TestCase):
             tokens = list_active_market_token_ids(db, min_date_hkt="2026-05-04")
 
             self.assertEqual(tokens, ["yes-today", "no-today"])
+
+    def test_lists_active_condition_ids_for_user_subscription(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            _store_market(db, "2026-05-04", "yes-today", "no-today")
+            _store_market(db, "2026-05-03", "yes-past", "no-past")
+
+            condition_ids = list_active_market_condition_ids(
+                db, min_date_hkt="2026-05-04"
+            )
+
+            self.assertEqual(condition_ids, ["market-2026-05-04-yes-today"])
 
     def test_subscription_manager_emits_payload_only_when_tokens_change(self):
         manager = SubscriptionManager()
