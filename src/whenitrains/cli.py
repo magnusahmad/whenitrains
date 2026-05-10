@@ -1661,6 +1661,9 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             + ", ".join(missing_manifest_entries)
         )
     checksums = _manifest_checksums(manifest)
+    duplicate_checksums = _manifest_duplicate_checksums(manifest)
+    for name in duplicate_checksums:
+        messages.append(f"evidence archive duplicate checksum entry: {name}")
     missing_checksum_entries = [
         name for name in required_files if name != "manifest.txt" and name not in checksums
     ]
@@ -1698,6 +1701,19 @@ def _manifest_checksums(manifest: str) -> dict[str, str]:
         name, digest = line[len("sha256 ") :].split("=", 1)
         checksums[name] = digest
     return checksums
+
+
+def _manifest_duplicate_checksums(manifest: str) -> list[str]:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for line in manifest.splitlines():
+        if not line.startswith("sha256 ") or "=" not in line:
+            continue
+        name, _digest = line[len("sha256 ") :].split("=", 1)
+        if name in seen and name not in duplicates:
+            duplicates.append(name)
+        seen.add(name)
+    return duplicates
 
 
 def _manifest_value(manifest: str, key: str) -> str | None:
