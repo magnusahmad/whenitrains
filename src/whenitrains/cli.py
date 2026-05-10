@@ -2043,7 +2043,14 @@ def _readiness_gate_line_malformed(line: str) -> bool:
         if not key or key in seen_fields:
             return True
         field_values[key] = value
-        if key == "count":
+        if key in {
+            "count",
+            "error",
+            "missing_bid_positions",
+            "problem_orders",
+            "submitted",
+            "unresolved_orders",
+        }:
             try:
                 count = int(value)
             except ValueError:
