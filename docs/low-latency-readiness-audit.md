@@ -26,7 +26,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried on 2026-05-11 H
 - `fetch_response` and HKO raw snapshot storage persist fetch start, header receipt, payload receipt, and elapsed milliseconds.
 - Event-keyed live buy/sell execution records `order_submitted`, `clob_ack`, `fill_matched`, and `fill_confirmed`.
 - `latency-report` summarizes p50/p95/p99 between named stages.
-- `low-latency-readiness-report` prints the core latency stage pairs, explicit evidence gates including commit-to-decision-completed, CLOB ack, fill-match, orderbook-age-under-cap, live-money-state-clear, and kill-switch-clear evidence, live money-state, and HKO source-timing evidence; `--require-evidence` exits nonzero when any measurable local evidence gate is missing.
+- `low-latency-readiness-report` prints the core latency stage pairs, explicit evidence gates including commit-to-decision-completed, CLOB ack, fill-match, orderbook-age-under-cap, user-channel-event, live-money-state-clear, and kill-switch-clear evidence, live money-state, and HKO source-timing evidence; `--require-evidence` exits nonzero when any measurable local evidence gate is missing.
 - Compact fast-event latency lines are emitted during scheduler drain.
 - Evidence: `src/whenitrains/storage.py`, `src/whenitrains/live.py`, `src/whenitrains/low_latency.py`, `src/whenitrains/cli.py`.
 - Tests: `tests.test_low_latency`, `tests.test_latency_report`, focused live latency tests.
@@ -74,6 +74,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried on 2026-05-11 H
 - Startup and periodic watchdog reconcile pending live orders, rebuild positions, compare sellable balances, repair safe local-greater-than-CLOB drift, and freeze new entries when drift remains.
 - Resolved/closed past-date markets locally settle remaining paper/live positions when stored target-date actuals identify the winning side.
 - `low-latency-readiness-report --require-evidence` fails while live orders remain in unresolved `submitted`, `unknown_fill`, `open`, or `pending` states.
+- `low-latency-readiness-report --require-evidence` requires at least one stored `live_user_events` row so the production report cannot pass without authenticated user-channel evidence.
 - Evidence: `src/whenitrains/user_websocket.py`, `src/whenitrains/live_user_stream.py`, `src/whenitrains/live.py`, `src/whenitrains/runner.py`, `src/whenitrains/cli.py`.
 - Tests: `tests.test_live_user_stream`, `tests.test_user_websocket`, `tests.test_live`, `tests.test_cli`, `tests.test_runner`.
 - Missing: real user WebSocket smoke, recent-trades validation against the account, and live settlement validation against CLOB/onchain truth.

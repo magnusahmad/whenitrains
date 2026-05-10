@@ -164,6 +164,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live money-state evidence gate pass: `low-latency-readiness-report --require-evidence` now fails when live state still has unresolved submitted/unknown-fill/open/pending orders, error orders, or open positions without a latest bid. This turns the operational readiness requirement for unambiguous money state into an objective report gate. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
 
+2026-05-11 user-channel evidence gate pass: `low-latency-readiness-report --require-evidence` now requires at least one stored `live_user_events` row, so a production readiness report cannot pass without evidence that the authenticated user-channel/recent order lifecycle path observed live account events. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
+
 2026-05-11 CLOB lifecycle evidence gate pass: `low-latency-readiness-report --require-evidence` now requires observed `order_submitted -> clob_ack` and `order_submitted -> fill_matched` stage pairs in addition to submit-to-fill-confirmed timing, so the production report proves the intermediate CLOB lifecycle stages named by the roadmap. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
 
 2026-05-11 decision-completion evidence gate pass: `low-latency-readiness-report --require-evidence` now requires `db_committed -> decision_completed` p95 to stay under 1 second, so production evidence must prove fast decisions finish rather than only start quickly. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
