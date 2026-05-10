@@ -110,3 +110,42 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("live orders total=1 submitted=1 error=0", text)
             self.assertIn("live open_positions=0 open_exposure_usd=0.00", text)
             self.assertIn("kill_switch block_new_entries=True exit_on_kill_switch=False", text)
+
+    def test_low_latency_readiness_report_prints_evidence_gates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            record_latency_stage(db, "event-1", "db_committed", 10.0, "actual")
+            record_latency_stage(db, "event-1", "decision_started", 10.4, "actual")
+            record_latency_stage(db, "event-1", "order_submitted", 10.45, "actual")
+            record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn("evidence gates:", text)
+            self.assertIn(
+                "gate hko_commit_to_decision_under_1s=pass "
+                "count=1 p95=0.400s threshold=1.000s",
+                text,
+            )
+            self.assertIn(
+                "gate decision_to_submit_observed=pass count=1 p95=0.050s",
+                text,
+            )
+            self.assertIn(
+                "gate submit_to_fill_observed=pass count=1 p95=0.350s",
+                text,
+            )
+            self.assertIn("gate hko_source_timing_observed=missing count=0", text)
