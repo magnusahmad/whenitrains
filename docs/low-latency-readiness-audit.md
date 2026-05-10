@@ -26,7 +26,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried on 2026-05-11 H
 - `fetch_response` and HKO raw snapshot storage persist fetch start, header receipt, payload receipt, and elapsed milliseconds.
 - Event-keyed live buy/sell execution records `order_submitted`, `clob_ack`, `fill_matched`, and `fill_confirmed`.
 - `latency-report` summarizes p50/p95/p99 between named stages.
-- `low-latency-readiness-report` prints the core latency stage pairs, explicit evidence gates including orderbook-age-under-cap evidence, live money-state, and HKO source-timing evidence; `--require-evidence` exits nonzero when any measurable local evidence gate is missing.
+- `low-latency-readiness-report` prints the core latency stage pairs, explicit evidence gates including orderbook-age-under-cap and live-money-state-clear evidence, live money-state, and HKO source-timing evidence; `--require-evidence` exits nonzero when any measurable local evidence gate is missing.
 - Compact fast-event latency lines are emitted during scheduler drain.
 - Evidence: `src/whenitrains/storage.py`, `src/whenitrains/live.py`, `src/whenitrains/low_latency.py`, `src/whenitrains/cli.py`.
 - Tests: `tests.test_low_latency`, `tests.test_latency_report`, focused live latency tests.

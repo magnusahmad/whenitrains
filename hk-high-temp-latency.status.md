@@ -162,6 +162,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 orderbook-age evidence gate pass: `low-latency-readiness-report` now summarizes recorded `orderbook_state_age_seconds` decision details and includes an `orderbook_age_under_cap` gate using `Settings.live_orderbook_cache_max_age_seconds`. `--require-evidence` now fails if no book-age rows are present or the observed p95 exceeds the live cache cap, so capped live evidence must include fresh book state. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
 
+2026-05-11 live money-state evidence gate pass: `low-latency-readiness-report --require-evidence` now fails when live state still has submitted orders, error orders, or open positions without a latest bid. This turns the operational readiness requirement for unambiguous money state into an objective report gate. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

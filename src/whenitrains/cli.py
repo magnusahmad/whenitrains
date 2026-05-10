@@ -1511,6 +1511,7 @@ def _low_latency_readiness_report(
             threshold_seconds=Settings.live_orderbook_cache_max_age_seconds,
         ),
         _count_observed_gate("hko_source_timing_observed", hko_timing_count),
+        _live_money_state_gate(live),
     ]
     missing_gates = [gate["name"] for gate in gates if gate["status"] != "pass"]
     lines.extend(
@@ -1640,6 +1641,22 @@ def _count_observed_gate(name: str, count: int) -> dict[str, object]:
     status = "pass" if count > 0 else "missing"
     line = f"gate {name}={status} count={count}"
     return {"name": name, "status": status, "line": line}
+
+
+def _live_money_state_gate(live: dict[str, object]) -> dict[str, object]:
+    counts = live["counts"]
+    submitted = int(counts["submitted"])
+    error = int(counts["error"])
+    missing_bid_positions = int(live["missing_bid_positions"])
+    clear = submitted == 0 and error == 0 and missing_bid_positions == 0
+    status = "pass" if clear else "missing"
+    line = (
+        f"gate live_money_state_clear={status} "
+        f"submitted={submitted} "
+        f"error={error} "
+        f"missing_bid_positions={missing_bid_positions}"
+    )
+    return {"name": "live_money_state_clear", "status": status, "line": line}
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
