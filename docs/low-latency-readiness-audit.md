@@ -16,7 +16,7 @@ Local implementation is substantially complete and covered by targeted automated
 - Production p50/p95/p99 evidence for DB-commit-to-decision, decision-to-submit, submit-to-fill/reject, and local-vs-CLOB drift.
 - Real-account kill-switch and settlement validation against actual CLOB/onchain state.
 
-The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT and failed with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 0 ms: Couldn't connect to server`.
+The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT and failed with `curl: (28) Connection timed out after 8003 milliseconds`.
 
 ## Prompt-To-Artifact Checklist
 

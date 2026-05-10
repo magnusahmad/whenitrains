@@ -210,6 +210,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live settlement validation evidence gate pass: added `live-settlement-validate --live --order-id ... --reference ...`, which records `live_settlement_validation_ok` evidence for a filled live settlement row with the supplied CLOB/onchain reference. `low-latency-readiness-report --require-evidence` now requires this validation evidence in addition to the settlement row itself. Verified with `PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_live_settlement_validate_records_validation_evidence tests.test_latency_report.LatencyReportTests.test_low_latency_readiness_report_fails_without_settlement_validation`.
 
+2026-05-11 live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` timed out after 8003 ms with `curl: (28) Connection timed out after 8003 milliseconds`, so live scheduler log capture, live WebSocket/auth/manual-money evidence, and production readiness artifacts remain blocked on endpoint availability.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
