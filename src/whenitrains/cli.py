@@ -1661,6 +1661,12 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             "evidence archive manifest metadata missing: "
             + ", ".join(missing_metadata_keys)
         )
+    invalid_metadata_keys = _invalid_archive_manifest_metadata(manifest)
+    if invalid_metadata_keys:
+        messages.append(
+            "evidence archive manifest metadata invalid: "
+            + ", ".join(invalid_metadata_keys)
+        )
     for key in _manifest_duplicate_keys(manifest, ["all_gates_passed", "missing_gates"]):
         messages.append(f"evidence archive duplicate manifest key: {key}")
     if _manifest_value(manifest, "all_gates_passed") != "True":
@@ -1728,6 +1734,29 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
         pair = name[len("latency_") : -len(".txt")].replace("_to_", " -> ")
         return text.startswith(f"{pair} count=") and " p50=" in text and " p95=" in text
     return False
+
+
+def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
+    invalid: list[str] = []
+    created_at = _manifest_value(manifest, "created_at_utc")
+    if created_at is not None:
+        try:
+            datetime.fromisoformat(created_at)
+        except ValueError:
+            invalid.append("created_at_utc")
+    db_path = _manifest_value(manifest, "db_path")
+    if db_path is not None and not db_path.strip():
+        invalid.append("db_path")
+    hko_limit = _manifest_value(manifest, "hko_limit")
+    if hko_limit is not None:
+        try:
+            parsed_limit = int(hko_limit)
+        except ValueError:
+            invalid.append("hko_limit")
+        else:
+            if parsed_limit <= 0:
+                invalid.append("hko_limit")
+    return invalid
 
 
 def _sha256_file(path: Path) -> str:
