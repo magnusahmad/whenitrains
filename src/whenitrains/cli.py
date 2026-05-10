@@ -2031,6 +2031,8 @@ def _readiness_gate_line_malformed(line: str) -> bool:
     status = rest_parts[0]
     if status not in {"pass", "missing"}:
         return True
+    if len(rest_parts) == 1:
+        return True
     seen_fields: set[str] = set()
     for field in rest_parts[1:]:
         if "=" not in field:
