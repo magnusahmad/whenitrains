@@ -222,6 +222,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 evidence archive verifier pass: added `low-latency-verify-evidence-archive --input-dir ...`, which checks the manifest, required report files, SHA-256 checksums, and `all_gates_passed=True`, while surfacing archived `missing_gates` when evidence is incomplete. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_passes_complete_manifest tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_fails_missing_gates tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_fails_checksum_mismatch`.
 
+2026-05-11 checksum archive snapshot: regenerated `/private/tmp/whenitrains-low-latency-current-evidence` with `low-latency-archive-evidence --require-evidence`; the manifest now includes SHA-256 entries for every report. `low-latency-verify-evidence-archive --input-dir /private/tmp/whenitrains-low-latency-current-evidence` returned `2` only because the archived `missing_gates` list still contains the live latency, WebSocket, user-channel, reconcile, settlement, drift-scan, auth, network, scheduler, kill-switch, and manual-money evidence gates.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
