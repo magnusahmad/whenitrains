@@ -1680,10 +1680,17 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
         if not path.is_file():
             messages.append(f"evidence archive checksum file missing: {name}")
             continue
+        if not _is_sha256_digest(expected_digest):
+            messages.append(f"evidence archive checksum digest invalid: {name}")
+            continue
         actual_digest = _sha256_file(path)
         if actual_digest != expected_digest:
             messages.append(f"evidence archive checksum mismatch: {name}")
     return not messages, messages
+
+
+def _is_sha256_digest(value: str) -> bool:
+    return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
 
 def _sha256_file(path: Path) -> str:
