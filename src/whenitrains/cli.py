@@ -2091,6 +2091,8 @@ def _readiness_gate_line_malformed(line: str) -> bool:
                 return True
             if drift_count < 0:
                 return True
+        if key == "evidence" and value not in {"not_observed", "observed"}:
+            return True
         seen_fields.add(key)
     count_value = field_values.get("count")
     if status == "pass" and count_value == "0":

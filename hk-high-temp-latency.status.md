@@ -606,6 +606,10 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-archive-live-money-counter live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 0 ms: Couldn't connect to server`. Live/account evidence capture remains blocked on endpoint availability.
 
+2026-05-11 archive optional-evidence verifier pass: tightened `low-latency-verify-evidence-archive` so `evidence=` readiness gate fields must be either `observed` or `not_observed`. Verified red/green with `PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_fails_malformed_optional_gate_evidence tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_passes_complete_manifest tests.test_latency_report.LatencyReportTests.test_low_latency_readiness_report_prints_evidence_gates`.
+
+2026-05-11 post-archive-optional-evidence live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 0 ms: Couldn't connect to server`. Live/account evidence capture remains blocked on endpoint availability.
+
 2026-05-11 post-archive-readiness-latency-summary live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 0 ms: Couldn't connect to server`. Live/account evidence capture remains blocked on endpoint availability.
 
 2026-05-11 post-archive-readiness-section verification: `PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.test_live tests.test_cli tests.test_low_latency tests.test_storage tests.test_markets tests.test_orderbook_cache tests.test_recorded_fixtures tests.test_latency_report tests.test_scheduler tests.test_operational_readiness tests.test_alerting tests.test_live_user_stream tests.test_user_websocket tests.test_execution_scheduler tests.test_candidate_planner tests.test_ladder_metadata` passed with 332 tests.
