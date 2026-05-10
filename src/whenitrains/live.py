@@ -18,6 +18,7 @@ from .paper_db import calculate_entry
 from .storage import (
     get_live_position,
     get_live_setting,
+    latest_orderbook,
     list_open_live_positions,
     live_realized_pnl_since,
     live_setting_enabled,
@@ -33,6 +34,16 @@ from .storage import (
 
 class LiveTradingError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class LiveKillSwitchExitResult:
+    enabled: bool
+    cancel_all_status: str
+    sells_attempted: int = 0
+    sells_filled: int = 0
+    sells_missed: int = 0
+    errors: tuple[str, ...] = ()
 
 
 INSUFFICIENT_BALANCE_BLOCK_THRESHOLD = 3
@@ -1261,6 +1272,75 @@ def freeze_new_entries_for_stale_submitted_orders(
         },
     )
     return len(stale_rows)
+
+
+def enforce_live_kill_switch_exits(
+    db: sqlite3.Connection,
+    client: LiveClobClient,
+    *,
+    event_key: str | None = None,
+) -> LiveKillSwitchExitResult:
+    if not live_setting_enabled(db, "cancel_open_orders_and_exit_positions"):
+        return LiveKillSwitchExitResult(False, "skipped")
+
+    errors: list[str] = []
+    try:
+        client.cancel_all()
+        cancel_status = "ok"
+    except Exception as exc:
+        cancel_status = "error"
+        errors.append(f"cancel_all:{type(exc).__name__}")
+        store_risk_event(
+            db,
+            "live_kill_switch_cancel_all_failed",
+            "critical",
+            {"error": str(exc)},
+        )
+
+    sells_attempted = 0
+    sells_filled = 0
+    sells_missed = 0
+    for position in list_open_live_positions(db):
+        token_id = str(position["outcome_id"])
+        try:
+            book = latest_orderbook(db, token_id)
+            result = execute_live_sell(
+                db,
+                client,
+                token_id=token_id,
+                bids=book.bids,
+                reason="live kill switch exit",
+                event_type="live_kill_switch",
+                event_key=event_key,
+            )
+        except Exception as exc:
+            sells_missed += 1
+            errors.append(f"{token_id}:{type(exc).__name__}")
+            store_live_order(
+                db,
+                outcome_id=token_id,
+                side="SELL",
+                action="SELL",
+                status="error",
+                reason="live kill switch exit failed",
+                error=str(exc),
+                event_type="live_kill_switch",
+                event_key=event_key,
+            )
+            continue
+        sells_attempted += 1
+        if result.status == "filled":
+            sells_filled += 1
+        else:
+            sells_missed += 1
+    return LiveKillSwitchExitResult(
+        True,
+        cancel_status,
+        sells_attempted=sells_attempted,
+        sells_filled=sells_filled,
+        sells_missed=sells_missed,
+        errors=tuple(errors),
+    )
 
 
 def find_live_position_drifts(

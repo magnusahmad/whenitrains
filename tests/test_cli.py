@@ -304,6 +304,62 @@ class CliDiscoveryTests(unittest.TestCase):
                 db.close()
             self.assertIn("1 local/CLOB drift items", stdout.getvalue())
 
+    def test_live_scheduler_enforces_persistent_kill_switch_exits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            client = object()
+            calls = []
+
+            def run_loop(*args, **kwargs):
+                result = kwargs["reconcile_watchdog_fn"](args[0])
+                self.assertIn("live kill-switch exits", result.notes[0])
+
+            def enforce(_db, live_client, event_key=None):
+                calls.append((live_client, event_key))
+                return SimpleNamespace(
+                    enabled=True,
+                    cancel_all_status="ok",
+                    sells_filled=1,
+                    sells_attempted=1,
+                    sells_missed=0,
+                )
+
+            stdout = StringIO()
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch("whenitrains.cli.PolymarketClobClient", return_value=client),
+                patch(
+                    "whenitrains.cli.preflight_live",
+                    return_value=SimpleNamespace(ok=True, reason="ok"),
+                ),
+                patch("whenitrains.cli.find_live_position_drifts", return_value=[]),
+                patch("whenitrains.cli.enforce_live_kill_switch_exits", side_effect=enforce),
+                patch("whenitrains.cli.run_scheduled_paper_loop", side_effect=run_loop),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-scheduler",
+                        "--live",
+                        "--ticks",
+                        "0",
+                        "--no-startup-backup",
+                        "--no-websockets",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                calls,
+                [
+                    (client, "live_scheduler_startup"),
+                    (client, "live_reconcile_watchdog"),
+                ],
+            )
+            self.assertIn("live kill-switch exits cancel_all=ok sells=1/1 missed=0", stdout.getvalue())
+
     def test_live_scheduler_reconcile_watchdog_freezes_entries_when_drift_appears(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

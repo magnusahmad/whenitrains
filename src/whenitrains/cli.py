@@ -59,6 +59,7 @@ from .paper_db import calculate_entry, calculate_exit, execute_paper_buy, execut
 from .live import (
     LiveTradingError,
     PolymarketClobClient,
+    enforce_live_kill_switch_exits,
     execute_live_buy,
     execute_live_sell,
     find_live_position_drifts,
@@ -660,6 +661,11 @@ def main(argv: list[str] | None = None) -> int:
             if not preflight.ok:
                 print(f"live preflight failed: {preflight.reason}")
                 return 2
+            kill_switch_exit = enforce_live_kill_switch_exits(
+                db,
+                client,
+                event_key="live_tick",
+            )
             result = run_live_tick(
                 db,
                 client,
@@ -674,6 +680,14 @@ def main(argv: list[str] | None = None) -> int:
             f"sells={result.sells_filled}/{result.sells_missed} "
             f"signals={result.signals} notes={'; '.join(result.notes)}"
         )
+        if kill_switch_exit.enabled:
+            print(
+                "live kill-switch exits "
+                f"cancel_all={kill_switch_exit.cancel_all_status} "
+                f"sells={kill_switch_exit.sells_filled}/{kill_switch_exit.sells_attempted} "
+                f"missed={kill_switch_exit.sells_missed}",
+                flush=True,
+            )
         return 0
     if args.command == "live-scheduler":
         migrate(db)
@@ -706,6 +720,19 @@ def main(argv: list[str] | None = None) -> int:
             if not preflight.ok:
                 print(f"live preflight failed: {preflight.reason}")
                 return 2
+            kill_switch_exit = enforce_live_kill_switch_exits(
+                db,
+                client,
+                event_key="live_scheduler_startup",
+            )
+            if kill_switch_exit.enabled:
+                print(
+                    "live kill-switch exits "
+                    f"cancel_all={kill_switch_exit.cancel_all_status} "
+                    f"sells={kill_switch_exit.sells_filled}/{kill_switch_exit.sells_attempted} "
+                    f"missed={kill_switch_exit.sells_missed}",
+                    flush=True,
+                )
             drift_count = len(find_live_position_drifts(db, client))
             health = evaluate_live_startup_health(
                 market_websocket_connected=not args.no_websockets,
@@ -751,6 +778,11 @@ def main(argv: list[str] | None = None) -> int:
                 db_path, "aws_gis_actual"
             )
             def reconcile_watchdog(tick_db):
+                kill_switch_exit = enforce_live_kill_switch_exits(
+                    tick_db,
+                    client,
+                    event_key="live_reconcile_watchdog",
+                )
                 drifts = find_live_position_drifts(tick_db, client)
                 repaired = 0
                 if drifts:
@@ -765,6 +797,15 @@ def main(argv: list[str] | None = None) -> int:
                     websocket_runtime is not None and not websocket_runtime.all_running
                 )
                 if not drifts and not websocket_stalled:
+                    if kill_switch_exit.enabled:
+                        return RunnerResult(
+                            notes=(
+                                "live kill-switch exits "
+                                f"cancel_all={kill_switch_exit.cancel_all_status} "
+                                f"sells={kill_switch_exit.sells_filled}/{kill_switch_exit.sells_attempted} "
+                                f"missed={kill_switch_exit.sells_missed}",
+                            )
+                        )
                     if repaired:
                         return RunnerResult(
                             notes=(

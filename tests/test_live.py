@@ -10,6 +10,7 @@ from whenitrains.config import Settings
 from whenitrains.live import (
     LiveConfig,
     PolymarketClobClient,
+    enforce_live_kill_switch_exits,
     execute_live_buy,
     execute_live_sell,
     find_live_position_drifts,
@@ -22,6 +23,7 @@ from whenitrains.live import (
     load_live_config,
     preflight_live,
 )
+from whenitrains.polymarket import OrderBook
 from whenitrains.dashboard_server import active_live_positions
 from whenitrains.storage import (
     connect,
@@ -34,6 +36,7 @@ from whenitrains.storage import (
     record_latency_stage,
     set_live_setting,
     store_live_order,
+    store_orderbook,
     latency_duration_summary,
     latency_stages_for_event,
     upsert_live_position,
@@ -56,6 +59,7 @@ class FakeClobClient:
         self.token_balances = token_balances or {}
         self.buys = []
         self.sells = []
+        self.cancel_all_calls = 0
 
     def signer_address(self):
         return "0xsigner"
@@ -73,6 +77,10 @@ class FakeClobClient:
     def sell_fak(self, token_id, price, shares):
         self.sells.append((token_id, price, shares))
         return {"orderID": "sell-1", "status": "matched"}
+
+    def cancel_all(self):
+        self.cancel_all_calls += 1
+        return {"cancelled": True}
 
     def token_balance(self, token_id):
         value = self.token_balances.get(token_id)
@@ -973,6 +981,46 @@ class LiveTests(unittest.TestCase):
             self.assertAlmostEqual(adjustment["fill_shares"], 5.5)
             self.assertEqual(adjustment["event_type"], "live_position_drift_repair")
             self.assertEqual(adjustment["event_key"], "watchdog")
+
+    def test_enforce_live_kill_switch_exits_cancels_orders_and_sells_positions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            set_live_setting(db, "cancel_open_orders_and_exit_positions", True)
+            upsert_live_position(db, "yes25", 12.5, 0.40, 0.0)
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.45, 100)],
+                    asks=[(0.46, 100)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            client = FakeClobClient()
+
+            result = enforce_live_kill_switch_exits(db, client, event_key="kill-switch")
+
+            self.assertEqual(result.cancel_all_status, "ok")
+            self.assertEqual(result.sells_attempted, 1)
+            self.assertEqual(result.sells_filled, 1)
+            self.assertEqual(client.cancel_all_calls, 1)
+            self.assertEqual(client.sells, [("yes25", 0.45, 12.5)])
+            pos = get_live_position(db, "yes25")
+            self.assertAlmostEqual(pos["net_shares"], 0.0)
+            order = db.execute(
+                """
+                select event_type, event_key, reason
+                from live_orders
+                where action = 'SELL'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(order["event_type"], "live_kill_switch")
+            self.assertEqual(order["event_key"], "kill-switch")
+            self.assertEqual(order["reason"], "live kill switch exit")
 
     def test_execute_live_sell_closes_position_from_fill(self):
         with tempfile.TemporaryDirectory() as tmp:
