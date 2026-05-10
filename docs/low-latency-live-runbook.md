@@ -28,7 +28,7 @@ Expected startup behavior:
 - A DB-specific live scheduler lock is acquired.
 - Stale submitted live orders freeze new entries with a `live_stale_submitted_orders` risk event.
 - Live preflight validates credentials, balance, allowance, and kill-switch state.
-- If `WHENITRAINS_ALERT_WEBHOOK_URL` is set, live startup-health and reconcile-health freezes emit JSON webhook alerts.
+- If `WHENITRAINS_ALERT_WEBHOOK_URL` is set, live startup-health freezes, reconcile-health freezes, and filled trade ticks emit JSON webhook alerts.
 
 ## Stop
 

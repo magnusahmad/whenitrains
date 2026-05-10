@@ -808,6 +808,7 @@ def main(argv: list[str] | None = None) -> int:
                     aws_actual_poll_fetch=aws_actual_poll_fetch,
                     aws_actual_poll_learned_times=aws_actual_poll_learned_times,
                     output_label="live-scheduler",
+                    alert_sink=alert_sink,
                 )
             finally:
                 if websocket_runtime is not None:

@@ -7,6 +7,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as day_time, timedelta
 
+from .alerting import AlertMessage, AlertSink
 from .hko import HKT, parse_aws_gis_current_temperature
 from .low_latency import LowLatencyEventQueue, process_next_fast_event
 from .runner import RunnerResult, run_paper_tick
@@ -229,6 +230,7 @@ def run_scheduled_paper_loop(
     aws_actual_poll_learned_times=None,
     output_label: str = "paper-scheduler",
     stop_event: threading.Event | None = None,
+    alert_sink: AlertSink | None = None,
 ) -> None:
     state = SchedulerState()
     scheduler_stop = stop_event or threading.Event()
@@ -375,6 +377,18 @@ def run_scheduled_paper_loop(
                         f"notes={'; '.join(result.notes) or 'n/a'}",
                         flush=True,
                     )
+                    if alert_sink is not None:
+                        alert_sink.send(
+                            AlertMessage(
+                                title=f"{output_label} trade executed",
+                                severity="info",
+                                details={
+                                    "filled_buys": result.buys_filled,
+                                    "filled_sells": result.sells_filled,
+                                    "notes": list(result.notes),
+                                },
+                            )
+                        )
             tick += 1
             if (
                 not scheduler_stop.is_set()

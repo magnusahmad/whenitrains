@@ -179,6 +179,7 @@ class CliDiscoveryTests(unittest.TestCase):
             fake_runtime = FakeRuntime()
 
             def run_loop(*args, **kwargs):
+                self.assertIn("alert_sink", kwargs)
                 kwargs["reconcile_watchdog_fn"](args[0])
                 kwargs["run_tick_fn"](args[0], date(2026, 5, 4))
                 kwargs["fast_event_handler"](args[0], date(2026, 5, 4))
