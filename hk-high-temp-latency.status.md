@@ -232,6 +232,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 combined roadmap verification cleanup pass: added per-test SQLite cleanup hooks for runner, live, low-latency, storage, and orderbook-cache fixture suites, and closed a latency-report setup connection before invoking the CLI. The combined roadmap verification now passes as one process under tracemalloc: `PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.test_live tests.test_cli tests.test_low_latency tests.test_storage tests.test_markets tests.test_orderbook_cache tests.test_recorded_fixtures tests.test_latency_report tests.test_scheduler tests.test_operational_readiness tests.test_alerting tests.test_live_user_stream tests.test_user_websocket tests.test_execution_scheduler tests.test_candidate_planner tests.test_ladder_metadata` ran 286 tests without the previous unclosed-SQLite descriptor cascade.
 
+2026-05-11 checklist submit-to-reject evidence pass: tightened `live-readiness-checklist` so the production evidence plan includes `latency-report order_submitted order_rejected` alongside submit-to-fill timing, matching the roadmap requirement to capture submit-to-fill/reject latency. Verified red/green with `PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_live_readiness_checklist_prints_ordered_evidence_commands`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

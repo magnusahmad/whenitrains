@@ -1769,6 +1769,7 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         command("latency-report", "db_committed", "decision_started"),
         command("latency-report", "decision_started", "order_submitted"),
         command("latency-report", "order_submitted", "fill_confirmed"),
+        command("latency-report", "order_submitted", "order_rejected"),
         command("low-latency-readiness-report", "--require-evidence"),
         command(
             "low-latency-archive-evidence",
