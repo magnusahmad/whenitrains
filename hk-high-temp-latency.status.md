@@ -224,6 +224,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 checksum archive snapshot: regenerated `/private/tmp/whenitrains-low-latency-current-evidence` with `low-latency-archive-evidence --require-evidence`; the manifest now includes SHA-256 entries for every report. `low-latency-verify-evidence-archive --input-dir /private/tmp/whenitrains-low-latency-current-evidence` returned `2` only because the archived `missing_gates` list still contains the live latency, WebSocket, user-channel, reconcile, settlement, drift-scan, auth, network, scheduler, kill-switch, and manual-money evidence gates.
 
+2026-05-11 post-verifier live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` timed out after 8010 ms with `curl: (28) Connection timed out after 8010 milliseconds`. The checksum archive tooling and verifier are ready, but live/account evidence capture remains blocked until the LAN log endpoint is reachable.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
