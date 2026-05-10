@@ -1673,6 +1673,8 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             elif name == "readiness_report.txt":
                 for gate in _missing_readiness_gate_names(text):
                     messages.append(f"evidence archive readiness gate missing: {gate}")
+                for gate in _duplicate_readiness_gate_names(text):
+                    messages.append(f"evidence archive readiness gate duplicate: {gate}")
                 for gate in _non_passing_readiness_gates(text):
                     messages.append(f"evidence archive readiness gate not passing: {gate}")
     manifest_path = input_dir / "manifest.txt"
@@ -1923,6 +1925,19 @@ def _missing_readiness_gate_names(text: str) -> list[str]:
         gate_name, _rest = line[len("gate ") :].split("=", 1)
         observed.add(gate_name)
     return [gate for gate in LOW_LATENCY_READINESS_GATE_NAMES if gate not in observed]
+
+
+def _duplicate_readiness_gate_names(text: str) -> list[str]:
+    observed = set()
+    duplicates: list[str] = []
+    for line in text.splitlines():
+        if not line.startswith("gate ") or "=" not in line:
+            continue
+        gate_name, _rest = line[len("gate ") :].split("=", 1)
+        if gate_name in observed and gate_name not in duplicates:
+            duplicates.append(gate_name)
+        observed.add(gate_name)
+    return duplicates
 
 
 def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
