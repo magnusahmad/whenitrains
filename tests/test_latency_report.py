@@ -13,6 +13,7 @@ from whenitrains.storage import (
     set_live_setting,
     store_raw_snapshot,
     store_live_order,
+    store_trading_decision,
 )
 from whenitrains.cli import main
 
@@ -149,7 +150,48 @@ class LatencyReportTests(unittest.TestCase):
                 "gate submit_to_fill_observed=pass count=1 p95=0.350s",
                 text,
             )
+            self.assertIn(
+                "gate orderbook_age_under_cap=missing count=0 "
+                "p95=n/a threshold=0.250s",
+                text,
+            )
             self.assertIn("gate hko_source_timing_observed=missing count=0", text)
+
+    def test_low_latency_readiness_report_prints_orderbook_age_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_trading_decision(
+                db,
+                event_type="actual",
+                outcome_id="yes25",
+                label="25C",
+                side="YES",
+                action="BUY",
+                status="filled",
+                reason="test",
+                details={"orderbook_state_age_seconds": 0.2},
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn(
+                "gate orderbook_age_under_cap=pass count=1 "
+                "p95=0.200s threshold=0.250s",
+                text,
+            )
 
     def test_low_latency_readiness_report_require_evidence_fails_when_gates_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -185,6 +227,17 @@ class LatencyReportTests(unittest.TestCase):
             record_latency_stage(db, "event-1", "decision_started", 10.4, "actual")
             record_latency_stage(db, "event-1", "order_submitted", 10.45, "actual")
             record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
+            store_trading_decision(
+                db,
+                event_type="actual",
+                outcome_id="yes25",
+                label="25C",
+                side="YES",
+                action="BUY",
+                status="filled",
+                reason="test",
+                details={"orderbook_state_age_seconds": 0.2},
+            )
             store_raw_snapshot(
                 db,
                 source="hko",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import os
 import time
 from collections import Counter
@@ -1483,6 +1484,7 @@ def _low_latency_readiness_report(
     commit_to_decision = latency_duration_summary(db, "db_committed", "decision_started")
     decision_to_submit = latency_duration_summary(db, "decision_started", "order_submitted")
     submit_to_fill = latency_duration_summary(db, "order_submitted", "fill_confirmed")
+    orderbook_age = _decision_orderbook_age_summary(db)
     hko_timing_count = _hko_source_timing_count(
         db,
         endpoint_contains=hko_endpoint_contains,
@@ -1502,6 +1504,11 @@ def _low_latency_readiness_report(
         _latency_observed_gate(
             "submit_to_fill_observed",
             submit_to_fill,
+        ),
+        _value_threshold_gate(
+            "orderbook_age_under_cap",
+            orderbook_age,
+            threshold_seconds=Settings.live_orderbook_cache_max_age_seconds,
         ),
         _count_observed_gate("hko_source_timing_observed", hko_timing_count),
     ]
@@ -1538,6 +1545,32 @@ def _low_latency_readiness_report(
     return "\n".join(lines), {
         "all_passed": not missing_gates,
         "missing_gates": missing_gates,
+    }
+
+
+def _decision_orderbook_age_summary(db) -> dict[str, object]:
+    rows = db.execute(
+        """
+        select details_json
+        from paper_decisions
+        where details_json is not null
+        order by id desc
+        """
+    ).fetchall()
+    ages: list[float] = []
+    for row in rows:
+        try:
+            details = json.loads(row["details_json"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        value = details.get("orderbook_state_age_seconds")
+        if isinstance(value, (int, float)):
+            ages.append(float(value))
+    return {
+        "count": len(ages),
+        "p50_seconds": _nearest_rank(ages, 50),
+        "p95_seconds": _nearest_rank(ages, 95),
+        "p99_seconds": _nearest_rank(ages, 99),
     }
 
 
@@ -1583,6 +1616,23 @@ def _latency_observed_gate(name: str, summary: dict[str, object]) -> dict[str, o
     count = int(summary["count"])
     status = "pass" if count > 0 else "missing"
     line = f"gate {name}={status} count={count} p95={_fmt_seconds(summary['p95_seconds'])}"
+    return {"name": name, "status": status, "line": line}
+
+
+def _value_threshold_gate(
+    name: str,
+    summary: dict[str, object],
+    *,
+    threshold_seconds: float,
+) -> dict[str, object]:
+    p95 = summary["p95_seconds"]
+    count = int(summary["count"])
+    passed = count > 0 and p95 is not None and float(p95) <= threshold_seconds
+    status = "pass" if passed else "missing"
+    line = (
+        f"gate {name}={status} count={count} "
+        f"p95={_fmt_seconds(p95)} threshold={_fmt_seconds(threshold_seconds)}"
+    )
     return {"name": name, "status": status, "line": line}
 
 

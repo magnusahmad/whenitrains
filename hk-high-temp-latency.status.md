@@ -160,6 +160,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 network smoke fail-closed pass: `live-network-smoke --live --require-connected` now exits `2` unless the scheduler-owned WebSocket runtime is alive, at least two market/user clients are reported, and every reported client has connected at least once. The runbook and readiness audit now use this stricter no-trade smoke command for live network evidence. Verification covers the previously successful no-trade smoke path, the failed connected-once gate, and the missing-client-count gate.
 
+2026-05-11 orderbook-age evidence gate pass: `low-latency-readiness-report` now summarizes recorded `orderbook_state_age_seconds` decision details and includes an `orderbook_age_under_cap` gate using `Settings.live_orderbook_cache_max_age_seconds`. `--require-evidence` now fails if no book-age rows are present or the observed p95 exceeds the live cache cap, so capped live evidence must include fresh book state. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
