@@ -2085,7 +2085,7 @@ def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
         except ValueError:
             invalid.append("created_at_utc")
         else:
-            if parsed_created_at.tzinfo is None:
+            if parsed_created_at.tzinfo is None or parsed_created_at.utcoffset() != timedelta(0):
                 invalid.append("created_at_utc")
     db_path = _manifest_value(manifest, "db_path")
     if db_path is not None and not db_path.strip():
