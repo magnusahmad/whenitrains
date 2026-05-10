@@ -238,6 +238,10 @@ def main(argv: list[str] | None = None) -> int:
     live_sell.add_argument("--yes-i-understand", action="store_true")
     live_reconcile = sub.add_parser("live-reconcile")
     live_reconcile.add_argument("--live", action="store_true")
+    live_settlement_validate = sub.add_parser("live-settlement-validate")
+    live_settlement_validate.add_argument("--live", action="store_true")
+    live_settlement_validate.add_argument("--order-id", type=int, required=True)
+    live_settlement_validate.add_argument("--reference", required=True)
     live_cancel_order = sub.add_parser("live-cancel-order")
     live_cancel_order.add_argument("order_id")
     live_cancel_order.add_argument("--live", action="store_true")
@@ -742,6 +746,34 @@ def main(argv: list[str] | None = None) -> int:
             f"open={reconcile_result.orders_open} "
             f"errors={reconcile_result.orders_error} "
             f"rebuilt_positions={reconcile_result.rebuilt_positions}"
+        )
+        return 0
+    if args.command == "live-settlement-validate":
+        migrate(db)
+        if not args.live:
+            print("refusing live settlement validation without --live")
+            return 2
+        row = db.execute(
+            "select * from live_orders where id = ?",
+            (args.order_id,),
+        ).fetchone()
+        if row is None:
+            print(f"live settlement validation failed: order {args.order_id} not found")
+            return 2
+        if not _is_filled_live_settlement_row(row):
+            print(
+                "live settlement validation failed: "
+                f"order {args.order_id} is not a filled settlement"
+            )
+            return 2
+        _record_live_settlement_validation(
+            db,
+            live_order=row,
+            reference=args.reference,
+        )
+        print(
+            f"validated live settlement order_id={args.order_id} "
+            f"outcome={row['outcome_id']} reference={args.reference}"
         )
         return 0
     if args.command == "live-cancel-order":
@@ -1534,6 +1566,14 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         command("live-scheduler", "--live", "--ticks", args.scheduler_ticks, "--verbose"),
         "10. validate live settlement against CLOB/onchain truth after a resolved market",
         command("live-reconcile", "--live"),
+        command(
+            "live-settlement-validate",
+            "--live",
+            "--order-id",
+            "<live-settlement-order-id>",
+            "--reference",
+            "<CLOB/onchain-reference>",
+        ),
         "archive dashboard/live account evidence that any resolved-market local settlement matches CLOB/onchain state",
         "11. archive latency percentiles and readiness gates from the production DB",
         command("latency-report", "db_committed", "decision_started"),
@@ -1675,6 +1715,27 @@ def _record_live_kill_switch_verification(
     )
 
 
+def _record_live_settlement_validation(
+    db,
+    *,
+    live_order,
+    reference: str,
+) -> None:
+    store_risk_event(
+        db,
+        "live_settlement_validation_ok",
+        "info",
+        {
+            "live_order_id": int(live_order["id"]),
+            "outcome_id": live_order["outcome_id"],
+            "event_key": live_order["event_key"],
+            "fill_price": live_order["fill_price"],
+            "fill_shares": live_order["fill_shares"],
+            "reference": reference,
+        },
+    )
+
+
 def _hko_source_timing_report(
     db,
     *,
@@ -1803,6 +1864,7 @@ def _low_latency_readiness_report(
     live_network_smoke = _live_network_smoke_summary(db)
     live_scheduler_smoke = _live_scheduler_smoke_summary(db)
     live_kill_switch_verification = _live_kill_switch_verification_summary(db)
+    live_settlement_validation_count = _live_settlement_validation_count(db)
     manual_live_buy_count = _manual_live_order_count(db, action="BUY")
     manual_live_sell_count = _manual_live_order_count(db, action="SELL")
     live = live_dashboard_stats(db)
@@ -1858,6 +1920,10 @@ def _low_latency_readiness_report(
         _count_observed_gate("user_channel_trade_applied", user_trade_applied_count),
         _count_observed_gate("live_reconcile_observed", live_reconcile_count),
         _count_observed_gate("live_settlement_observed", live_settlement_count),
+        _count_observed_gate(
+            "live_settlement_validated",
+            live_settlement_validation_count,
+        ),
         _live_clob_drift_scan_gate(live_clob_drift_scan),
         _live_auth_smoke_gate(live_auth_smoke),
         _live_network_smoke_gate(live_network_smoke),
@@ -2026,6 +2092,25 @@ def _live_settlement_count(db) -> int:
             or event_type = 'market_resolution'
             or reason = 'resolved market settlement'
           )
+        """
+    ).fetchone()
+    return int(row["count"] or 0)
+
+
+def _is_filled_live_settlement_row(row) -> bool:
+    return row["status"] == "filled" and (
+        row["side"] == "SETTLEMENT"
+        or row["event_type"] == "market_resolution"
+        or row["reason"] == "resolved market settlement"
+    )
+
+
+def _live_settlement_validation_count(db) -> int:
+    row = db.execute(
+        """
+        select count(*) as count
+        from risk_events
+        where event_type = 'live_settlement_validation_ok'
         """
     ).fetchone()
     return int(row["count"] or 0)

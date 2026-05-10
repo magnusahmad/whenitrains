@@ -29,6 +29,7 @@ from whenitrains.storage import (
     connect,
     live_setting_enabled,
     migrate,
+    store_live_order,
     store_polymarket_event,
     store_raw_snapshot,
 )
@@ -512,6 +513,92 @@ class CliDiscoveryTests(unittest.TestCase):
                 self.assertFalse(live_setting_enabled(db, "block_new_entries"))
             finally:
                 db.close()
+
+    def test_live_settlement_validate_records_validation_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            order_id = store_live_order(
+                db,
+                outcome_id="yes25",
+                side="SETTLEMENT",
+                action="SELL",
+                status="filled",
+                event_type="market_resolution",
+                event_key="market_resolution:2026-05-11:yes25",
+                fill_price=1.0,
+                fill_size_usd=25.0,
+                fill_shares=25.0,
+                reason="resolved market settlement",
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-settlement-validate",
+                        "--live",
+                        "--order-id",
+                        str(order_id),
+                        "--reference",
+                        "clob-trade-123/onchain-456",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn(f"validated live settlement order_id={order_id}", stdout.getvalue())
+            db = connect(db_path)
+            try:
+                event = db.execute(
+                    "select event_type, severity, details_json from risk_events order by id desc limit 1"
+                ).fetchone()
+                self.assertEqual(event["event_type"], "live_settlement_validation_ok")
+                self.assertEqual(event["severity"], "info")
+                self.assertIn(f'"live_order_id": {order_id}', event["details_json"])
+                self.assertIn('"reference": "clob-trade-123/onchain-456"', event["details_json"])
+            finally:
+                db.close()
+
+    def test_live_settlement_validate_rejects_non_settlement_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            order_id = store_live_order(
+                db,
+                outcome_id="yes25",
+                side="BUY_YES",
+                action="BUY",
+                status="filled",
+                event_type="manual_live",
+                fill_price=0.2,
+                fill_size_usd=5.0,
+                fill_shares=25.0,
+                reason="manual live buy",
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-settlement-validate",
+                        "--live",
+                        "--order-id",
+                        str(order_id),
+                        "--reference",
+                        "not-settlement",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("not a filled settlement", stdout.getvalue())
 
     def test_live_network_smoke_require_connected_fails_when_client_never_connected(self):
         with tempfile.TemporaryDirectory() as tmp:
