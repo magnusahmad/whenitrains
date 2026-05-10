@@ -1637,7 +1637,7 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
         if name == "manifest.txt":
             continue
         path = input_dir / name
-        if path.is_file() and path.stat().st_size == 0:
+        if path.is_file() and not path.read_text().strip():
             messages.append(f"evidence archive file empty: {name}")
     manifest_path = input_dir / "manifest.txt"
     manifest = manifest_path.read_text() if manifest_path.is_file() else ""

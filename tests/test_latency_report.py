@@ -380,7 +380,7 @@ class LatencyReportTests(unittest.TestCase):
             output_dir = Path(tmp) / "evidence"
             _write_complete_evidence_archive(output_dir)
             empty_report = output_dir / "latency_db_committed_to_decision_started.txt"
-            empty_report.write_text("")
+            empty_report.write_text(" \n\t\n")
             digest = hashlib.sha256(empty_report.read_bytes()).hexdigest()
             manifest = (output_dir / "manifest.txt").read_text()
             (output_dir / "manifest.txt").write_text(

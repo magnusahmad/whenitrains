@@ -252,6 +252,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 evidence archive non-empty verifier pass: tightened `low-latency-verify-evidence-archive` so required report files must be non-empty even when their SHA-256 checksums match the manifest. This prevents an empty report placeholder from passing final evidence verification. Verified red/green with `PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_fails_empty_report_file`.
 
+2026-05-11 evidence archive non-blank verifier pass: tightened `low-latency-verify-evidence-archive` again so required report files must contain non-whitespace text, not merely bytes, even when their SHA-256 checksums match the manifest. Verified red/green by changing `tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_fails_empty_report_file` to use a whitespace-only report.
+
 2026-05-11 post-empty-archive-verifier live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 0 ms: Couldn't connect to server`. Live/account evidence remains blocked on endpoint availability.
 
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
