@@ -12,6 +12,7 @@ from .config import Settings
 from .engine import TradeCandidate
 from .execution_scheduler import ExecutionScheduler
 from .hko import HKT
+from .ladder_metadata import build_active_ladder_metadata
 from .markets import PredicateType, parse_outcome_label, predicate_matches
 from .paper_db import execute_paper_buy, execute_paper_sell
 from .polymarket import Outcome, fetch_orderbook
@@ -684,7 +685,11 @@ def _execute_position_sell(
     )
 
 
-def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerResult:
+def process_actual_entries(
+    db: sqlite3.Connection,
+    today_hkt: date,
+    ladder_rows: dict[str, list[sqlite3.Row]] | None = None,
+) -> RunnerResult:
     transitions = observed_max_increases(db, today_hkt.isoformat())
     min_transitions = observed_min_decreases(db, today_hkt.isoformat())
     aws_transitions = [
@@ -699,10 +704,19 @@ def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerRes
         min_transitions = aws_min_transitions
     if not transitions and not min_transitions:
         return RunnerResult(notes=("need two observed maxes/mins",))
+    build_active_ladder_metadata(db, target_date_hkt=today_hkt.isoformat())
+    if ladder_rows is None:
+        rows = list_outcomes_for_date(db, today_hkt.isoformat())
+        ladder_rows = {
+            "highest": _highest_temperature_rows(rows),
+            "lowest": _lowest_temperature_rows(rows),
+        }
     aggregate = RunnerResult()
     notes: list[str] = []
     for old, new in transitions:
-        result = _process_actual_transition(db, today_hkt, old, new)
+        result = _process_actual_transition(
+            db, today_hkt, old, new, rows=ladder_rows["highest"]
+        )
         aggregate = RunnerResult(
             buys_filled=aggregate.buys_filled + result.buys_filled,
             buys_missed=aggregate.buys_missed + result.buys_missed,
@@ -713,7 +727,9 @@ def process_actual_entries(db: sqlite3.Connection, today_hkt: date) -> RunnerRes
         )
         notes.extend(result.notes)
     for old, new in min_transitions:
-        result = _process_actual_min_transition(db, today_hkt, old, new)
+        result = _process_actual_min_transition(
+            db, today_hkt, old, new, rows=ladder_rows["lowest"]
+        )
         aggregate = RunnerResult(
             buys_filled=aggregate.buys_filled + result.buys_filled,
             buys_missed=aggregate.buys_missed + result.buys_missed,
@@ -749,7 +765,12 @@ def _is_aws_actual_row(old: sqlite3.Row, new: sqlite3.Row) -> bool:
 
 
 def _process_actual_min_transition(
-    db: sqlite3.Connection, today_hkt: date, old: sqlite3.Row, new: sqlite3.Row
+    db: sqlite3.Connection,
+    today_hkt: date,
+    old: sqlite3.Row,
+    new: sqlite3.Row,
+    *,
+    rows: list[sqlite3.Row] | None = None,
 ) -> RunnerResult:
     old_min = float(old["since_midnight_min_c"])
     new_min = float(new["since_midnight_min_c"])
@@ -772,7 +793,7 @@ def _process_actual_min_transition(
     signals = 0
     event_marked = False
     pending_executions: list[tuple[PlannedCandidateAction, TradeCandidate, float | None]] = []
-    for row in _lowest_temperature_rows(list_outcomes_for_date(db, today_hkt.isoformat())):
+    for row in rows or _lowest_temperature_rows(list_outcomes_for_date(db, today_hkt.isoformat())):
         predicate = parse_outcome_label(row["label"])
         side = _actual_low_cross_side(predicate, old_min, new_min)
         if side is None:
@@ -892,7 +913,12 @@ def _process_actual_min_transition(
 
 
 def _process_actual_transition(
-    db: sqlite3.Connection, today_hkt: date, old: sqlite3.Row, new: sqlite3.Row
+    db: sqlite3.Connection,
+    today_hkt: date,
+    old: sqlite3.Row,
+    new: sqlite3.Row,
+    *,
+    rows: list[sqlite3.Row] | None = None,
 ) -> RunnerResult:
     old_max = float(old["since_midnight_max_c"])
     new_max = float(new["since_midnight_max_c"])
@@ -918,7 +944,7 @@ def _process_actual_transition(
     signals = 0
     event_marked = False
     pending_executions: list[tuple[PlannedCandidateAction, TradeCandidate, float | None]] = []
-    for row in _highest_temperature_rows(list_outcomes_for_date(db, today_hkt.isoformat())):
+    for row in rows or _highest_temperature_rows(list_outcomes_for_date(db, today_hkt.isoformat())):
         predicate = parse_outcome_label(row["label"])
         side = _actual_cross_side(predicate, old_max, new_max)
         if side is None:

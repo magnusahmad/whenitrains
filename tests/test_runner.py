@@ -1580,6 +1580,50 @@ class RunnerTests(unittest.TestCase):
             )
             self.assertTrue(all(action.candidate_key.startswith("actual_cross:") for action in bridge_calls[0]))
 
+    def test_actual_cross_builds_ladder_metadata_once_for_hot_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m30",
+                        label="30°C or higher",
+                        predicate=parse_outcome_label("30°C or higher"),
+                        yes_token_id="yes30",
+                        no_token_id="no30",
+                    )
+                ],
+            )
+            _store_forecast(db, 29, "2026-05-04T00:45:00+08:00")
+            _store_observation(db, 29.0)
+            _store_observation(db, 30.0)
+            _store_book_pair(db, "yes30", old_ask=0.40, new_ask=0.405)
+            _store_book_pair(db, "no30", old_ask=0.60, new_ask=0.60)
+            rows = list(db.execute(
+                """
+                select o.id, o.market_id, o.polymarket_market_id, o.label,
+                       o.predicate_type, o.predicate_value_c, o.yes_token_id, o.no_token_id,
+                       m.target_date_hkt, m.slug
+                from outcomes o
+                join markets m on m.id = o.market_id
+                order by o.id
+                """
+            ))
+
+            with patch("whenitrains.runner.build_active_ladder_metadata") as metadata, patch(
+                "whenitrains.runner.list_outcomes_for_date",
+                side_effect=AssertionError("hot path should use precomputed ladder rows"),
+            ):
+                metadata.return_value = []
+                result = process_actual_entries(
+                    db,
+                    date(2026, 5, 4),
+                    ladder_rows={"highest": rows, "lowest": []},
+                )
+
+            self.assertEqual(result.buys_filled, 1)
+            metadata.assert_called_once()
+
     def test_actual_cross_fast_lane_skips_exact_yes_when_latest_forecast_later_hour_reaches_actual(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
