@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import json
 import os
 import shlex
@@ -1603,6 +1604,9 @@ def _archive_low_latency_evidence(
     manifest_lines.append(f"all_gates_passed={gate_status['all_passed']}")
     if gate_status["missing_gates"]:
         manifest_lines.append("missing_gates=" + ",".join(gate_status["missing_gates"]))
+    manifest_lines.append("checksums:")
+    for path in written:
+        manifest_lines.append(f"sha256 {path.name}={_sha256_file(path)}")
     manifest_path = output_dir / "manifest.txt"
     manifest_path.write_text("\n".join(manifest_lines) + "\n")
     written.append(manifest_path)
@@ -1647,7 +1651,34 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             "evidence archive manifest entries missing: "
             + ", ".join(missing_manifest_entries)
         )
+    for name, expected_digest in _manifest_checksums(manifest).items():
+        if name == "manifest.txt":
+            continue
+        path = input_dir / name
+        if not path.is_file():
+            continue
+        actual_digest = _sha256_file(path)
+        if actual_digest != expected_digest:
+            messages.append(f"evidence archive checksum mismatch: {name}")
     return not messages, messages
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _manifest_checksums(manifest: str) -> dict[str, str]:
+    checksums: dict[str, str] = {}
+    for line in manifest.splitlines():
+        if not line.startswith("sha256 ") or "=" not in line:
+            continue
+        name, digest = line[len("sha256 ") :].split("=", 1)
+        checksums[name] = digest
+    return checksums
 
 
 def _manifest_value(manifest: str, key: str) -> str | None:

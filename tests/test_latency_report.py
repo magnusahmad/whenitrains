@@ -116,6 +116,7 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("db_path=", manifest)
             self.assertIn("readiness_report.txt", manifest)
             self.assertIn("latency_db_committed_to_decision_started.txt", manifest)
+            self.assertIn("sha256 latency_db_committed_to_decision_started.txt=", manifest)
             readiness = (output_dir / "readiness_report.txt").read_text()
             self.assertIn("low latency readiness report", readiness)
             latency = (output_dir / "latency_db_committed_to_decision_started.txt").read_text()
@@ -225,6 +226,38 @@ class LatencyReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn("evidence archive gates missing:", stdout.getvalue())
             self.assertIn("hko_commit_to_decision_under_1s", stdout.getvalue())
+
+    def test_low_latency_verify_evidence_archive_fails_checksum_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            output_dir = Path(tmp) / "evidence"
+            db = connect(db_path)
+            migrate(db)
+            db.close()
+            with redirect_stdout(StringIO()):
+                main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-archive-evidence",
+                        "--output-dir",
+                        str(output_dir),
+                    ]
+                )
+            (output_dir / "readiness_report.txt").write_text("tampered\n")
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("evidence archive checksum mismatch: readiness_report.txt", stdout.getvalue())
 
     def test_low_latency_readiness_report_prints_latency_and_live_state(self):
         with tempfile.TemporaryDirectory() as tmp:
