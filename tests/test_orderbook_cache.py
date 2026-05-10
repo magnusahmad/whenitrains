@@ -2,6 +2,8 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from sqlite3 import ProgrammingError
+from unittest.mock import patch
 
 from whenitrains.orderbook_cache import (
     BookCacheStale,
@@ -21,6 +23,27 @@ from whenitrains.storage import (
 
 
 class OrderBookCacheTests(unittest.TestCase):
+    def setUp(self):
+        self._opened_dbs = []
+        original_connect = connect
+
+        def tracked_connect(*args, **kwargs):
+            db = original_connect(*args, **kwargs)
+            self._opened_dbs.append(db)
+            return db
+
+        self._connect_patcher = patch(f"{__name__}.connect", tracked_connect)
+        self._connect_patcher.start()
+        self.addCleanup(self._connect_patcher.stop)
+        self.addCleanup(self._close_opened_dbs)
+
+    def _close_opened_dbs(self):
+        for db in reversed(self._opened_dbs):
+            try:
+                db.close()
+            except ProgrammingError:
+                pass
+
     def test_subscription_payload_uses_custom_feature_flag(self):
         subscription = MarketWebSocketSubscription(["yes26", "no26"])
 

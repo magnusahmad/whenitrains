@@ -230,6 +230,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-cleanup live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 1 ms: Couldn't connect to server`. Live/account evidence capture remains blocked on endpoint availability.
 
+2026-05-11 combined roadmap verification cleanup pass: added per-test SQLite cleanup hooks for runner, live, low-latency, storage, and orderbook-cache fixture suites, and closed a latency-report setup connection before invoking the CLI. The combined roadmap verification now passes as one process under tracemalloc: `PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.test_live tests.test_cli tests.test_low_latency tests.test_storage tests.test_markets tests.test_orderbook_cache tests.test_recorded_fixtures tests.test_latency_report tests.test_scheduler tests.test_operational_readiness tests.test_alerting tests.test_live_user_stream tests.test_user_websocket tests.test_execution_scheduler tests.test_candidate_planner tests.test_ladder_metadata` ran 286 tests without the previous unclosed-SQLite descriptor cascade.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

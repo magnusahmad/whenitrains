@@ -16,7 +16,7 @@ Local implementation is substantially complete and covered by targeted automated
 - Production p50/p95/p99 evidence for DB-commit-to-decision, decision-to-submit, submit-to-fill/reject, and local-vs-CLOB drift.
 - Real-account kill-switch and settlement validation against actual CLOB/onchain state.
 
-The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT after tightening evidence archive verification and failed with `curl: (28) Connection timed out after 8010 milliseconds`.
+The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT after CLI/test-harness cleanup and failed with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 1 ms: Couldn't connect to server`.
 
 ## Prompt-To-Artifact Checklist
 
@@ -118,20 +118,14 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 
 ## Latest Verification
 
-Fresh-process verification after the latest local changes:
+Combined verification after the latest local changes:
 
 ```bash
-PYTHONPATH=src python3 -m unittest tests.test_runner
-PYTHONPATH=src python3 -m unittest tests.test_live
-PYTHONPATH=src python3 -m unittest tests.test_cli tests.test_low_latency
-PYTHONPATH=src python3 -m unittest tests.test_storage tests.test_markets tests.test_orderbook_cache
-PYTHONPATH=src python3 -m unittest tests.test_recorded_fixtures
-PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_archive_evidence_writes_reports tests.test_latency_report.LatencyReportTests.test_low_latency_archive_evidence_require_evidence_returns_missing_status_after_writing tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_passes_complete_manifest tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_does_not_touch_database tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_fails_missing_gates tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_fails_missing_checksums tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_fails_checksum_mismatch tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_fails_missing_checksum_file
-PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_hko_source_timing_report_summarizes_aws_fetch_attempts
+PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.test_live tests.test_cli tests.test_low_latency tests.test_storage tests.test_markets tests.test_orderbook_cache tests.test_recorded_fixtures tests.test_latency_report tests.test_scheduler tests.test_operational_readiness tests.test_alerting tests.test_live_user_stream tests.test_user_websocket tests.test_execution_scheduler tests.test_candidate_planner tests.test_ladder_metadata
 git diff --check
 ```
 
-All passed. A single larger combined multi-module run still hit the repository's existing unclosed-SQLite-connection file-descriptor cascade, so fresh-process runs are the reliable local verification until that test harness issue is fixed.
+All passed. The combined roadmap verification ran 286 tests under tracemalloc without the previous unclosed-SQLite ResourceWarning cascade.
 
 ## Next Steps
 

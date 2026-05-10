@@ -102,6 +102,7 @@ class LatencyReportTests(unittest.TestCase):
             migrate(db)
             record_latency_stage(db, "event-1", "db_committed", 10.0, "actual")
             record_latency_stage(db, "event-1", "decision_started", 10.5, "actual")
+            db.close()
             stdout = StringIO()
 
             with redirect_stdout(stdout):

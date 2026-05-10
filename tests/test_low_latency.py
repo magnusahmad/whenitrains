@@ -4,6 +4,7 @@ import threading
 import unittest
 from datetime import date, datetime
 from pathlib import Path
+from sqlite3 import ProgrammingError
 from unittest.mock import patch
 
 from whenitrains.hko import HKT, HkoCurrentTemperature, OcfForecastSample
@@ -29,6 +30,27 @@ from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
 
 
 class LowLatencyReadinessTests(unittest.TestCase):
+    def setUp(self):
+        self._opened_dbs = []
+        original_connect = connect
+
+        def tracked_connect(*args, **kwargs):
+            db = original_connect(*args, **kwargs)
+            self._opened_dbs.append(db)
+            return db
+
+        self._connect_patcher = patch(f"{__name__}.connect", tracked_connect)
+        self._connect_patcher.start()
+        self.addCleanup(self._connect_patcher.stop)
+        self.addCleanup(self._close_opened_dbs)
+
+    def _close_opened_dbs(self):
+        for db in reversed(self._opened_dbs):
+            try:
+                db.close()
+            except ProgrammingError:
+                pass
+
     def test_aws_actual_transition_enqueues_latency_stages_after_commit(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

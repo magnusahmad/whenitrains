@@ -1,6 +1,9 @@
 import tempfile
 import unittest
+from datetime import date, datetime
 from pathlib import Path
+from sqlite3 import ProgrammingError
+from unittest.mock import patch
 
 from whenitrains.hko import (
     HkoCurrentTemperature,
@@ -29,7 +32,6 @@ from whenitrains.storage import (
     store_raw_snapshot,
     store_signal,
 )
-from datetime import date, datetime
 
 
 def _plan_text(rows):
@@ -37,6 +39,27 @@ def _plan_text(rows):
 
 
 class StorageTests(unittest.TestCase):
+    def setUp(self):
+        self._opened_dbs = []
+        original_connect = connect
+
+        def tracked_connect(*args, **kwargs):
+            db = original_connect(*args, **kwargs)
+            self._opened_dbs.append(db)
+            return db
+
+        self._connect_patcher = patch(f"{__name__}.connect", tracked_connect)
+        self._connect_patcher.start()
+        self.addCleanup(self._connect_patcher.stop)
+        self.addCleanup(self._close_opened_dbs)
+
+    def _close_opened_dbs(self):
+        for db in reversed(self._opened_dbs):
+            try:
+                db.close()
+            except ProgrammingError:
+                pass
+
     def test_migrate_creates_scheduler_latency_indexes(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
