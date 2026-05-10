@@ -546,6 +546,16 @@ def main(argv: list[str] | None = None) -> int:
         except LiveTradingError as exc:
             print(f"live auth smoke failed: {exc}")
             return 2
+        _record_live_auth_smoke(
+            db,
+            ok=result.ok,
+            signer_address=result.signer_address,
+            funder_address=result.funder_address,
+            required_balance_usd=Settings.live_scheduler_order_cap_usd,
+            balance_usd=result.balance_usd,
+            allowance_ok=result.allowance_ok,
+            reason=result.reason,
+        )
         print(
             f"auth ok={result.ok} signer={result.signer_address or 'n/a'} "
             f"funder={result.funder_address or 'n/a'} "
@@ -1512,6 +1522,32 @@ def _record_live_clob_drift_scan(
     )
 
 
+def _record_live_auth_smoke(
+    db,
+    *,
+    ok: bool,
+    signer_address: str | None,
+    funder_address: str | None,
+    required_balance_usd: float,
+    balance_usd: float | None,
+    allowance_ok: bool,
+    reason: str,
+) -> None:
+    store_risk_event(
+        db,
+        "live_auth_smoke_ok" if ok else "live_auth_smoke_failed",
+        "info" if ok else "critical",
+        {
+            "signer_address": signer_address,
+            "funder_address": funder_address,
+            "required_balance_usd": required_balance_usd,
+            "balance_usd": balance_usd,
+            "allowance_ok": allowance_ok,
+            "reason": reason,
+        },
+    )
+
+
 def _hko_source_timing_report(
     db,
     *,
@@ -1636,6 +1672,7 @@ def _low_latency_readiness_report(
     live_reconcile_count = _live_reconcile_count(db)
     live_settlement_count = _live_settlement_count(db)
     live_clob_drift_scan = _live_clob_drift_scan_summary(db)
+    live_auth_smoke = _live_auth_smoke_summary(db)
     live = live_dashboard_stats(db)
     counts = live["counts"]
     gates = [
@@ -1690,6 +1727,7 @@ def _low_latency_readiness_report(
         _count_observed_gate("live_reconcile_observed", live_reconcile_count),
         _count_observed_gate("live_settlement_observed", live_settlement_count),
         _live_clob_drift_scan_gate(live_clob_drift_scan),
+        _live_auth_smoke_gate(live_auth_smoke),
         _live_money_state_gate(db, live),
         _kill_switch_clear_gate(live),
     ]
@@ -1891,6 +1929,29 @@ def _live_clob_drift_scan_summary(db) -> dict[str, object]:
     }
 
 
+def _live_auth_smoke_summary(db) -> dict[str, object]:
+    ok_row = db.execute(
+        """
+        select count(*) as count
+        from risk_events
+        where event_type = 'live_auth_smoke_ok'
+        """
+    ).fetchone()
+    latest_row = db.execute(
+        """
+        select event_type
+        from risk_events
+        where event_type in ('live_auth_smoke_ok', 'live_auth_smoke_failed')
+        order by id desc
+        limit 1
+        """
+    ).fetchone()
+    latest = "missing"
+    if latest_row is not None:
+        latest = "ok" if latest_row["event_type"] == "live_auth_smoke_ok" else "failed"
+    return {"ok_count": int(ok_row["count"] or 0), "latest": latest}
+
+
 def _websocket_orderbook_snapshot_count(db) -> int:
     row = db.execute(
         """
@@ -1986,6 +2047,15 @@ def _live_clob_drift_scan_gate(summary: dict[str, object]) -> dict[str, object]:
         f"count={clear_count} latest={latest} latest_drift_count={drift_count_text}"
     )
     return {"name": "live_clob_drift_scan_clear", "status": status, "line": line}
+
+
+def _live_auth_smoke_gate(summary: dict[str, object]) -> dict[str, object]:
+    ok_count = int(summary["ok_count"])
+    latest = str(summary["latest"])
+    passed = ok_count > 0 and latest == "ok"
+    status = "pass" if passed else "missing"
+    line = f"gate live_auth_smoke_ok={status} count={ok_count} latest={latest}"
+    return {"name": "live_auth_smoke_ok", "status": status, "line": line}
 
 
 def _live_money_state_gate(db, live: dict[str, object]) -> dict[str, object]:

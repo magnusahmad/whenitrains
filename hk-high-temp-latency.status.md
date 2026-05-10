@@ -198,6 +198,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 latest live drift scan gate pass: the CLOB drift readiness gate now evaluates the latest `live_clob_drift_scan_clear`/`live_clob_drift_scan_drift` event instead of accepting any historical clear scan, so a later local-vs-CLOB drift scan blocks `low-latency-readiness-report --require-evidence` until a new clean scan is recorded. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_readiness_report_fails_when_latest_drift_scan_has_drift`.
 
+2026-05-11 live auth smoke evidence gate pass: `live-auth-smoke --live` now records `live_auth_smoke_ok` or `live_auth_smoke_failed` risk events with signer/funder, required balance, observed balance, allowance state, and reason. `low-latency-readiness-report --require-evidence` now requires the latest live auth smoke event to be OK, so stale credential evidence cannot satisfy readiness after a later failed auth/balance/allowance check. Verified with `PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_live_auth_smoke_prints_required_balance_threshold tests.test_latency_report.LatencyReportTests.test_low_latency_readiness_report_fails_when_latest_auth_smoke_failed`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

@@ -370,6 +370,22 @@ class CliDiscoveryTests(unittest.TestCase):
                 f"required_balance_usd={preflight_calls[0][1]:.2f}",
                 stdout.getvalue(),
             )
+            db = connect(db_path)
+            try:
+                event = db.execute(
+                    """
+                    select event_type, severity, details_json
+                    from risk_events
+                    order by id desc
+                    limit 1
+                    """
+                ).fetchone()
+                self.assertEqual(event["event_type"], "live_auth_smoke_ok")
+                self.assertEqual(event["severity"], "info")
+                self.assertIn('"signer_address": "0xsigner"', event["details_json"])
+                self.assertIn('"required_balance_usd":', event["details_json"])
+            finally:
+                db.close()
 
     def test_live_readiness_checklist_prints_ordered_evidence_commands(self):
         stdout = StringIO()

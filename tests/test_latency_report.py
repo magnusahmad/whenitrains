@@ -342,6 +342,19 @@ class LatencyReportTests(unittest.TestCase):
                 "info",
                 {"phase": "readiness-fixture", "drift_count": 0},
             )
+            store_risk_event(
+                db,
+                "live_auth_smoke_ok",
+                "info",
+                {
+                    "signer_address": "0xsigner",
+                    "funder_address": "0xfunder",
+                    "required_balance_usd": 5.0,
+                    "balance_usd": 42.0,
+                    "allowance_ok": True,
+                    "reason": "ok",
+                },
+            )
             db.close()
             stdout = StringIO()
 
@@ -369,7 +382,45 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("gate live_reconcile_observed=pass count=1", text)
             self.assertIn("gate live_settlement_observed=pass count=1", text)
             self.assertIn("gate live_clob_drift_scan_clear=pass count=1", text)
+            self.assertIn("gate live_auth_smoke_ok=pass count=1 latest=ok", text)
             self.assertNotIn("readiness evidence missing", text)
+
+    def test_low_latency_readiness_report_fails_when_latest_auth_smoke_failed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_risk_event(
+                db,
+                "live_auth_smoke_ok",
+                "info",
+                {"signer_address": "0xsigner", "reason": "ok"},
+            )
+            store_risk_event(
+                db,
+                "live_auth_smoke_failed",
+                "critical",
+                {"signer_address": "0xsigner", "reason": "insufficient allowance"},
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "gate live_auth_smoke_ok=missing count=1 latest=failed",
+                text,
+            )
 
     def test_low_latency_readiness_report_fails_when_latest_drift_scan_has_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
