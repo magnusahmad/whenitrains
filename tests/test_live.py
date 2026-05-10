@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from whenitrains.config import Settings
 from whenitrains.live import (
     LiveConfig,
     PolymarketClobClient,
@@ -147,6 +148,9 @@ class RawBalanceAllowanceClient:
 
 
 class LiveTests(unittest.TestCase):
+    def test_live_scheduler_buy_cap_is_five_usd(self):
+        self.assertEqual(Settings.live_scheduler_order_cap_usd, 5.0)
+
     def test_migrate_adds_live_tables(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
@@ -635,6 +639,60 @@ class LiveTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertAlmostEqual(result.balance_usd, 10.0)
             self.assertEqual(result.reason, "insufficient balance")
+
+    def test_preflight_can_skip_entry_capacity_for_exit_only_scheduler_startup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            config = LiveConfig(
+                trading_mode="live",
+                private_key="0xabc",
+                signature_type=3,
+                funder_address="0xfunder",
+                api_key="api",
+                api_secret="secret",
+                api_passphrase="passphrase",
+            )
+            client = RawBalanceAllowanceClient({"balance": "4000000", "allowance": "0"})
+
+            result = preflight_live(
+                db,
+                client,
+                config,
+                required_balance_usd=20.0,
+                require_entry_capacity=False,
+            )
+
+            self.assertTrue(result.ok)
+            self.assertAlmostEqual(result.balance_usd, 4.0)
+            self.assertEqual(result.reason, "ok")
+
+    def test_preflight_can_skip_entry_block_for_exit_only_scheduler_startup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            set_live_setting(db, "block_new_entries", True)
+            config = LiveConfig(
+                trading_mode="live",
+                private_key="0xabc",
+                signature_type=3,
+                funder_address="0xfunder",
+                api_key="api",
+                api_secret="secret",
+                api_passphrase="passphrase",
+            )
+            client = RawBalanceAllowanceClient({"balance": "4000000", "allowance": "0"})
+
+            result = preflight_live(
+                db,
+                client,
+                config,
+                required_balance_usd=20.0,
+                require_entry_capacity=False,
+            )
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.reason, "ok")
 
     def test_execute_live_buy_blocks_when_kill_switch_enabled(self):
         with tempfile.TemporaryDirectory() as tmp:

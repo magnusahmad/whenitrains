@@ -625,6 +625,7 @@ def main(argv: list[str] | None = None) -> int:
                 client,
                 config,
                 required_balance_usd=Settings.live_scheduler_order_cap_usd,
+                require_entry_capacity=False,
             )
             if not preflight.ok:
                 print(f"live preflight failed: {preflight.reason}")
@@ -663,6 +664,7 @@ def main(argv: list[str] | None = None) -> int:
                 client,
                 config,
                 required_balance_usd=Settings.live_scheduler_order_cap_usd,
+                require_entry_capacity=False,
             )
             if not preflight.ok:
                 print(f"live preflight failed: {preflight.reason}")

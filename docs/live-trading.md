@@ -323,7 +323,7 @@ Live mode must include these hard gates before the first real order:
 Recommended initial live caps:
 
 - Manual real-money smoke cap: `5 USD`.
-- Initial live scheduler order cap: `20 USD`.
+- Live scheduler order cap: `5 USD`.
 - Initial total open exposure cap: `200 USD` cost basis across all live HK highest-temperature positions.
 - Initial daily realized loss cap: `200 USD`.
 - Disable live forecast-value add-on buys until base entry/exit round trips are tested.

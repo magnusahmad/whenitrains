@@ -34,6 +34,10 @@ The live dashboard now runs the live-order reconcile path before serving live st
 
 Forecast-panel trade markers now include traded live/paper tokens even when the token is missing from the latest orderbook candidate rows. Marker-only traded tokens fall back to their latest fill price, so B/S chart bubbles remain visible after fills on tokens that no longer have a fresh orderbook snapshot.
 
+Live scheduler and live tick startup preflight now distinguish entry capacity from exit capability. Low pUSD cash balance, insufficient entry allowance, or `block_new_entries` can still prevent new buys, but they no longer stop the process before open-position exit checks can submit sells.
+
+Live scheduler buy sizing is reduced to a `5 USD` per-order cap while the strategy proves consistent profitability.
+
 AWS GIS actual readings remain enabled for low-latency current temperature and extrema, but `MAXTEMP`/`MINTEMP` from exactly `00:00 HKT` are treated as previous-day rollover extrema and are not stored as same-day since-midnight max/min values. This prevents a midnight carryover such as `MAXTEMP=26.1` from triggering current-day actual-cross buys.
 
 Relevant existing implementation:
@@ -57,8 +61,11 @@ Session verification on 2026-05-10 HKT:
 - Red/green test added: `test_live_dashboard_reconcile_makes_submitted_fill_visible`.
 - Red/green test added: `test_parse_aws_gis_midnight_extremes_are_previous_day`.
 - Red/green test added: `test_live_forecast_panel_keeps_trade_markers_without_orderbook`.
+- Red/green tests added: `test_preflight_can_skip_entry_capacity_for_exit_only_scheduler_startup` and `test_preflight_can_skip_entry_block_for_exit_only_scheduler_startup`.
+- Red/green test added: `test_live_scheduler_buy_cap_is_five_usd`.
 - `PYTHONPATH=src python3 -m unittest tests.test_dashboard_server` passes.
 - `PYTHONPATH=src python3 -m unittest tests.test_hko` passes.
+- `PYTHONPATH=src python3 -m unittest tests.test_live` passes.
 - Browser visual check completed against `http://127.0.0.1:8788/live` using a temporary `/private/tmp` SQLite DB.
 - Browser visual check completed against `http://127.0.0.1:8789/live` using a temporary `/private/tmp` SQLite DB with a marker-only live trade; one visible `B` bubble rendered with the expected title.
 - `curl -L http://127.0.0.1:8788/api/live/stats` returned a valid live payload.
@@ -77,7 +84,7 @@ Session verification on 2026-05-10 HKT:
 - Signature type: use `POLYMARKET_SIGNATURE_TYPE=3` for this Polymarket proxy-wallet flow.
 - Funder: Polymarket proxy wallet address.
 - Manual real-money smoke cap: `5 USD`.
-- Initial live scheduler order cap: `20 USD`.
+- Live scheduler order cap: `5 USD`.
 - Initial total open exposure cap: `200 USD`.
 - Initial daily realized loss cap: `200 USD`.
 - Order type: `FAK`.
@@ -300,7 +307,7 @@ Deliverables:
 - Preflight.
 - Reconcile before trading.
 - Bounded tick option for trials.
-- Scheduler order size is capped at `20 USD`.
+- Scheduler order size is capped at `5 USD`.
 - Total open exposure cap is enforced at `200 USD`.
 - Daily realized loss cap is enforced at `200 USD`.
 

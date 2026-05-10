@@ -26,7 +26,7 @@ class Settings:
     peak_hour_actual_cross_max_yes_ask: float = 0.80
     forecast_value_max_lead_days: int = 1
     live_manual_order_cap_usd: float = 5.0
-    live_scheduler_order_cap_usd: float = 20.0
+    live_scheduler_order_cap_usd: float = 5.0
     live_total_open_exposure_cap_usd: float = 200.0
     live_daily_realized_loss_cap_usd: float = 200.0
     live_keychain_service: str = "whenitrains-polymarket"

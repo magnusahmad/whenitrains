@@ -498,24 +498,26 @@ def preflight_live(
     config: LiveConfig,
     *,
     required_balance_usd: float = Settings.live_manual_order_cap_usd,
+    require_entry_capacity: bool = True,
     kill_switch_path: Path = Settings.live_kill_switch_path,
 ) -> LivePreflightResult:
     if config.trading_mode != "live":
         return LivePreflightResult(False, None, config.funder_address, None, False, "not live mode")
-    if entries_blocked(db, kill_switch_path=kill_switch_path):
+    if require_entry_capacity and entries_blocked(db, kill_switch_path=kill_switch_path):
         return LivePreflightResult(
             False, client.signer_address(), config.funder_address, None, False, "entries blocked"
         )
     try:
+        required_amount = required_balance_usd if require_entry_capacity else 0.0
         if hasattr(client, "balance_allowance"):
             payload = client.balance_allowance()
             balance = _balance_from_payload(payload)
             allowance_ok = _allowance_ok_from_payload(
-                payload, required_amount_usd=required_balance_usd
+                payload, required_amount_usd=required_amount
             )
         else:
             balance = client.balance_usd()
-            allowance_ok = client.allowance_ok()
+            allowance_ok = True if not require_entry_capacity else client.allowance_ok()
     except Exception as exc:
         return LivePreflightResult(
             False,
@@ -525,7 +527,7 @@ def preflight_live(
             False,
             f"balance/allowance check failed: {type(exc).__name__}",
         )
-    if balance is not None and balance < required_balance_usd:
+    if require_entry_capacity and balance is not None and balance < required_balance_usd:
         return LivePreflightResult(
             False,
             client.signer_address(),
@@ -534,7 +536,7 @@ def preflight_live(
             allowance_ok,
             "insufficient balance",
         )
-    if not allowance_ok:
+    if require_entry_capacity and not allowance_ok:
         return LivePreflightResult(
             False, client.signer_address(), config.funder_address, balance, False, "insufficient allowance"
         )
