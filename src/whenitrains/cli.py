@@ -1641,7 +1641,7 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             messages.append(f"evidence archive file empty: {name}")
     manifest_path = input_dir / "manifest.txt"
     manifest = manifest_path.read_text() if manifest_path.is_file() else ""
-    if "all_gates_passed=True" not in manifest:
+    if _manifest_value(manifest, "all_gates_passed") != "True":
         missing_gates = _manifest_value(manifest, "missing_gates")
         if missing_gates:
             messages.append("evidence archive gates missing: " + missing_gates)
