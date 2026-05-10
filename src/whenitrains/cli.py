@@ -2519,6 +2519,8 @@ def _hko_source_timing_count(
         select count(*) as count
         from raw_snapshots
         where {" and ".join(filters)}
+          and fetch_started_at_utc is not null
+          and response_elapsed_ms is not null
         """,
         params,
     ).fetchone()

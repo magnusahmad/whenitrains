@@ -2575,6 +2575,34 @@ class LatencyReportTests(unittest.TestCase):
                 text,
             )
 
+    def test_low_latency_readiness_report_require_evidence_fails_with_untimed_hko_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_raw_snapshot(
+                db,
+                source="hko",
+                endpoint="https://example.test/latestReadings",
+                payload="{}",
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("gate hko_source_timing_observed=missing count=0", text)
+
     def test_low_latency_readiness_report_require_evidence_fails_on_ambiguous_live_money_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

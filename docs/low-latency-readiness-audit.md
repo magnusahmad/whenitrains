@@ -91,7 +91,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - Learned AWS GIS publish windows include sub-second burst cadence.
 - Non-critical source backoff does not suppress AWS actual polling.
 - HKO source timing is persisted for audit.
-- `hko-source-timing-report` summarizes persisted HKO raw snapshot timings, response latency percentiles, fetch-second offsets, HTTP `Last-Modified` minute offsets, and fetch-to-public-availability offsets for live dry-run evidence.
+- `hko-source-timing-report` summarizes persisted HKO raw snapshot timings, response latency percentiles, fetch-second offsets, HTTP `Last-Modified` minute offsets, and fetch-to-public-availability offsets for live dry-run evidence; `low-latency-readiness-report --require-evidence` only counts HKO source-timing rows that include explicit fetch-start timing and response elapsed milliseconds.
 - `low-latency-readiness-report --require-evidence` requires at least two HKO fetches within the configured burst window around observed public availability, so the production report cannot pass with arbitrary background timing rows alone.
 - Live hot-path buys fail closed when configured WebSocket book cache is stale or missing.
 - Evidence: `src/whenitrains/scheduler.py`, `src/whenitrains/hko.py`, `src/whenitrains/storage.py`, `src/whenitrains/runner.py`.
