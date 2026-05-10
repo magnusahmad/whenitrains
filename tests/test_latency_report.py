@@ -193,6 +193,53 @@ class LatencyReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("verified low latency evidence archive", stdout.getvalue())
 
+    def test_low_latency_verify_evidence_archive_does_not_touch_database(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            output_dir.mkdir()
+            for name in [
+                "latency_db_committed_to_decision_started.txt",
+                "latency_decision_started_to_order_submitted.txt",
+                "latency_order_submitted_to_fill_confirmed.txt",
+                "latency_order_submitted_to_order_rejected.txt",
+                "latency_db_committed_to_decision_completed.txt",
+                "hko_source_timing_report.txt",
+                "readiness_report.txt",
+            ]:
+                (output_dir / name).write_text(f"{name}\n")
+            (output_dir / "manifest.txt").write_text(
+                "\n".join(
+                    [
+                        "low latency evidence archive",
+                        "all_gates_passed=True",
+                        "files:",
+                        "- latency_db_committed_to_decision_started.txt",
+                        "- latency_decision_started_to_order_submitted.txt",
+                        "- latency_order_submitted_to_fill_confirmed.txt",
+                        "- latency_order_submitted_to_order_rejected.txt",
+                        "- latency_db_committed_to_decision_completed.txt",
+                        "- hko_source_timing_report.txt",
+                        "- readiness_report.txt",
+                    ]
+                )
+                + "\n"
+            )
+            db_path = Path(tmp) / "should-not-exist.sqlite3"
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertFalse(db_path.exists())
+
     def test_low_latency_verify_evidence_archive_fails_missing_gates(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

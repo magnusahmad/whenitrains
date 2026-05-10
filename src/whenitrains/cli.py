@@ -300,6 +300,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "live-readiness-checklist":
         print(_render_live_readiness_checklist(args, db_path))
         return 0
+    if args.command == "low-latency-verify-evidence-archive":
+        ok, messages = _verify_low_latency_evidence_archive(Path(args.input_dir))
+        if ok:
+            print(f"verified low latency evidence archive {args.input_dir}")
+            return 0
+        for message in messages:
+            print(message)
+        return 2
 
     db = connect(db_path)
     if args.command == "latency-report":
@@ -351,14 +359,6 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         return 0
-    if args.command == "low-latency-verify-evidence-archive":
-        ok, messages = _verify_low_latency_evidence_archive(Path(args.input_dir))
-        if ok:
-            print(f"verified low latency evidence archive {args.input_dir}")
-            return 0
-        for message in messages:
-            print(message)
-        return 2
     if args.command == "init-db":
         migrate(db)
         print(f"initialized {args.db}")
