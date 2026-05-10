@@ -761,13 +761,20 @@ def store_ocf_forecast_samples(
         )
 
 
-def store_polymarket_event(db: sqlite3.Connection, market: TemperatureMarket) -> None:
+def store_polymarket_event(
+    db: sqlite3.Connection,
+    market: TemperatureMarket,
+    *,
+    event_queue=None,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> None:
     existing = db.execute(
-        "select id from markets where slug = ? order by id desc limit 1",
+        "select id, status, target_date_hkt from markets where slug = ? order by id desc limit 1",
         (market.event_slug,),
     ).fetchone()
     if existing is not None:
         local_market_id = int(existing["id"])
+        previous_status = str(existing["status"] or "")
         db.execute(
             """
             update markets
@@ -783,13 +790,30 @@ def store_polymarket_event(db: sqlite3.Connection, market: TemperatureMarket) ->
                 market.event_id,
                 market.title,
                 market.target_date.isoformat() if market.target_date else None,
-                "active",
+                market.status,
                 market.resolution_rules_text,
                 json.dumps(market.raw_event or {}),
                 local_market_id,
             ),
         )
         db.commit()
+        if (
+            event_queue is not None
+            and market.target_date is not None
+            and previous_status != market.status
+        ):
+            from .low_latency import enqueue_market_resolution_event
+
+            enqueue_market_resolution_event(
+                db,
+                event_queue,
+                market_id=local_market_id,
+                target_date_hkt=market.target_date.isoformat(),
+                previous_status=previous_status,
+                new_status=market.status,
+                committed_monotonic=monotonic_fn(),
+                monotonic_fn=monotonic_fn,
+            )
         return
     else:
         market_row = db.execute(
@@ -804,7 +828,7 @@ def store_polymarket_event(db: sqlite3.Connection, market: TemperatureMarket) ->
                 market.event_slug,
                 market.title,
                 market.target_date.isoformat() if market.target_date else None,
-                "active",
+                market.status,
                 market.resolution_rules_text,
                 json.dumps(market.raw_event or {}),
             ),

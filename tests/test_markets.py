@@ -59,6 +59,26 @@ class MarketSemanticsTests(unittest.TestCase):
         self.assertEqual(markets[0].outcomes[0].yes_token_id, "YES_TOKEN")
         self.assertEqual(markets[0].outcomes[0].no_token_id, "NO_TOKEN")
         self.assertEqual(markets[0].outcomes[0].predicate.value_c, 25)
+        self.assertEqual(markets[0].status, "active")
+
+    def test_parse_event_markets_preserves_resolution_status(self):
+        event = {
+            "id": "439958",
+            "slug": "highest-temperature-in-hong-kong-on-may-4-2026",
+            "title": "Highest temperature in Hong Kong on May 4?",
+            "eventDate": "2026-05-04",
+            "status": "resolved",
+            "markets": [
+                {
+                    "id": "2137348",
+                    "question": "Will the highest temperature in Hong Kong be 25°C on May 4?",
+                    "groupItemTitle": "25°C",
+                    "clobTokenIds": '["YES_TOKEN", "NO_TOKEN"]',
+                }
+            ],
+        }
+        markets = parse_event_markets(event)
+        self.assertEqual(markets[0].status, "resolved")
 
     def test_current_day_market_filter(self):
         self.assertTrue(is_current_day_market(date(2026, 5, 4), date(2026, 5, 4)))

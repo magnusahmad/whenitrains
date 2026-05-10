@@ -14,10 +14,12 @@ from whenitrains.storage import (
     store_hko_current_temperature,
     store_ocf_forecast_samples,
     store_orderbook,
+    store_polymarket_event,
     store_raw_snapshot,
     store_trading_decision,
 )
-from whenitrains.polymarket import OrderBook
+from whenitrains.markets import parse_outcome_label
+from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
 
 
 class LowLatencyReadinessTests(unittest.TestCase):
@@ -145,6 +147,51 @@ class LowLatencyReadinessTests(unittest.TestCase):
 
             handler.assert_called_once_with(db, date(2026, 5, 4))
 
+    def test_market_resolution_change_enqueues_latency_stages_after_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            queue = LowLatencyEventQueue()
+            clock = _FakeMonotonic([500.0, 500.2])
+
+            store_polymarket_event(db, _market(status="active"))
+            store_polymarket_event(
+                db,
+                _market(status="resolved"),
+                event_queue=queue,
+                monotonic_fn=clock,
+            )
+
+            event = queue.get_nowait()
+            stages = latency_stages_for_event(db, event.event_key)
+
+            self.assertEqual(event.kind, "market_resolution_changed")
+            self.assertEqual(event.target_date_hkt, "2026-05-04")
+            self.assertEqual(event.details["previous_status"], "active")
+            self.assertEqual(event.details["new_status"], "resolved")
+            self.assertEqual(
+                [stage["stage"] for stage in stages],
+                ["db_committed", "event_detected"],
+            )
+
+    def test_fast_worker_dispatches_market_resolution_events_to_exit_handler(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            queue = LowLatencyEventQueue()
+            queue.put(
+                _alpha_event(
+                    kind="market_resolution_changed",
+                    event_key="market_resolution_changed:2026-05-04:1:active->resolved",
+                )
+            )
+
+            with patch("whenitrains.low_latency.process_open_position_exits") as handler:
+                handler.return_value = object()
+                process_next_fast_event(db, queue, monotonic_fn=_FakeMonotonic([600.0, 600.1]))
+
+            handler.assert_called_once_with(db, date(2026, 5, 4))
+
     def test_trading_decision_records_orderbook_state_age(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
@@ -247,4 +294,23 @@ def _alpha_event(kind: str, event_key: str):
         committed_monotonic=100.0,
         detected_monotonic=100.0,
         details={},
+    )
+
+
+def _market(status: str) -> TemperatureMarket:
+    return TemperatureMarket(
+        event_id="event",
+        event_slug="highest-temperature-in-hong-kong-on-may-4-2026",
+        title="Highest temperature in Hong Kong on May 4, 2026?",
+        target_date=date(2026, 5, 4),
+        outcomes=[
+            Outcome(
+                market_id="m29",
+                label="29°C",
+                predicate=parse_outcome_label("29°C"),
+                yes_token_id="yes29",
+                no_token_id="no29",
+            )
+        ],
+        status=status,
     )

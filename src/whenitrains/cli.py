@@ -801,7 +801,9 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                     learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
                     learned_actual_times=lambda: list_hko_update_times(db, "aws_gis_actual"),
-                    discover_market=lambda target: _discover_markets_for_forecast_dates(db, target),
+                    discover_market=lambda target: _discover_markets_for_forecast_dates(
+                        db, target, event_queue=low_latency_queue
+                    ),
                     fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
                     base_sleep_seconds=args.sleep,
                     max_ticks=args.ticks,
@@ -880,7 +882,9 @@ def main(argv: list[str] | None = None) -> int:
             ),
             learned_forecast_times=lambda: list_hko_update_times(db, "ocf_station"),
             learned_actual_times=lambda: list_hko_update_times(db, "aws_gis_actual"),
-            discover_market=lambda target: _discover_markets_for_forecast_dates(db, target),
+            discover_market=lambda target: _discover_markets_for_forecast_dates(
+                db, target, event_queue=low_latency_queue
+            ),
             fetch_orderbooks=lambda target: _fetch_orderbooks(db, None, quiet=not args.verbose),
             base_sleep_seconds=args.sleep,
             max_ticks=args.ticks,
@@ -1124,7 +1128,7 @@ def _fetch_flw_bulletin(db) -> str:
     return payload
 
 
-def _discover_market(db, target_date) -> bool:
+def _discover_market(db, target_date, *, event_queue=None) -> bool:
     discovered = False
     for slug in event_slugs_for_date(target_date):
         event = fetch_hk_temperature_event(slug)
@@ -1132,7 +1136,7 @@ def _discover_market(db, target_date) -> bool:
             continue
         markets = parse_event_markets(event)
         for market in markets:
-            store_polymarket_event(db, market)
+            store_polymarket_event(db, market, event_queue=event_queue)
             warning = resolution_rules_warning(market)
             if warning is not None:
                 print(f"🚨🚨🚨 RESOLUTION RULES WARNING: {warning} 🚨🚨🚨")
@@ -1150,10 +1154,12 @@ def _discover_market(db, target_date) -> bool:
     return discovered
 
 
-def _discover_markets_for_forecast_dates(db, today_hkt) -> int:
+def _discover_markets_for_forecast_dates(db, today_hkt, *, event_queue=None) -> int:
     discovered = 0
     for forecast_date in list_hko_forecast_dates(db, today_hkt.isoformat()):
-        if _discover_market(db, date.fromisoformat(forecast_date)):
+        if _discover_market(
+            db, date.fromisoformat(forecast_date), event_queue=event_queue
+        ):
             discovered += 1
     return discovered
 

@@ -39,6 +39,7 @@ class TemperatureMarket:
     resolution_rules_text: str = ""
     raw_event: dict[str, Any] = field(default_factory=dict)
     outcomes: list[Outcome] = field(default_factory=list)
+    status: str = "active"
 
 
 @dataclass(frozen=True)
@@ -126,6 +127,7 @@ def parse_event_markets(event: dict[str, Any]) -> list[TemperatureMarket]:
             event_slug=event["slug"],
             title=event["title"],
             target_date=target_date,
+            status=_event_status(event),
             resolution_rules_text=extract_resolution_rules_text(event),
             raw_event=event,
             outcomes=outcomes,
@@ -175,6 +177,19 @@ def extract_resolution_rules_text(event: dict[str, Any]) -> str:
             if isinstance(value, str):
                 candidates.append(value)
     return "\n\n".join(dict.fromkeys(item for item in candidates if item.strip()))
+
+
+def _event_status(event: dict[str, Any]) -> str:
+    status = event.get("status")
+    if isinstance(status, str) and status:
+        return status.lower()
+    if event.get("resolved"):
+        return "resolved"
+    if event.get("closed"):
+        return "closed"
+    if event.get("active") is False:
+        return "inactive"
+    return "active"
 
 
 def resolution_rules_match_expected(text: str, market_kind: str = "highest") -> bool:

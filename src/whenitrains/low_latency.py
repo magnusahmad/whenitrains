@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Callable
 
-from .runner import RunnerResult, process_actual_entries, process_forecast_entries
+from .runner import (
+    RunnerResult,
+    process_actual_entries,
+    process_forecast_entries,
+    process_open_position_exits,
+)
 from .storage import record_latency_stage
 
 
@@ -216,6 +221,59 @@ def enqueue_ocf_forecast_sample_events(
     return events
 
 
+def enqueue_market_resolution_event(
+    db: sqlite3.Connection,
+    event_queue: LowLatencyEventQueue,
+    *,
+    market_id: int,
+    target_date_hkt: str,
+    previous_status: str,
+    new_status: str,
+    committed_monotonic: float | None = None,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> AlphaEvent | None:
+    if previous_status == new_status:
+        return None
+    committed = monotonic_fn() if committed_monotonic is None else committed_monotonic
+    detected = monotonic_fn()
+    event_key = (
+        f"market_resolution_changed:{target_date_hkt}:"
+        f"{market_id}:{previous_status}->{new_status}"
+    )
+    event = AlphaEvent(
+        kind="market_resolution_changed",
+        event_key=event_key,
+        target_date_hkt=target_date_hkt,
+        source_row_id=market_id,
+        previous_row_id=market_id,
+        committed_monotonic=committed,
+        detected_monotonic=detected,
+        details={
+            "market_id": market_id,
+            "previous_status": previous_status,
+            "new_status": new_status,
+        },
+    )
+    record_latency_stage(
+        db,
+        event.event_key,
+        "db_committed",
+        event.committed_monotonic,
+        event.kind,
+        {"source_row_id": event.source_row_id},
+    )
+    record_latency_stage(
+        db,
+        event.event_key,
+        "event_detected",
+        event.detected_monotonic,
+        event.kind,
+        event.details,
+    )
+    event_queue.put(event)
+    return event
+
+
 def process_next_fast_event(
     db: sqlite3.Connection,
     event_queue: LowLatencyEventQueue,
@@ -249,6 +307,8 @@ def process_next_fast_event(
 def _default_decision_handler(kind: str) -> Callable[[sqlite3.Connection, date], object]:
     if kind == "forecast_sample_changed":
         return process_forecast_entries
+    if kind == "market_resolution_changed":
+        return process_open_position_exits
     return process_actual_entries
 
 
