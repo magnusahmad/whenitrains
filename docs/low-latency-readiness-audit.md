@@ -29,7 +29,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - `low-latency-readiness-report` prints the core latency stage pairs, submitted-order rejection timing, explicit evidence gates including commit-to-decision-completed, CLOB ack, fill-match, optional submit-to-reject evidence, WebSocket orderbook snapshot, orderbook-age-under-cap, user-channel-event, HKO public-availability fetch clustering, clear live CLOB drift scan, live-money-state-clear, and kill-switch-clear evidence, live money-state, and HKO source-timing evidence; `--require-evidence` exits nonzero when any measurable local evidence gate is missing.
 - Compact fast-event latency lines are emitted during scheduler drain.
 - Evidence: `src/whenitrains/storage.py`, `src/whenitrains/live.py`, `src/whenitrains/low_latency.py`, `src/whenitrains/cli.py`.
-- Tests: `tests.test_low_latency`, `tests.test_latency_report`, focused live latency tests.
+- Tests: `tests.test_low_latency`, `tests.test_latency_report`, `tests.test_recorded_fixtures`, focused live latency tests.
 - Missing: production p50/p95/p99 from live DB rows.
 
 ### M1: DB-Change Driven Decisioning
@@ -55,7 +55,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - `live-network-smoke --live --require-connected` records `live_network_smoke_ok`/`live_network_smoke_failed` evidence, and `low-latency-readiness-report --require-evidence` requires the latest network smoke event to be OK.
 - `low-latency-readiness-report --require-evidence` requires at least one persisted orderbook snapshot with `polymarket_market_websocket` metadata so the production report cannot pass on connection liveness alone.
 - Evidence: `src/whenitrains/orderbook_cache.py`, `src/whenitrains/market_websocket.py`, `src/whenitrains/live_runtime.py`, `src/whenitrains/runner.py`.
-- Tests: `tests.test_orderbook_cache`, `tests.test_market_websocket`, focused live runner tests.
+- Tests: `tests.test_orderbook_cache`, `tests.test_market_websocket`, `tests.test_recorded_fixtures`, focused live runner tests.
 - Missing: real Polymarket WebSocket smoke and observed live book age at submission.
 
 ### M3: Hot-Path Execution Engine
@@ -123,6 +123,7 @@ PYTHONPATH=src python3 -m unittest tests.test_runner
 PYTHONPATH=src python3 -m unittest tests.test_live
 PYTHONPATH=src python3 -m unittest tests.test_cli tests.test_low_latency
 PYTHONPATH=src python3 -m unittest tests.test_storage tests.test_markets tests.test_orderbook_cache
+PYTHONPATH=src python3 -m unittest tests.test_recorded_fixtures
 PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_hko_source_timing_report_summarizes_aws_fetch_attempts
 git diff --check
 ```

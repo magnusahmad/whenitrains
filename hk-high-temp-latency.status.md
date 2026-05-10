@@ -212,6 +212,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` timed out after 8003 ms with `curl: (28) Connection timed out after 8003 milliseconds`, so live scheduler log capture, live WebSocket/auth/manual-money evidence, and production readiness artifacts remain blocked on endpoint availability.
 
+2026-05-11 recorded fixture integration pass: added recorded HKO AWS GIS, Gamma event, and CLOB book fixtures plus `tests.test_recorded_fixtures`, covering parser-to-storage integration for the low-latency data sources without live network access. Verified with `PYTHONPATH=src python3 -m unittest tests.test_recorded_fixtures`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
@@ -743,7 +745,6 @@ Paper-mode milestones 1-5 are complete as local building blocks, one-shot CLI co
 - Run explicit manual real-money buy/sell smoke before any scheduler use.
 - Verify production p50/p95/p99 latency from HKO DB commit through decision start and live order submission.
 - Verify live kill-switch behavior against the real account before scheduler use.
-- Add integration tests using recorded HKO/Gamma/CLOB fixtures.
 
 ## Scheduler/Alert/Dashboard Decisions
 

@@ -1,0 +1,14 @@
+{
+  "asset_id": "YES25RECORDED",
+  "market": "recorded-market-25",
+  "bids": [
+    {"price": "0.35", "size": "125.5"},
+    {"price": "0.34", "size": "80"}
+  ],
+  "asks": [
+    {"price": "0.37", "size": "90"},
+    {"price": "0.38", "size": "140"}
+  ],
+  "tick_size": "0.01",
+  "min_order_size": "5"
+}

@@ -1,0 +1,24 @@
+{
+  "id": "recorded-event-20260511",
+  "slug": "highest-temperature-in-hong-kong-on-may-11-2026",
+  "title": "Highest temperature in Hong Kong on May 11?",
+  "eventDate": "2026-05-11",
+  "active": true,
+  "closed": false,
+  "description": "This market will resolve to the temperature range that contains the highest temperature recorded by the Hong Kong Observatory in degrees Celsius on 11 May '26.\n\nThe resolution source for this market will be information from the Hong Kong Observatory, specifically the \"Absolute Daily Max (deg. C)\" the specified date once information is finalized in the relevant \"Daily Extract\", available here: https://www.weather.gov.hk/en/cis/climat.htm\n\nThis market can not resolve to \"Yes\" until data for this date has been finalized.\n\nThe resolution source for this market measures temperatures in Celsius to one decimal place (eg, 9.1\u00b0C). Thus, this is the level of precision that will be used when resolving the market.\n\nAny revisions to temperatures recorded after data is finalized for this market's timeframe will not be considered for this market's resolution.",
+  "markets": [
+    {
+      "id": "recorded-market-25",
+      "slug": "highest-temperature-in-hong-kong-on-may-11-2026-25c",
+      "question": "Will the highest temperature in Hong Kong be 25\u00b0C on May 11?",
+      "groupItemTitle": "25\u00b0C",
+      "clobTokenIds": "[\"YES25RECORDED\", \"NO25RECORDED\"]",
+      "outcomes": "[\"Yes\", \"No\"]",
+      "bestBid": "0.35",
+      "bestAsk": "0.37",
+      "active": true,
+      "closed": false,
+      "acceptingOrders": true
+    }
+  ]
+}
