@@ -2651,6 +2651,7 @@ def _live_clob_drift_scan_summary(db) -> dict[str, object]:
         select count(*) as count
         from risk_events
         where event_type = 'live_clob_drift_scan_clear'
+          and json_extract(details_json, '$.drift_count') = 0
         """
     ).fetchone()
     latest_row = db.execute(

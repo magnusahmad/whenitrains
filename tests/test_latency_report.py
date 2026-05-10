@@ -2184,6 +2184,38 @@ class LatencyReportTests(unittest.TestCase):
                 text,
             )
 
+    def test_low_latency_readiness_report_fails_when_clear_drift_scan_lacks_zero_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_risk_event(
+                db,
+                "live_clob_drift_scan_clear",
+                "info",
+                {"phase": "startup"},
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "gate live_clob_drift_scan_clear=missing "
+                "count=0 latest=clear latest_drift_count=n/a",
+                text,
+            )
+
     def test_low_latency_readiness_report_require_evidence_fails_without_live_settlement(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"
