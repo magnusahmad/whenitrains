@@ -1,6 +1,6 @@
 # Low-Latency Readiness Roadmap
 
-Last updated: 2026-05-10
+Last updated: 2026-05-11
 
 ## Objective
 
@@ -8,25 +8,24 @@ Make `whenitrains` fast enough to beat passive bots that react to the same HKO a
 
 ## Current Readiness
 
-The latest commit, `a80490c Speed up scheduler orderbook polling`, is a useful improvement but not sufficient for competitive low latency.
+The local roadmap implementation is substantially complete. See `docs/low-latency-readiness-audit.md` for the prompt-to-artifact checklist and latest verification evidence.
 
-- Orderbook refresh now fetches independent CLOB token books in parallel with a bounded `ThreadPoolExecutor`, then persists snapshots sequentially through SQLite. This removes the old serial YES/NO sweep bottleneck.
-- Actual-cross fast-lane logic now covers one important use case: when an official actual max/min transition is surprising relative to the preceding forecast and newer forecast hours confirm the move, the runner can action the crossed bucket and invalidated bucket sides. This is only one strategy family; the low-latency architecture must cover all current and future alpha producers, including forecast changes, forecast-value mispricings, actual invalidation exits, lowest-temperature markets, different lead dates, and later city/market families.
-- Live execution uses FAK orders and performs immediate post-submit reconciliation, but it still refreshes one token orderbook synchronously at decision time and does not consume Polymarket market/user WebSockets.
-- Scheduler decisions still run once per main scheduler loop. The AWS actual worker can ingest in the background, but there is no DB event queue that wakes decisioning immediately when new HKO rows land, no explicit fan-out model for multiple simultaneous alpha events, and no order-execution scheduler that can submit independent orders in parallel while preserving per-token/risk ordering.
+- HKO and Polymarket storage commits can enqueue narrow low-latency events for AWS actual transitions, OCF forecast-sample changes, and market-resolution status changes.
+- Paper scheduler starts a blocking `FastDecisionWorker`; live scheduler drains the shared fast-event queue before watchdog ticks while keeping live-client ownership inside the scheduler thread.
+- Live execution can use a scheduler-owned Polymarket WebSocket orderbook cache and fails closed when a configured cache is stale or missing.
+- Market and user WebSocket clients, live runtime ownership, authenticated user-event storage/application, pending-order reconciliation, sellable-balance drift repair/freeze, and resolved-market local settlement are implemented with fixture and scheduler tests.
+- Candidate planning, ladder metadata, and execution scheduling are wired into actual-cross, lowest-temperature actual-cross, forecast-change, forecast-value, forecast-exit, and open-position exit paths.
+- Operational safeguards now include a DB-specific live scheduler lock, startup health freeze, stale submitted-order freeze, persistent kill-switch exit enforcement, alerts, stalled-WebSocket freeze, source-freshness alerts, and a live runbook.
 
-Targeted verification run on 2026-05-10:
+Remaining readiness gaps require live-environment evidence rather than more local scaffolding:
 
-```bash
-PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_fetch_orderbooks_fetches_tokens_concurrently_and_stores_snapshots
-PYTHONPATH=src python3 -m unittest \
-  tests.test_runner.RunnerTests.test_actual_cross_fast_lane_buys_exact_yes_and_invalidated_no_when_latest_forecast_agrees \
-  tests.test_runner.RunnerTests.test_actual_cross_fast_lane_skips_exact_yes_when_latest_forecast_later_hour_reaches_actual \
-  tests.test_runner.RunnerTests.test_actual_cross_fast_lane_uses_preceding_forecast_even_when_new_forecast_marks_current_hour_at_actual \
-  tests.test_runner.RunnerTests.test_actual_cross_fast_lane_requires_preceding_forecast_basis
-```
+- Live network smoke for the market/user WebSocket runtime.
+- Real-auth CLOB smoke with installed dependency and credentials.
+- Minimum-size manual buy/sell and capped scheduler smoke with explicit approval.
+- Real-account kill-switch and settlement validation.
+- Production p50/p95/p99 evidence for DB commit to decision, decision to submit, submit to fill/reject, and local-vs-CLOB drift.
 
-Result: all 5 tests passed.
+The live-log endpoint `http://192.168.1.23:8765/` was retried on 2026-05-11 HKT and failed with `curl: (7) Failed to connect to 192.168.1.23 port 8765`, so live evidence remains blocked on endpoint availability.
 
 ## Research Findings
 
@@ -202,4 +201,4 @@ Exit criteria:
 4. Add user WebSocket reconciliation and restart repair.
 5. Harden HKO burst polling/backoff and operational fail-closed checks.
 
-The current code is a solid paper/live scaffold. It is not yet low-latency competitive because the hot path still depends on scheduler-loop cadence, REST book refreshes, broad tick evaluation, serial-ish candidate handling, and post-submit REST reconciliation.
+The current code has local/tested scaffolding for every roadmap milestone. It should not be treated as production-complete until the live network, real-auth, manual-money, capped-scheduler, kill-switch, settlement, and production latency evidence in `docs/low-latency-readiness-audit.md` has been captured.

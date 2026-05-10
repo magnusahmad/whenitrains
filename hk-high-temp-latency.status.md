@@ -144,6 +144,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 resolved market settlement pass: open-position exit handling now recognizes resolved/closed past-date markets and locally settles remaining paper/live positions using the stored actual for the market target date. Winning-side positions settle at 1.0, losing-side positions settle at 0.0, and the accounting path records a settlement order plus realized PnL without requiring bid depth. Verification covers paper and live-local settlement.
 
+2026-05-11 readiness audit pass: added `docs/low-latency-readiness-audit.md` and refreshed `docs/low-latency-readiness-roadmap.md` so the roadmap reflects current local implementation rather than the original pre-implementation audit. The audit maps M0-M6 deliverables to concrete files/tests and identifies the remaining live-environment proof points. Retried `curl -L --max-time 8 http://192.168.1.23:8765/`; the endpoint still failed with `curl: (7) Failed to connect to 192.168.1.23 port 8765`.
+
 2026-05-11 live execution latency pass: event-keyed live buy/sell paths now record `order_submitted`, `clob_ack`, `fill_matched`, and `fill_confirmed` latency trace stages around FAK submit and local fill application. Verified with `PYTHONPATH=src python3 -m unittest tests.test_live.LiveTests.test_execute_live_buy_records_latency_stages_for_event_key` and `tests.test_latency_report`.
 
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
