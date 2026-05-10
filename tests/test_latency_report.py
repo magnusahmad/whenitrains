@@ -1679,6 +1679,37 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("gate live_settlement_observed=pass count=1", text)
             self.assertIn("gate live_settlement_validated=missing count=0", text)
 
+    def test_low_latency_readiness_report_fails_when_settlement_has_no_fill_quantity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="SETTLEMENT",
+                action="SELL",
+                status="filled",
+                event_type="market_resolution",
+                reason="resolved market settlement",
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("gate live_settlement_observed=missing count=0", text)
+
     def test_low_latency_readiness_report_fails_when_settlement_validation_is_stale(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

@@ -2607,6 +2607,8 @@ def _live_settlement_count(db) -> int:
         select count(*) as count
         from live_orders
         where status = 'filled'
+          and coalesce(fill_price, 0) > 0
+          and (coalesce(fill_size_usd, 0) > 0 or coalesce(fill_shares, 0) > 0)
           and (
             side = 'SETTLEMENT'
             or event_type = 'market_resolution'
