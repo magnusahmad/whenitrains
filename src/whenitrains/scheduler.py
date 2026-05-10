@@ -327,6 +327,14 @@ def run_scheduled_paper_loop(
                     f"signals={result.signals} notes={'; '.join(result.notes)}",
                     flush=True,
                 )
+                if result.buys_filled or result.sells_filled:
+                    print(
+                        f"💰 TRADE EXECUTED 💰 {output_label} "
+                        f"filled_buys={result.buys_filled} "
+                        f"filled_sells={result.sells_filled} "
+                        f"notes={'; '.join(result.notes) or 'n/a'}",
+                        flush=True,
+                    )
             tick += 1
             if (
                 not scheduler_stop.is_set()

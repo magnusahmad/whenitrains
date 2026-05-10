@@ -363,6 +363,36 @@ HKO,27.3,28.5,24.0
             text = output.getvalue()
             self.assertIn("startup warmup: trading skipped", text)
             self.assertIn("buys=1/0", text)
+            self.assertIn("💰 TRADE EXECUTED 💰", text)
+            self.assertIn("paper-scheduler filled_buys=1 filled_sells=0", text)
+
+    def test_scheduler_prints_loud_trade_log_for_live_fills(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            output = StringIO()
+            now = datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT)
+
+            with redirect_stdout(output):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: "",
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=lambda target: None,
+                    run_tick_fn=lambda _db, today_hkt: RunnerResult(
+                        buys_filled=1, sells_filled=2, notes=("filled",)
+                    ),
+                    max_ticks=2,
+                    now_fn=lambda: now,
+                    quiet=True,
+                    base_sleep_seconds=0,
+                    output_label="live-scheduler",
+                )
+
+            text = output.getvalue()
+            self.assertIn("💰 TRADE EXECUTED 💰", text)
+            self.assertIn("live-scheduler filled_buys=1 filled_sells=2", text)
 
     def test_scheduler_does_not_warm_up_until_startup_fetches_succeed(self):
         with tempfile.TemporaryDirectory() as tmp:

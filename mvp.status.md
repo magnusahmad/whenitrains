@@ -38,6 +38,8 @@ Live scheduler and live tick startup preflight now distinguish entry capacity fr
 
 Live scheduler buy sizing is reduced to a `5 USD` per-order cap while the strategy proves consistent profitability.
 
+Scheduler logs now print a loud `💰 TRADE EXECUTED 💰` line whenever a tick records filled buys or sells, including filled buy/sell counts and tick notes.
+
 AWS GIS actual readings remain enabled for low-latency current temperature and extrema, but `MAXTEMP`/`MINTEMP` from exactly `00:00 HKT` are treated as previous-day rollover extrema and are not stored as same-day since-midnight max/min values. This prevents a midnight carryover such as `MAXTEMP=26.1` from triggering current-day actual-cross buys.
 
 Relevant existing implementation:
@@ -63,9 +65,11 @@ Session verification on 2026-05-10 HKT:
 - Red/green test added: `test_live_forecast_panel_keeps_trade_markers_without_orderbook`.
 - Red/green tests added: `test_preflight_can_skip_entry_capacity_for_exit_only_scheduler_startup` and `test_preflight_can_skip_entry_block_for_exit_only_scheduler_startup`.
 - Red/green test added: `test_live_scheduler_buy_cap_is_five_usd`.
+- Red/green test added: `test_scheduler_prints_loud_trade_log_for_live_fills`.
 - `PYTHONPATH=src python3 -m unittest tests.test_dashboard_server` passes.
 - `PYTHONPATH=src python3 -m unittest tests.test_hko` passes.
 - `PYTHONPATH=src python3 -m unittest tests.test_live` passes.
+- `PYTHONPATH=src python3 -m unittest tests.test_scheduler` passes.
 - Browser visual check completed against `http://127.0.0.1:8788/live` using a temporary `/private/tmp` SQLite DB.
 - Browser visual check completed against `http://127.0.0.1:8789/live` using a temporary `/private/tmp` SQLite DB with a marker-only live trade; one visible `B` bubble rendered with the expected title.
 - `curl -L http://127.0.0.1:8788/api/live/stats` returned a valid live payload.
