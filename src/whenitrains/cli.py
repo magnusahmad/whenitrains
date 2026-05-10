@@ -2077,6 +2077,13 @@ def _readiness_gate_line_malformed(line: str) -> bool:
             "ok",
         }:
             return True
+        if key == "latest_drift_count" and value != "n/a":
+            try:
+                drift_count = int(value)
+            except ValueError:
+                return True
+            if drift_count < 0:
+                return True
         seen_fields.add(key)
     count_value = field_values.get("count")
     if status == "pass" and count_value == "0":

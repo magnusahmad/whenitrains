@@ -1997,6 +1997,47 @@ class LatencyReportTests(unittest.TestCase):
                 stdout.getvalue(),
             )
 
+    def test_low_latency_verify_evidence_archive_fails_malformed_readiness_gate_drift_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            name = "readiness_report.txt"
+            report = output_dir / name
+            report.write_text(
+                report.read_text().replace(
+                    "gate live_clob_drift_scan_clear=pass count=1\n",
+                    "gate live_clob_drift_scan_clear=pass count=1 latest=clear latest_drift_count=unknown\n",
+                    1,
+                )
+            )
+            digest = hashlib.sha256(report.read_bytes()).hexdigest()
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                "\n".join(
+                    f"sha256 {name}={digest}"
+                    if line.startswith(f"sha256 {name}=")
+                    else line
+                    for line in manifest.splitlines()
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive readiness gate malformed: gate live_clob_drift_scan_clear=pass count=1 latest=clear latest_drift_count=unknown",
+                stdout.getvalue(),
+            )
+
     def test_low_latency_verify_evidence_archive_ignores_gate_lines_outside_evidence_section(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "evidence"
