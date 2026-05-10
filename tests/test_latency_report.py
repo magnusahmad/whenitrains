@@ -75,11 +75,39 @@ def _archive_report_fixture_content(name: str) -> str:
             "public_availability_fetch_offsets_seconds=0.0:1\n"
         )
     if name == "readiness_report.txt":
+        gate_names = [
+            "hko_commit_to_decision_under_1s",
+            "hko_commit_to_decision_completed_under_1s",
+            "decision_to_submit_observed",
+            "submit_to_fill_observed",
+            "submit_to_reject_observed",
+            "clob_ack_observed",
+            "fill_matched_observed",
+            "orderbook_age_under_cap",
+            "hko_source_timing_observed",
+            "hko_public_availability_cluster_observed",
+            "websocket_orderbook_snapshots_observed",
+            "user_channel_events_observed",
+            "user_channel_trade_applied",
+            "live_reconcile_observed",
+            "live_settlement_observed",
+            "live_settlement_validated",
+            "live_clob_drift_scan_clear",
+            "live_auth_smoke_ok",
+            "live_network_smoke_ok",
+            "live_scheduler_smoke_ok",
+            "live_kill_switch_verification",
+            "manual_live_buy_observed",
+            "manual_live_sell_observed",
+            "live_money_state_clear",
+            "kill_switch_clear",
+        ]
+        gate_lines = "\n".join(f"gate {gate}=pass count=1" for gate in gate_names)
         return (
             "low latency readiness report\n"
             "latency:\n"
             "evidence gates:\n"
-            "gate hko_commit_to_decision_under_1s=pass count=1 p95=0.100s threshold=1.000s\n"
+            f"{gate_lines}\n"
             "live:\n"
         )
     if name.startswith("latency_") and name.endswith(".txt"):
@@ -1236,6 +1264,47 @@ class LatencyReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn(
                 "evidence archive readiness gate not passing: live_network_smoke_ok",
+                stdout.getvalue(),
+            )
+
+    def test_low_latency_verify_evidence_archive_fails_readiness_report_omitted_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            name = "readiness_report.txt"
+            report = output_dir / name
+            report.write_text(
+                "low latency readiness report\n"
+                "latency:\n"
+                "evidence gates:\n"
+                "gate hko_commit_to_decision_under_1s=pass count=1\n"
+                "live:\n"
+            )
+            digest = hashlib.sha256(report.read_bytes()).hexdigest()
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                "\n".join(
+                    f"sha256 {name}={digest}"
+                    if line.startswith(f"sha256 {name}=")
+                    else line
+                    for line in manifest.splitlines()
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive readiness gate missing: hko_commit_to_decision_completed_under_1s",
                 stdout.getvalue(),
             )
 

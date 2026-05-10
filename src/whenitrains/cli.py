@@ -107,6 +107,33 @@ from .storage import (
 
 HKO_PUBLIC_AVAILABILITY_CLUSTER_SECONDS = 20.0
 HKO_PUBLIC_AVAILABILITY_MIN_CLUSTERED_FETCHES = 2
+LOW_LATENCY_READINESS_GATE_NAMES = [
+    "hko_commit_to_decision_under_1s",
+    "hko_commit_to_decision_completed_under_1s",
+    "decision_to_submit_observed",
+    "submit_to_fill_observed",
+    "submit_to_reject_observed",
+    "clob_ack_observed",
+    "fill_matched_observed",
+    "orderbook_age_under_cap",
+    "hko_source_timing_observed",
+    "hko_public_availability_cluster_observed",
+    "websocket_orderbook_snapshots_observed",
+    "user_channel_events_observed",
+    "user_channel_trade_applied",
+    "live_reconcile_observed",
+    "live_settlement_observed",
+    "live_settlement_validated",
+    "live_clob_drift_scan_clear",
+    "live_auth_smoke_ok",
+    "live_network_smoke_ok",
+    "live_scheduler_smoke_ok",
+    "live_kill_switch_verification",
+    "manual_live_buy_observed",
+    "manual_live_sell_observed",
+    "live_money_state_clear",
+    "kill_switch_clear",
+]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1644,6 +1671,8 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             elif not _evidence_report_content_valid(name, text):
                 messages.append(f"evidence archive file malformed: {name}")
             elif name == "readiness_report.txt":
+                for gate in _missing_readiness_gate_names(text):
+                    messages.append(f"evidence archive readiness gate missing: {gate}")
                 for gate in _non_passing_readiness_gates(text):
                     messages.append(f"evidence archive readiness gate not passing: {gate}")
     manifest_path = input_dir / "manifest.txt"
@@ -1884,6 +1913,16 @@ def _non_passing_readiness_gates(text: str) -> list[str]:
         if status != "pass":
             non_passing.append(gate_name)
     return non_passing
+
+
+def _missing_readiness_gate_names(text: str) -> list[str]:
+    observed = set()
+    for line in text.splitlines():
+        if not line.startswith("gate ") or "=" not in line:
+            continue
+        gate_name, _rest = line[len("gate ") :].split("=", 1)
+        observed.add(gate_name)
+    return [gate for gate in LOW_LATENCY_READINESS_GATE_NAMES if gate not in observed]
 
 
 def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
