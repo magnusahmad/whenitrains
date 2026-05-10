@@ -355,6 +355,17 @@ class LatencyReportTests(unittest.TestCase):
                     "reason": "ok",
                 },
             )
+            store_risk_event(
+                db,
+                "live_network_smoke_ok",
+                "info",
+                {
+                    "all_running": True,
+                    "connected_once_all": True,
+                    "client_count": 2,
+                    "required_clients": 2,
+                },
+            )
             db.close()
             stdout = StringIO()
 
@@ -383,7 +394,45 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("gate live_settlement_observed=pass count=1", text)
             self.assertIn("gate live_clob_drift_scan_clear=pass count=1", text)
             self.assertIn("gate live_auth_smoke_ok=pass count=1 latest=ok", text)
+            self.assertIn("gate live_network_smoke_ok=pass count=1 latest=ok", text)
             self.assertNotIn("readiness evidence missing", text)
+
+    def test_low_latency_readiness_report_fails_when_latest_network_smoke_failed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_risk_event(
+                db,
+                "live_network_smoke_ok",
+                "info",
+                {"all_running": True, "connected_once_all": True, "client_count": 2},
+            )
+            store_risk_event(
+                db,
+                "live_network_smoke_failed",
+                "critical",
+                {"all_running": True, "connected_once_all": False, "client_count": 2},
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "gate live_network_smoke_ok=missing count=1 latest=failed",
+                text,
+            )
 
     def test_low_latency_readiness_report_fails_when_latest_auth_smoke_failed(self):
         with tempfile.TemporaryDirectory() as tmp:

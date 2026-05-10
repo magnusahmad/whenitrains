@@ -323,6 +323,22 @@ class CliDiscoveryTests(unittest.TestCase):
                 "client1_connected_once=True client1_attempts=1 client1_messages=2 client1_last_error=n/a",
                 stdout.getvalue(),
             )
+            db = connect(db_path)
+            try:
+                event = db.execute(
+                    """
+                    select event_type, severity, details_json
+                    from risk_events
+                    order by id desc
+                    limit 1
+                    """
+                ).fetchone()
+                self.assertEqual(event["event_type"], "live_network_smoke_ok")
+                self.assertEqual(event["severity"], "info")
+                self.assertIn('"all_running": true', event["details_json"])
+                self.assertIn('"client_count": 1', event["details_json"])
+            finally:
+                db.close()
 
     def test_live_auth_smoke_requires_live_flag(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -490,6 +506,15 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn("client1_connected_once=False", text)
             self.assertIn("live network smoke connected_once_all=False", text)
+            db = connect(db_path)
+            try:
+                event = db.execute(
+                    "select event_type, severity from risk_events order by id desc limit 1"
+                ).fetchone()
+                self.assertEqual(event["event_type"], "live_network_smoke_failed")
+                self.assertEqual(event["severity"], "critical")
+            finally:
+                db.close()
 
     def test_live_network_smoke_require_connected_requires_market_and_user_clients(self):
         with tempfile.TemporaryDirectory() as tmp:

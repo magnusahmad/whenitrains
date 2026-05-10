@@ -608,10 +608,36 @@ def main(argv: list[str] | None = None) -> int:
                     f"connected_once_all={connected_once_all}"
                 )
                 has_required_clients = len(client_statuses) >= required_clients
-                return 0 if all_running and connected_once_all and has_required_clients else 2
+                ok = all_running and connected_once_all and has_required_clients
+                _record_live_network_smoke(
+                    db,
+                    ok=ok,
+                    all_running=all_running,
+                    connected_once_all=connected_once_all,
+                    client_statuses=client_statuses,
+                    required_clients=required_clients,
+                )
+                return 0 if ok else 2
+            _record_live_network_smoke(
+                db,
+                ok=all_running,
+                all_running=all_running,
+                connected_once_all=connected_once_all,
+                client_statuses=client_statuses,
+                required_clients=None,
+            )
             return 0 if all_running else 2
         except LiveTradingError as exc:
             print(f"live network smoke failed: {exc}")
+            _record_live_network_smoke(
+                db,
+                ok=False,
+                all_running=False,
+                connected_once_all=False,
+                client_statuses=[],
+                required_clients=2 if args.require_connected else None,
+                error=str(exc),
+            )
             return 2
         finally:
             if websocket_runtime is not None:
@@ -1548,6 +1574,41 @@ def _record_live_auth_smoke(
     )
 
 
+def _record_live_network_smoke(
+    db,
+    *,
+    ok: bool,
+    all_running: bool,
+    connected_once_all: bool,
+    client_statuses: list[object],
+    required_clients: int | None,
+    error: str | None = None,
+) -> None:
+    clients = []
+    for status in client_statuses:
+        clients.append(
+            {
+                "connected_once": bool(status.connected_once),
+                "connection_attempts": int(status.connection_attempts),
+                "messages_applied": int(status.messages_applied),
+                "last_error": status.last_error,
+            }
+        )
+    store_risk_event(
+        db,
+        "live_network_smoke_ok" if ok else "live_network_smoke_failed",
+        "info" if ok else "critical",
+        {
+            "all_running": all_running,
+            "connected_once_all": connected_once_all,
+            "client_count": len(client_statuses),
+            "required_clients": required_clients,
+            "clients": clients,
+            "error": error,
+        },
+    )
+
+
 def _hko_source_timing_report(
     db,
     *,
@@ -1673,6 +1734,7 @@ def _low_latency_readiness_report(
     live_settlement_count = _live_settlement_count(db)
     live_clob_drift_scan = _live_clob_drift_scan_summary(db)
     live_auth_smoke = _live_auth_smoke_summary(db)
+    live_network_smoke = _live_network_smoke_summary(db)
     live = live_dashboard_stats(db)
     counts = live["counts"]
     gates = [
@@ -1728,6 +1790,7 @@ def _low_latency_readiness_report(
         _count_observed_gate("live_settlement_observed", live_settlement_count),
         _live_clob_drift_scan_gate(live_clob_drift_scan),
         _live_auth_smoke_gate(live_auth_smoke),
+        _live_network_smoke_gate(live_network_smoke),
         _live_money_state_gate(db, live),
         _kill_switch_clear_gate(live),
     ]
@@ -1952,6 +2015,29 @@ def _live_auth_smoke_summary(db) -> dict[str, object]:
     return {"ok_count": int(ok_row["count"] or 0), "latest": latest}
 
 
+def _live_network_smoke_summary(db) -> dict[str, object]:
+    ok_row = db.execute(
+        """
+        select count(*) as count
+        from risk_events
+        where event_type = 'live_network_smoke_ok'
+        """
+    ).fetchone()
+    latest_row = db.execute(
+        """
+        select event_type
+        from risk_events
+        where event_type in ('live_network_smoke_ok', 'live_network_smoke_failed')
+        order by id desc
+        limit 1
+        """
+    ).fetchone()
+    latest = "missing"
+    if latest_row is not None:
+        latest = "ok" if latest_row["event_type"] == "live_network_smoke_ok" else "failed"
+    return {"ok_count": int(ok_row["count"] or 0), "latest": latest}
+
+
 def _websocket_orderbook_snapshot_count(db) -> int:
     row = db.execute(
         """
@@ -2056,6 +2142,15 @@ def _live_auth_smoke_gate(summary: dict[str, object]) -> dict[str, object]:
     status = "pass" if passed else "missing"
     line = f"gate live_auth_smoke_ok={status} count={ok_count} latest={latest}"
     return {"name": "live_auth_smoke_ok", "status": status, "line": line}
+
+
+def _live_network_smoke_gate(summary: dict[str, object]) -> dict[str, object]:
+    ok_count = int(summary["ok_count"])
+    latest = str(summary["latest"])
+    passed = ok_count > 0 and latest == "ok"
+    status = "pass" if passed else "missing"
+    line = f"gate live_network_smoke_ok={status} count={ok_count} latest={latest}"
+    return {"name": "live_network_smoke_ok", "status": status, "line": line}
 
 
 def _live_money_state_gate(db, live: dict[str, object]) -> dict[str, object]:
