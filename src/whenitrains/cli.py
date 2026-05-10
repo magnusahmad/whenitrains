@@ -1528,6 +1528,7 @@ def _low_latency_readiness_report(
         ),
         _count_observed_gate("hko_source_timing_observed", hko_timing_count),
         _live_money_state_gate(live),
+        _kill_switch_clear_gate(live),
     ]
     missing_gates = [gate["name"] for gate in gates if gate["status"] != "pass"]
     lines.extend(
@@ -1673,6 +1674,19 @@ def _live_money_state_gate(live: dict[str, object]) -> dict[str, object]:
         f"missing_bid_positions={missing_bid_positions}"
     )
     return {"name": "live_money_state_clear", "status": status, "line": line}
+
+
+def _kill_switch_clear_gate(live: dict[str, object]) -> dict[str, object]:
+    block_new_entries = bool(live["block_new_entries"])
+    exit_on_kill_switch = bool(live["cancel_open_orders_and_exit_positions"])
+    clear = not block_new_entries and not exit_on_kill_switch
+    status = "pass" if clear else "missing"
+    line = (
+        f"gate kill_switch_clear={status} "
+        f"block_new_entries={block_new_entries} "
+        f"exit_on_kill_switch={exit_on_kill_switch}"
+    )
+    return {"name": "kill_switch_clear", "status": status, "line": line}
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:

@@ -168,6 +168,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 decision-completion evidence gate pass: `low-latency-readiness-report --require-evidence` now requires `db_committed -> decision_completed` p95 to stay under 1 second, so production evidence must prove fast decisions finish rather than only start quickly. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
 
+2026-05-11 kill-switch evidence gate pass: `low-latency-readiness-report --require-evidence` now fails while `block_new_entries` or `cancel_open_orders_and_exit_positions` is enabled, so readiness evidence cannot pass with an emergency kill-switch state still active. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
