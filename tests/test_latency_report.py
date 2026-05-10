@@ -466,6 +466,37 @@ class LatencyReportTests(unittest.TestCase):
                 stdout.getvalue(),
             )
 
+    def test_low_latency_verify_evidence_archive_ignores_file_entries_outside_files_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            manifest_lines = []
+            delayed_file_entries = []
+            for line in (output_dir / "manifest.txt").read_text().splitlines():
+                if line.startswith("- "):
+                    delayed_file_entries.append(line)
+                else:
+                    manifest_lines.append(line)
+            manifest_lines.extend(delayed_file_entries)
+            (output_dir / "manifest.txt").write_text("\n".join(manifest_lines) + "\n")
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive manifest entries missing: "
+                "latency_db_committed_to_decision_started.txt",
+                stdout.getvalue(),
+            )
+
     def test_low_latency_verify_evidence_archive_requires_exact_passed_gate(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "evidence"

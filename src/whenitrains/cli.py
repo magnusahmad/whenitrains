@@ -1801,11 +1801,18 @@ def _manifest_duplicate_checksums(manifest: str) -> list[str]:
 
 
 def _manifest_file_list(manifest: str) -> list[str]:
-    return [
-        line[2:].strip()
-        for line in manifest.splitlines()
-        if line.startswith("- ")
-    ]
+    files: list[str] = []
+    in_files_section = False
+    for line in manifest.splitlines():
+        if line == "files:":
+            in_files_section = True
+            continue
+        if line == "checksums:":
+            in_files_section = False
+            continue
+        if in_files_section and line.startswith("- "):
+            files.append(line[2:].strip())
+    return files
 
 
 def _manifest_duplicate_keys(manifest: str, keys: list[str]) -> list[str]:
