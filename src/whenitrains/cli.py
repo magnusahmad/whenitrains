@@ -1796,6 +1796,7 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
             text.startswith("low latency readiness report\n")
             and _readiness_sections_valid(text)
             and bool(_readiness_gate_lines(text))
+            and "readiness evidence missing:" not in text
         )
     if name == "hko_source_timing_report.txt":
         return _hko_source_timing_report_content_valid(text)
