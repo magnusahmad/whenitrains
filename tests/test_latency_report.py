@@ -378,6 +378,10 @@ class LatencyReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn("evidence archive gates missing:", stdout.getvalue())
             self.assertIn("hko_commit_to_decision_under_1s", stdout.getvalue())
+            self.assertNotIn(
+                "evidence archive file malformed: readiness_report.txt",
+                stdout.getvalue(),
+            )
 
     def test_low_latency_verify_evidence_archive_fails_missing_manifest_header(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1575,6 +1579,44 @@ class LatencyReportTests(unittest.TestCase):
             latency_start = text.index("latency:\n") + len("latency:\n")
             gates_start = text.index("evidence gates:\n")
             report.write_text(text[:latency_start] + text[gates_start:])
+            digest = hashlib.sha256(report.read_bytes()).hexdigest()
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                "\n".join(
+                    f"sha256 {name}={digest}"
+                    if line.startswith(f"sha256 {name}=")
+                    else line
+                    for line in manifest.splitlines()
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("evidence archive file malformed: readiness_report.txt", stdout.getvalue())
+
+    def test_low_latency_verify_evidence_archive_fails_passing_archive_with_zero_readiness_latency(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            name = "readiness_report.txt"
+            report = output_dir / name
+            report.write_text(
+                report.read_text().replace(
+                    "db_committed -> decision_started count=1 p50=0.100s p95=0.100s p99=0.100s",
+                    "db_committed -> decision_started count=0 p50=n/a p95=n/a p99=n/a",
+                    1,
+                )
+            )
             digest = hashlib.sha256(report.read_bytes()).hexdigest()
             manifest = (output_dir / "manifest.txt").read_text()
             (output_dir / "manifest.txt").write_text(

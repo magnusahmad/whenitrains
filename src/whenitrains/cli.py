@@ -1668,12 +1668,15 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
     if missing_files:
         messages.append("evidence archive files missing: " + ", ".join(missing_files))
     readiness_report_missing_gates: list[str] | None = None
+    readiness_report_text: str | None = None
     for name in required_files:
         if name == "manifest.txt":
             continue
         path = input_dir / name
         if path.is_file():
             text = path.read_text()
+            if name == "readiness_report.txt":
+                readiness_report_text = text
             if not text.strip():
                 messages.append(f"evidence archive file empty: {name}")
             elif not _evidence_report_content_valid(name, text):
@@ -1742,6 +1745,18 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             "evidence archive gates inconsistent: "
             "missing_gates present while all_gates_passed is True"
         )
+    if (
+        all_gates_passed == "True"
+        and readiness_report_text is not None
+        and "readiness evidence missing:" in readiness_report_text
+    ):
+        messages.append("evidence archive file malformed: readiness_report.txt")
+    if (
+        all_gates_passed == "True"
+        and readiness_report_text is not None
+        and not _readiness_latency_lines_positive(readiness_report_text)
+    ):
+        messages.append("evidence archive file malformed: readiness_report.txt")
     if missing_gates and _missing_gates_malformed(missing_gates):
         messages.append("evidence archive missing_gates malformed")
     elif missing_gates and readiness_report_missing_gates is not None:
@@ -1813,7 +1828,6 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
             and _readiness_sections_valid(text)
             and _readiness_latency_lines_valid(text)
             and bool(_readiness_gate_lines(text))
-            and "readiness evidence missing:" not in text
         )
     if name == "hko_source_timing_report.txt":
         return _hko_source_timing_report_content_valid(text)
@@ -1990,23 +2004,74 @@ def _readiness_sections_valid(text: str) -> bool:
 
 
 def _readiness_latency_lines_valid(text: str) -> bool:
+    return _readiness_latency_lines_by_pair(text) is not None
+
+
+def _readiness_latency_lines_positive(text: str) -> bool:
+    lines_by_pair = _readiness_latency_lines_by_pair(text)
+    if lines_by_pair is None:
+        return False
+    for start_stage, end_stage in LOW_LATENCY_READINESS_LATENCY_PAIRS:
+        pair = f"{start_stage} -> {end_stage}"
+        if not _latency_report_content_valid(pair, lines_by_pair[pair]):
+            return False
+    return True
+
+
+def _readiness_latency_lines_by_pair(text: str) -> dict[str, str] | None:
     lines = text.splitlines()
     try:
         start = lines.index("latency:") + 1
         end = lines.index("evidence gates:", start)
     except ValueError:
-        return False
+        return None
     section_lines = [line for line in lines[start:end] if line.strip()]
     if len(section_lines) != len(LOW_LATENCY_READINESS_LATENCY_PAIRS):
-        return False
+        return None
+    lines_by_pair: dict[str, str] = {}
     for start_stage, end_stage in LOW_LATENCY_READINESS_LATENCY_PAIRS:
         pair = f"{start_stage} -> {end_stage}"
         matching_lines = [
             line for line in section_lines if line.startswith(f"{pair} count=")
         ]
         if len(matching_lines) != 1:
+            return None
+        if not _readiness_latency_line_well_formed(pair, matching_lines[0]):
+            return None
+        lines_by_pair[pair] = matching_lines[0]
+    return lines_by_pair
+
+
+def _readiness_latency_line_well_formed(pair: str, line: str) -> bool:
+    prefix = f"{pair} count="
+    if not line.startswith(prefix):
+        return False
+    fields = line[len(prefix) :].split()
+    if not fields:
+        return False
+    try:
+        count = int(fields[0])
+    except ValueError:
+        return False
+    if count < 0:
+        return False
+    values: dict[str, str] = {}
+    for field in fields[1:]:
+        if "=" not in field:
             return False
-        if not _latency_report_content_valid(pair, matching_lines[0]):
+        key, value = field.split("=", 1)
+        values[key] = value
+    for key in ("p50", "p95", "p99"):
+        value = values.get(key)
+        if value == "n/a":
+            continue
+        if value is None or not value.endswith("s"):
+            return False
+        try:
+            seconds = float(value[:-1])
+        except ValueError:
+            return False
+        if seconds < 0:
             return False
     return True
 
