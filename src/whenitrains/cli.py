@@ -1768,13 +1768,41 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
         return _hko_source_timing_report_content_valid(text)
     if name.startswith("latency_") and name.endswith(".txt"):
         pair = name[len("latency_") : -len(".txt")].replace("_to_", " -> ")
-        return (
-            text.startswith(f"{pair} count=")
-            and " p50=" in text
-            and " p95=" in text
-            and " p99=" in text
-        )
+        return _latency_report_content_valid(pair, text)
     return False
+
+
+def _latency_report_content_valid(pair: str, text: str) -> bool:
+    prefix = f"{pair} count="
+    lines = text.splitlines()
+    if len(lines) != 1 or not lines[0].startswith(prefix):
+        return False
+    fields = lines[0][len(prefix) :].split()
+    if not fields:
+        return False
+    try:
+        count = int(fields[0])
+    except ValueError:
+        return False
+    if count <= 0:
+        return False
+    values: dict[str, str] = {}
+    for field in fields[1:]:
+        if "=" not in field:
+            return False
+        key, value = field.split("=", 1)
+        values[key] = value
+    for key in ("p50", "p95", "p99"):
+        value = values.get(key)
+        if value is None or not value.endswith("s"):
+            return False
+        try:
+            seconds = float(value[:-1])
+        except ValueError:
+            return False
+        if seconds < 0:
+            return False
+    return True
 
 
 def _hko_source_timing_report_content_valid(text: str) -> bool:
