@@ -106,6 +106,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - `low-latency-readiness-report --require-evidence` requires the latest stored live auth smoke event to be OK, so the production report cannot pass with stale auth evidence after a later failed credentials, balance, or allowance check.
 - `live-readiness-checklist` prints the ordered live evidence commands for network smoke, auth smoke, kill-switch status, minimum-size manual buy/sell, reconciliation, real-account kill-switch verification, capped scheduler smoke, live settlement validation, latency percentiles, and `low-latency-readiness-report --require-evidence`.
 - `low-latency-archive-evidence --output-dir ... --require-evidence` writes latency stage reports, HKO source timing, readiness report output, and a manifest into a durable evidence directory, returning nonzero after writing when readiness gates are missing.
+- `low-latency-verify-evidence-archive --input-dir ...` verifies the manifest, required report files, and `all_gates_passed=True`, and fails with the archived missing-gate list for incomplete evidence bundles.
 - `low-latency-readiness-report --require-evidence` requires filled `manual_live` BUY and SELL order rows, so scheduler fills cannot substitute for the explicit minimum-size manual buy/sell smoke.
 - A capped `live-scheduler --live --ticks N` records `live_scheduler_smoke_ok`/`live_scheduler_smoke_failed` evidence, and `low-latency-readiness-report --require-evidence` requires the latest scheduler smoke event to be OK.
 - `live-kill-switch --block-new-entries` and `--allow-new-entries` record persistent kill-switch verification evidence, and `low-latency-readiness-report --require-evidence` requires the latest verification event to be allowed/clear.
@@ -125,7 +126,7 @@ PYTHONPATH=src python3 -m unittest tests.test_live
 PYTHONPATH=src python3 -m unittest tests.test_cli tests.test_low_latency
 PYTHONPATH=src python3 -m unittest tests.test_storage tests.test_markets tests.test_orderbook_cache
 PYTHONPATH=src python3 -m unittest tests.test_recorded_fixtures
-PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_archive_evidence_writes_reports tests.test_latency_report.LatencyReportTests.test_low_latency_archive_evidence_require_evidence_returns_missing_status_after_writing
+PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_archive_evidence_writes_reports tests.test_latency_report.LatencyReportTests.test_low_latency_archive_evidence_require_evidence_returns_missing_status_after_writing tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_passes_complete_manifest tests.test_latency_report.LatencyReportTests.test_low_latency_verify_evidence_archive_fails_missing_gates
 PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_hko_source_timing_report_summarizes_aws_fetch_attempts
 git diff --check
 ```
@@ -139,4 +140,4 @@ All passed. A single larger combined multi-module run still hit the repository's
 3. Run `live-auth-smoke --live` with credentials on the live machine.
 4. With explicit approval, run minimum-size manual live buy/sell and kill-switch verification.
 5. Run capped live scheduler and collect `latency-report` p50/p95/p99 evidence from the production DB.
-6. Run `low-latency-archive-evidence --output-dir data/low-latency-evidence/<run-id> --require-evidence` on the production DB and archive the generated output with the live scheduler logs.
+6. Run `low-latency-archive-evidence --output-dir data/low-latency-evidence/<run-id> --require-evidence` on the production DB, verify it with `low-latency-verify-evidence-archive --input-dir data/low-latency-evidence/<run-id>`, and archive the generated output with the live scheduler logs.

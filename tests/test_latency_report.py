@@ -147,6 +147,85 @@ class LatencyReportTests(unittest.TestCase):
             self.assertTrue((output_dir / "readiness_report.txt").exists())
             self.assertIn("readiness evidence missing:", stdout.getvalue())
 
+    def test_low_latency_verify_evidence_archive_passes_complete_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            output_dir.mkdir()
+            for name in [
+                "latency_db_committed_to_decision_started.txt",
+                "latency_decision_started_to_order_submitted.txt",
+                "latency_order_submitted_to_fill_confirmed.txt",
+                "latency_order_submitted_to_order_rejected.txt",
+                "latency_db_committed_to_decision_completed.txt",
+                "hko_source_timing_report.txt",
+                "readiness_report.txt",
+            ]:
+                (output_dir / name).write_text(f"{name}\n")
+            (output_dir / "manifest.txt").write_text(
+                "\n".join(
+                    [
+                        "low latency evidence archive",
+                        "all_gates_passed=True",
+                        "files:",
+                        "- latency_db_committed_to_decision_started.txt",
+                        "- latency_decision_started_to_order_submitted.txt",
+                        "- latency_order_submitted_to_fill_confirmed.txt",
+                        "- latency_order_submitted_to_order_rejected.txt",
+                        "- latency_db_committed_to_decision_completed.txt",
+                        "- hko_source_timing_report.txt",
+                        "- readiness_report.txt",
+                    ]
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("verified low latency evidence archive", stdout.getvalue())
+
+    def test_low_latency_verify_evidence_archive_fails_missing_gates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            output_dir = Path(tmp) / "evidence"
+            db = connect(db_path)
+            migrate(db)
+            db.close()
+            with redirect_stdout(StringIO()):
+                archive_exit = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-archive-evidence",
+                        "--output-dir",
+                        str(output_dir),
+                        "--require-evidence",
+                    ]
+                )
+            self.assertEqual(archive_exit, 2)
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("evidence archive gates missing:", stdout.getvalue())
+            self.assertIn("hko_commit_to_decision_under_1s", stdout.getvalue())
+
     def test_low_latency_readiness_report_prints_latency_and_live_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

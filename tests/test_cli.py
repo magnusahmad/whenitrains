@@ -476,6 +476,12 @@ class CliDiscoveryTests(unittest.TestCase):
             "'data/low-latency-evidence/<run-id>' --require-evidence",
             text,
         )
+        self.assertIn(
+            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
+            "low-latency-verify-evidence-archive --input-dir "
+            "'data/low-latency-evidence/<run-id>'",
+            text,
+        )
 
     def test_live_kill_switch_records_block_and_allow_verification(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -169,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
     archive_evidence.add_argument("--hko-endpoint-contains", default="latestReadings")
     archive_evidence.add_argument("--hko-limit", type=int, default=200)
     archive_evidence.add_argument("--require-evidence", action="store_true")
+    verify_evidence = sub.add_parser("low-latency-verify-evidence-archive")
+    verify_evidence.add_argument("--input-dir", required=True)
     accuracy = sub.add_parser("research-forecast-accuracy")
     accuracy.add_argument("--start")
     accuracy.add_argument("--end")
@@ -348,6 +350,14 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         return 0
+    if args.command == "low-latency-verify-evidence-archive":
+        ok, messages = _verify_low_latency_evidence_archive(Path(args.input_dir))
+        if ok:
+            print(f"verified low latency evidence archive {args.input_dir}")
+            return 0
+        for message in messages:
+            print(message)
+        return 2
     if args.command == "init-db":
         migrate(db)
         print(f"initialized {args.db}")
@@ -1599,6 +1609,55 @@ def _archive_low_latency_evidence(
     return written, gate_status
 
 
+def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[str]]:
+    required_files = [
+        "manifest.txt",
+        "latency_db_committed_to_decision_started.txt",
+        "latency_decision_started_to_order_submitted.txt",
+        "latency_order_submitted_to_fill_confirmed.txt",
+        "latency_order_submitted_to_order_rejected.txt",
+        "latency_db_committed_to_decision_completed.txt",
+        "hko_source_timing_report.txt",
+        "readiness_report.txt",
+    ]
+    messages: list[str] = []
+    if not input_dir.exists() or not input_dir.is_dir():
+        return False, [f"evidence archive missing: {input_dir}"]
+    missing_files = [name for name in required_files if not (input_dir / name).is_file()]
+    if missing_files:
+        messages.append("evidence archive files missing: " + ", ".join(missing_files))
+    manifest_path = input_dir / "manifest.txt"
+    manifest = manifest_path.read_text() if manifest_path.is_file() else ""
+    if "all_gates_passed=True" not in manifest:
+        missing_gates = _manifest_value(manifest, "missing_gates")
+        if missing_gates:
+            messages.append("evidence archive gates missing: " + missing_gates)
+        else:
+            messages.append("evidence archive gates missing: all_gates_passed is not True")
+    manifest_files = {
+        line[2:].strip()
+        for line in manifest.splitlines()
+        if line.startswith("- ")
+    }
+    missing_manifest_entries = [
+        name for name in required_files if name != "manifest.txt" and name not in manifest_files
+    ]
+    if missing_manifest_entries:
+        messages.append(
+            "evidence archive manifest entries missing: "
+            + ", ".join(missing_manifest_entries)
+        )
+    return not messages, messages
+
+
+def _manifest_value(manifest: str, key: str) -> str | None:
+    prefix = f"{key}="
+    for line in manifest.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :]
+    return None
+
+
 def _render_live_readiness_checklist(args, db_path: Path) -> str:
     base = [
         "PYTHONPATH=src",
@@ -1672,6 +1731,11 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
             "--output-dir",
             "data/low-latency-evidence/<run-id>",
             "--require-evidence",
+        ),
+        command(
+            "low-latency-verify-evidence-archive",
+            "--input-dir",
+            "data/low-latency-evidence/<run-id>",
         ),
     ]
     return "\n".join(lines)
