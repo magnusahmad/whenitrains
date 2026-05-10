@@ -190,6 +190,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 submit-to-reject latency pass: submitted live orders that reconcile to a non-fill terminal status now record an `order_rejected` latency stage, and `low-latency-readiness-report` prints `order_submitted -> order_rejected` percentiles plus optional submit-to-reject evidence. This lets production evidence answer the roadmap's submit-to-fill/reject timing requirement instead of fill-only timing. Verified with `PYTHONPATH=src python3 -m unittest tests.test_live.LiveTests.test_execute_live_buy_records_rejected_terminal_latency_stage tests.test_latency_report`.
 
+2026-05-11 live settlement evidence gate pass: `low-latency-readiness-report --require-evidence` now requires a filled live `SETTLEMENT`/`market_resolution` order row, so readiness cannot pass until a resolved-market live settlement has been observed and archived for validation against CLOB/onchain truth. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

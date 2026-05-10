@@ -321,6 +321,19 @@ class LatencyReportTests(unittest.TestCase):
                     "price": "0.2",
                 },
             )
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="SETTLEMENT",
+                action="SELL",
+                status="filled",
+                event_type="market_resolution",
+                event_key="market_resolution:2026-05-11:yes25",
+                fill_price=1.0,
+                fill_size_usd=25.0,
+                fill_shares=25.0,
+                reason="resolved market settlement",
+            )
             db.close()
             stdout = StringIO()
 
@@ -346,7 +359,95 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("gate user_channel_events_observed=pass count=1", text)
             self.assertIn("gate user_channel_trade_applied=pass count=1", text)
             self.assertIn("gate live_reconcile_observed=pass count=1", text)
+            self.assertIn("gate live_settlement_observed=pass count=1", text)
             self.assertNotIn("readiness evidence missing", text)
+
+    def test_low_latency_readiness_report_require_evidence_fails_without_live_settlement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            record_latency_stage(db, "event-1", "db_committed", 10.0, "actual")
+            record_latency_stage(db, "event-1", "decision_started", 10.4, "actual")
+            record_latency_stage(db, "event-1", "order_submitted", 10.45, "actual")
+            record_latency_stage(db, "event-1", "clob_ack", 10.5, "actual")
+            record_latency_stage(db, "event-1", "fill_matched", 10.7, "actual")
+            record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
+            record_latency_stage(db, "event-1", "decision_completed", 10.9, "actual")
+            store_trading_decision(
+                db,
+                event_type="actual",
+                outcome_id="yes25",
+                label="25C",
+                side="YES",
+                action="BUY",
+                status="filled",
+                reason="test",
+                details={"orderbook_state_age_seconds": 0.2},
+            )
+            store_raw_snapshot(
+                db,
+                source="hko",
+                endpoint="https://example.test/latestReadings",
+                payload="{}",
+                response_headers={"Last-Modified": "Mon, 11 May 2026 00:00:02 GMT"},
+                fetch_started_at_utc="2026-05-11T00:00:01+00:00",
+                response_elapsed_ms=123.0,
+            )
+            store_raw_snapshot(
+                db,
+                source="hko",
+                endpoint="https://example.test/latestReadings",
+                payload="{}",
+                response_headers={"Last-Modified": "Mon, 11 May 2026 00:00:02 GMT"},
+                fetch_started_at_utc="2026-05-11T00:00:03+00:00",
+                response_elapsed_ms=123.0,
+            )
+            store_orderbook(
+                db,
+                "yes25",
+                _websocket_orderbook(),
+                metadata={"source": "polymarket_market_websocket"},
+            )
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="BUY_YES",
+                action="BUY",
+                status="submitted",
+                clob_order_id="order-1",
+                requested_size_usd=5.0,
+                limit_price=0.2,
+            )
+            apply_user_channel_event(
+                db,
+                {
+                    "id": "trade-event-1",
+                    "event_type": "trade",
+                    "order_id": "order-1",
+                    "asset_id": "yes25",
+                    "side": "BUY",
+                    "status": "MATCHED",
+                    "size": "25",
+                    "price": "0.2",
+                },
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("gate live_settlement_observed=missing count=0", text)
 
     def test_low_latency_readiness_report_require_evidence_fails_without_user_trade_event(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -78,6 +78,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - `low-latency-readiness-report --require-evidence` requires at least one stored `live_user_events` row so the production report cannot pass without authenticated user-channel evidence.
 - `low-latency-readiness-report --require-evidence` requires at least one stored user-channel `trade` event with `applied_position_delta = 1`, so order lifecycle messages alone cannot satisfy the matched-trade reconciliation requirement.
 - `low-latency-readiness-report --require-evidence` requires at least one reconciled live order row, so the production report cannot pass without archived `live-reconcile`/REST reconciliation evidence after live-money testing.
+- `low-latency-readiness-report --require-evidence` requires at least one filled live settlement/market-resolution row, so local readiness cannot pass until a resolved-market settlement has been observed and archived for live validation.
 - Evidence: `src/whenitrains/user_websocket.py`, `src/whenitrains/live_user_stream.py`, `src/whenitrains/live.py`, `src/whenitrains/runner.py`, `src/whenitrains/cli.py`.
 - Tests: `tests.test_live_user_stream`, `tests.test_user_websocket`, `tests.test_live`, `tests.test_cli`, `tests.test_runner`.
 - Missing: real user WebSocket smoke, recent-trades validation against the account, and live settlement validation against CLOB/onchain truth.
