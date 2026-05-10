@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from whenitrains.alerting import MemoryAlertSink
 from whenitrains.operational import (
     LiveSchedulerLock,
     LiveSchedulerLockError,
@@ -85,7 +86,11 @@ class OperationalReadinessTests(unittest.TestCase):
                 local_clob_drift_count=0,
             )
 
-            frozen = freeze_new_entries_for_health_failures(db, health)
+            alert_sink = MemoryAlertSink()
+
+            frozen = freeze_new_entries_for_health_failures(
+                db, health, alert_sink=alert_sink
+            )
 
             self.assertTrue(frozen)
             self.assertTrue(live_setting_enabled(db, "block_new_entries"))
@@ -95,6 +100,9 @@ class OperationalReadinessTests(unittest.TestCase):
             self.assertEqual(risk["event_type"], "live_startup_health_failed")
             self.assertEqual(risk["severity"], "critical")
             self.assertIn("market websocket disconnected", risk["details_json"])
+            self.assertEqual(len(alert_sink.messages), 1)
+            self.assertEqual(alert_sink.messages[0].title, "live_startup_health_failed")
+            self.assertEqual(alert_sink.messages[0].severity, "critical")
 
     def test_healthy_startup_health_does_not_freeze_entries(self):
         with tempfile.TemporaryDirectory() as tmp:

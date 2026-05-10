@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .backtest import dumps_result_json, render_backtest_result, run_backtest_day
+from .alerting import alert_sink_from_env
 from .config import Settings
 from .experiments.backtest import (
     dumps_experiment_result_json,
@@ -692,6 +694,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             config = load_live_config()
             client = PolymarketClobClient(config)
+            alert_sink = alert_sink_from_env(os.environ)
             preflight = preflight_live(
                 db,
                 client,
@@ -712,7 +715,9 @@ def main(argv: list[str] | None = None) -> int:
                 stale_submitted_orders=stale_submitted,
                 local_clob_drift_count=drift_count,
             )
-            if freeze_new_entries_for_health_failures(db, health):
+            if freeze_new_entries_for_health_failures(
+                db, health, alert_sink=alert_sink
+            ):
                 print(
                     "blocked new entries: live startup health failed: "
                     + "; ".join(health.reasons),
@@ -757,7 +762,9 @@ def main(argv: list[str] | None = None) -> int:
                     stale_submitted_orders=0,
                     local_clob_drift_count=len(drifts),
                 )
-                freeze_new_entries_for_health_failures(tick_db, health)
+                freeze_new_entries_for_health_failures(
+                    tick_db, health, alert_sink=alert_sink
+                )
                 return RunnerResult(
                     notes=(
                         f"live reconcile watchdog froze entries: {len(drifts)} local/CLOB drift items",

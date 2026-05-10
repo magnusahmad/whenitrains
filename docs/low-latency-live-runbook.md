@@ -28,6 +28,7 @@ Expected startup behavior:
 - A DB-specific live scheduler lock is acquired.
 - Stale submitted live orders freeze new entries with a `live_stale_submitted_orders` risk event.
 - Live preflight validates credentials, balance, allowance, and kill-switch state.
+- If `WHENITRAINS_ALERT_WEBHOOK_URL` is set, live startup-health and reconcile-health freezes emit JSON webhook alerts.
 
 ## Stop
 
@@ -100,6 +101,14 @@ PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kil
 - Polymarket book cache stale during a live hot-path entry.
 - Local/CLOB position or sellable-balance drift.
 - HKO source freshness breach during a learned AWS actual publish window.
+
+Webhook alerts:
+
+```bash
+export WHENITRAINS_ALERT_WEBHOOK_URL=https://alerts.example.invalid/whenitrains
+```
+
+The webhook receives JSON with `title`, `severity`, `details`, and formatted `text` fields.
 
 ## Exit Criteria For Returning To Normal
 

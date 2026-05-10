@@ -5,6 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from .alerting import AlertMessage, AlertSink
 from .storage import set_live_setting, store_risk_event
 
 
@@ -84,15 +85,27 @@ def evaluate_live_startup_health(
 
 
 def freeze_new_entries_for_health_failures(
-    db: sqlite3.Connection, health: LiveStartupHealth
+    db: sqlite3.Connection,
+    health: LiveStartupHealth,
+    *,
+    alert_sink: AlertSink | None = None,
 ) -> bool:
     if health.ok:
         return False
+    details = {"reasons": list(health.reasons)}
     set_live_setting(db, "block_new_entries", True)
     store_risk_event(
         db,
         "live_startup_health_failed",
         "critical",
-        {"reasons": list(health.reasons)},
+        details,
     )
+    if alert_sink is not None:
+        alert_sink.send(
+            AlertMessage(
+                title="live_startup_health_failed",
+                severity="critical",
+                details=details,
+            )
+        )
     return True
