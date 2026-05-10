@@ -632,6 +632,34 @@ class LatencyReportTests(unittest.TestCase):
                 stdout.getvalue(),
             )
 
+    def test_low_latency_verify_evidence_archive_fails_conflicting_gate_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                manifest.replace(
+                    "all_gates_passed=True",
+                    "all_gates_passed=True\nmissing_gates=live_network_smoke_ok",
+                )
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive gates inconsistent: missing_gates present while all_gates_passed is True",
+                stdout.getvalue(),
+            )
+
     def test_low_latency_verify_evidence_archive_fails_duplicate_manifest_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "evidence"

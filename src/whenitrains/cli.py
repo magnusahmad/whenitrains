@@ -1690,8 +1690,14 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
     ]
     for key in _manifest_duplicate_keys(manifest, unique_manifest_keys):
         messages.append(f"evidence archive duplicate manifest key: {key}")
-    if _manifest_value(manifest, "all_gates_passed") != "True":
-        missing_gates = _manifest_value(manifest, "missing_gates")
+    all_gates_passed = _manifest_value(manifest, "all_gates_passed")
+    missing_gates = _manifest_value(manifest, "missing_gates")
+    if all_gates_passed == "True" and missing_gates:
+        messages.append(
+            "evidence archive gates inconsistent: "
+            "missing_gates present while all_gates_passed is True"
+        )
+    if all_gates_passed != "True":
         if missing_gates:
             messages.append("evidence archive gates missing: " + missing_gates)
         else:
