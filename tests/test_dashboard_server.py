@@ -1194,6 +1194,78 @@ class DashboardServerTests(unittest.TestCase):
             self.assertAlmostEqual(rows[0]["shares"], 68.503)
             self.assertAlmostEqual(rows[0]["fill_size_usd"], 19.86587)
 
+    def test_live_forecast_panel_keeps_trade_markers_without_orderbook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            db.execute(
+                """
+                insert into live_orders (
+                    created_at_utc, outcome_id, label, side, action, order_type,
+                    status, requested_size_usd, limit_price, fill_price,
+                    fill_size_usd, fill_shares, reason
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "2026-05-06T04:00:00+00:00",
+                    "yes25",
+                    "25°C",
+                    "BUY_YES",
+                    "BUY",
+                    "FAK",
+                    "filled",
+                    20.0,
+                    0.29,
+                    0.29,
+                    20.0,
+                    68.9655,
+                    "test live buy",
+                ),
+            )
+            db.execute(
+                """
+                insert into live_orders (
+                    created_at_utc, outcome_id, label, side, action, order_type,
+                    status, requested_size_usd, limit_price, fill_price,
+                    fill_size_usd, fill_shares, reason
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "2026-05-06T05:00:00+00:00",
+                    "yes25",
+                    "25°C",
+                    "SELL",
+                    "SELL",
+                    "FAK",
+                    "filled",
+                    20.0,
+                    0.31,
+                    0.31,
+                    20.0,
+                    64.5161,
+                    "test live sell",
+                ),
+            )
+            db.commit()
+
+            panel = forecast_panels(
+                db,
+                today=date(2026, 5, 6),
+                token_side="YES",
+                marker_source="live",
+            )["panels"][0]
+
+            traded = [
+                item for item in panel["top_tokens"] if item["token_id"] == "yes25"
+            ]
+            self.assertEqual(len(traded), 1)
+            self.assertEqual(
+                [marker["text"] for marker in traded[0]["markers"]], ["B", "S"]
+            )
+            self.assertEqual(traded[0]["points"], [])
+            self.assertAlmostEqual(traded[0]["latest_price"], 0.31)
+
     def test_live_trade_rows_backfill_zero_fill_size_from_price_and_shares(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_dashboard_db(Path(tmp) / "test.db")

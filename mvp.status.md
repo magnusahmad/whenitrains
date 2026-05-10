@@ -32,6 +32,8 @@ Live buys now reconcile reported fills against the wallet's conditional-token ba
 
 The live dashboard now runs the live-order reconcile path before serving live stats, forecast panels, PnL, and trade drilldowns. This lets submitted or `unknown_fill` orders become filled live orders and rebuilt open positions through ordinary dashboard refreshes, instead of requiring a separate manual `live-reconcile` before the dashboard can show overnight fills.
 
+Forecast-panel trade markers now include traded live/paper tokens even when the token is missing from the latest orderbook candidate rows. Marker-only traded tokens fall back to their latest fill price, so B/S chart bubbles remain visible after fills on tokens that no longer have a fresh orderbook snapshot.
+
 AWS GIS actual readings remain enabled for low-latency current temperature and extrema, but `MAXTEMP`/`MINTEMP` from exactly `00:00 HKT` are treated as previous-day rollover extrema and are not stored as same-day since-midnight max/min values. This prevents a midnight carryover such as `MAXTEMP=26.1` from triggering current-day actual-cross buys.
 
 Relevant existing implementation:
@@ -54,9 +56,11 @@ Session verification on 2026-05-10 HKT:
 
 - Red/green test added: `test_live_dashboard_reconcile_makes_submitted_fill_visible`.
 - Red/green test added: `test_parse_aws_gis_midnight_extremes_are_previous_day`.
+- Red/green test added: `test_live_forecast_panel_keeps_trade_markers_without_orderbook`.
 - `PYTHONPATH=src python3 -m unittest tests.test_dashboard_server` passes.
 - `PYTHONPATH=src python3 -m unittest tests.test_hko` passes.
 - Browser visual check completed against `http://127.0.0.1:8788/live` using a temporary `/private/tmp` SQLite DB.
+- Browser visual check completed against `http://127.0.0.1:8789/live` using a temporary `/private/tmp` SQLite DB with a marker-only live trade; one visible `B` bubble rendered with the expected title.
 - `curl -L http://127.0.0.1:8788/api/live/stats` returned a valid live payload.
 
 ## Decisions

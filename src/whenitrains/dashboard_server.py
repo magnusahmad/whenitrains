@@ -770,6 +770,14 @@ def top_token_price_series(
             }
         )
     if include_trade_tokens:
+        known_tokens = {record["row"]["token_id"] for record in row_records}
+        for record in traded_token_price_records(
+            db, target_date_hkt, side, market_kind, marker_source
+        ):
+            if record["row"]["token_id"] in known_tokens:
+                continue
+            row_records.append(record)
+            known_tokens.add(record["row"]["token_id"])
         eligible = [
             record
             for record in row_records
@@ -819,6 +827,143 @@ def top_token_price_series(
             }
         )
     return series
+
+
+def traded_token_price_records(
+    db: sqlite3.Connection,
+    target_date_hkt: str,
+    side: str,
+    market_kind: str,
+    marker_source: str,
+) -> list[dict]:
+    if marker_source == "live":
+        rows = _live_traded_token_rows(db, target_date_hkt, side, market_kind)
+        marker_fn = live_order_markers
+    else:
+        rows = _paper_traded_token_rows(db, target_date_hkt, side, market_kind)
+        marker_fn = paper_order_markers
+    records = []
+    for row in rows:
+        token_id = row["token_id"]
+        markers = marker_fn(db, token_id)
+        if not markers:
+            continue
+        latest_price = _optional_float(row["best_ask"])
+        if latest_price is None:
+            latest_price = _optional_float(row["latest_fill_price"])
+        if latest_price is None:
+            continue
+        records.append(
+            {
+                "row": {
+                    "label": row["label"] or token_id,
+                    "token_id": token_id,
+                    "predicate_value_c": row["predicate_value_c"],
+                    "best_ask": latest_price,
+                },
+                "latest_price": latest_price,
+                "markers": markers,
+                "has_trades": True,
+            }
+        )
+    return records
+
+
+def _live_traded_token_rows(
+    db: sqlite3.Connection, target_date_hkt: str, side: str, market_kind: str
+) -> list[sqlite3.Row]:
+    token_col = "yes_token_id" if side == "YES" else "no_token_id"
+    slug_prefix = (
+        "lowest-temperature-in-hong-kong-on-"
+        if market_kind == "lowest"
+        else "highest-temperature-in-hong-kong-on-"
+    )
+    return db.execute(
+        f"""
+        select lo.outcome_id as token_id,
+               coalesce(o.label, lo.label) as label,
+               o.predicate_value_c,
+               (
+                   select s.best_ask
+                   from orderbook_snapshots s
+                   where s.outcome_id = lo.outcome_id
+                     and s.best_ask is not null
+                   order by s.fetched_at_utc desc, s.id desc
+                   limit 1
+               ) as best_ask,
+               (
+                   select lo2.fill_price
+                   from live_orders lo2
+                   where lo2.outcome_id = lo.outcome_id
+                     and lo2.status = 'filled'
+                     and lo2.fill_price is not null
+                   order by lo2.created_at_utc desc, lo2.id desc
+                   limit 1
+               ) as latest_fill_price
+        from live_orders lo
+        left join outcomes o
+          on lo.outcome_id = o.yes_token_id or lo.outcome_id = o.no_token_id
+        left join markets m on m.id = o.market_id
+        where lo.status = 'filled'
+          and lo.fill_price is not null
+          and m.target_date_hkt = ?
+          and m.slug like ?
+          and lo.outcome_id = o.{token_col}
+        group by lo.outcome_id
+        order by o.predicate_value_c asc, label asc
+        """,
+        (target_date_hkt, f"{slug_prefix}%"),
+    ).fetchall()
+
+
+def _paper_traded_token_rows(
+    db: sqlite3.Connection, target_date_hkt: str, side: str, market_kind: str
+) -> list[sqlite3.Row]:
+    _ensure_paper_order_exclusions(db)
+    token_col = "yes_token_id" if side == "YES" else "no_token_id"
+    slug_prefix = (
+        "lowest-temperature-in-hong-kong-on-"
+        if market_kind == "lowest"
+        else "highest-temperature-in-hong-kong-on-"
+    )
+    return db.execute(
+        f"""
+        select po.outcome_id as token_id,
+               o.label,
+               o.predicate_value_c,
+               (
+                   select s.best_ask
+                   from orderbook_snapshots s
+                   where s.outcome_id = po.outcome_id
+                     and s.best_ask is not null
+                   order by s.fetched_at_utc desc, s.id desc
+                   limit 1
+               ) as best_ask,
+               (
+                   select po2.simulated_fill_price
+                   from paper_orders po2
+                   where po2.outcome_id = po.outcome_id
+                     and po2.status = 'filled'
+                     and po2.simulated_fill_price is not null
+                     and {ACTIVE_PAPER_ORDER_FILTER.replace('po.', 'po2.')}
+                   order by po2.created_at_utc desc, po2.id desc
+                   limit 1
+               ) as latest_fill_price
+        from paper_orders po
+        left join outcomes o
+          on po.outcome_id = o.yes_token_id or po.outcome_id = o.no_token_id
+        left join markets m on m.id = o.market_id
+        where po.status = 'filled'
+          and po.simulated_fill_price is not null
+          and m.target_date_hkt = ?
+          and m.slug like ?
+          and po.outcome_id = o.{token_col}
+          and {ACTIVE_PAPER_ORDER_FILTER}
+        group by po.outcome_id
+        order by o.predicate_value_c asc, o.label asc
+        """,
+        (target_date_hkt, f"{slug_prefix}%"),
+    ).fetchall()
 
 
 def latest_market_token_price_rows(
