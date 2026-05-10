@@ -124,4 +124,4 @@ The webhook receives JSON with `title`, `severity`, `details`, and formatted `te
 - New entries remain blocked until the operator confirms no local/CLOB drift.
 - Latest market WebSocket book age is within `Settings.live_orderbook_cache_max_age_seconds` before relying on hot-path entries.
 - The dashboard live positions, recent live orders, and CLOB state agree.
-- `low-latency-readiness-report` has been archived with scheduler logs after any capped live readiness run.
+- `low-latency-readiness-report --require-evidence` has exited `0` and been archived with scheduler logs after any capped live readiness run.

@@ -158,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     readiness_report = sub.add_parser("low-latency-readiness-report")
     readiness_report.add_argument("--hko-endpoint-contains", default="latestReadings")
     readiness_report.add_argument("--hko-limit", type=int, default=200)
+    readiness_report.add_argument("--require-evidence", action="store_true")
     accuracy = sub.add_parser("research-forecast-accuracy")
     accuracy.add_argument("--start")
     accuracy.add_argument("--end")
@@ -295,13 +296,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "low-latency-readiness-report":
         migrate(db)
-        print(
-            _low_latency_readiness_report(
-                db,
-                hko_endpoint_contains=args.hko_endpoint_contains,
-                hko_limit=args.hko_limit,
-            )
+        report, gate_status = _low_latency_readiness_report(
+            db,
+            hko_endpoint_contains=args.hko_endpoint_contains,
+            hko_limit=args.hko_limit,
         )
+        print(report)
+        if args.require_evidence and not gate_status["all_passed"]:
+            print(
+                "readiness evidence missing: "
+                + ", ".join(gate_status["missing_gates"])
+            )
+            return 2
         return 0
     if args.command == "init-db":
         migrate(db)
@@ -1439,7 +1445,7 @@ def _low_latency_readiness_report(
     *,
     hko_endpoint_contains: str | None = "latestReadings",
     hko_limit: int = 200,
-) -> str:
+) -> tuple[str, dict[str, object]]:
     latency_pairs = [
         ("db_committed", "decision_started"),
         ("decision_started", "order_submitted"),
@@ -1465,23 +1471,27 @@ def _low_latency_readiness_report(
     )
     live = live_dashboard_stats(db)
     counts = live["counts"]
+    gates = [
+        _latency_threshold_gate(
+            "hko_commit_to_decision_under_1s",
+            commit_to_decision,
+            threshold_seconds=1.0,
+        ),
+        _latency_observed_gate(
+            "decision_to_submit_observed",
+            decision_to_submit,
+        ),
+        _latency_observed_gate(
+            "submit_to_fill_observed",
+            submit_to_fill,
+        ),
+        _count_observed_gate("hko_source_timing_observed", hko_timing_count),
+    ]
+    missing_gates = [gate["name"] for gate in gates if gate["status"] != "pass"]
     lines.extend(
         [
             "evidence gates:",
-            _latency_threshold_gate_line(
-                "hko_commit_to_decision_under_1s",
-                commit_to_decision,
-                threshold_seconds=1.0,
-            ),
-            _latency_observed_gate_line(
-                "decision_to_submit_observed",
-                decision_to_submit,
-            ),
-            _latency_observed_gate_line(
-                "submit_to_fill_observed",
-                submit_to_fill,
-            ),
-            _count_observed_gate_line("hko_source_timing_observed", hko_timing_count),
+            *[str(gate["line"]) for gate in gates],
             "live:",
             (
                 f"live orders total={counts['orders']} "
@@ -1507,7 +1517,10 @@ def _low_latency_readiness_report(
             ),
         ]
     )
-    return "\n".join(lines)
+    return "\n".join(lines), {
+        "all_passed": not missing_gates,
+        "missing_gates": missing_gates,
+    }
 
 
 def _hko_source_timing_count(
@@ -1531,31 +1544,34 @@ def _hko_source_timing_count(
     return int(row["count"] or 0)
 
 
-def _latency_threshold_gate_line(
+def _latency_threshold_gate(
     name: str,
     summary: dict[str, object],
     *,
     threshold_seconds: float,
-) -> str:
+) -> dict[str, object]:
     p95 = summary["p95_seconds"]
     count = int(summary["count"])
     passed = count > 0 and p95 is not None and float(p95) <= threshold_seconds
     status = "pass" if passed else "missing"
-    return (
+    line = (
         f"gate {name}={status} count={count} "
         f"p95={_fmt_seconds(p95)} threshold={_fmt_seconds(threshold_seconds)}"
     )
+    return {"name": name, "status": status, "line": line}
 
 
-def _latency_observed_gate_line(name: str, summary: dict[str, object]) -> str:
+def _latency_observed_gate(name: str, summary: dict[str, object]) -> dict[str, object]:
     count = int(summary["count"])
     status = "pass" if count > 0 else "missing"
-    return f"gate {name}={status} count={count} p95={_fmt_seconds(summary['p95_seconds'])}"
+    line = f"gate {name}={status} count={count} p95={_fmt_seconds(summary['p95_seconds'])}"
+    return {"name": name, "status": status, "line": line}
 
 
-def _count_observed_gate_line(name: str, count: int) -> str:
+def _count_observed_gate(name: str, count: int) -> dict[str, object]:
     status = "pass" if count > 0 else "missing"
-    return f"gate {name}={status} count={count}"
+    line = f"gate {name}={status} count={count}"
+    return {"name": name, "status": status, "line": line}
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:

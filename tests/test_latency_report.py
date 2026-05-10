@@ -11,6 +11,7 @@ from whenitrains.storage import (
     migrate,
     record_latency_stage,
     set_live_setting,
+    store_raw_snapshot,
     store_live_order,
 )
 from whenitrains.cli import main
@@ -149,3 +150,63 @@ class LatencyReportTests(unittest.TestCase):
                 text,
             )
             self.assertIn("gate hko_source_timing_observed=missing count=0", text)
+
+    def test_low_latency_readiness_report_require_evidence_fails_when_gates_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            record_latency_stage(db, "event-1", "db_committed", 10.0, "actual")
+            record_latency_stage(db, "event-1", "decision_started", 10.4, "actual")
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("gate decision_to_submit_observed=missing count=0", text)
+            self.assertIn("readiness evidence missing", text)
+
+    def test_low_latency_readiness_report_require_evidence_passes_when_gates_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            record_latency_stage(db, "event-1", "db_committed", 10.0, "actual")
+            record_latency_stage(db, "event-1", "decision_started", 10.4, "actual")
+            record_latency_stage(db, "event-1", "order_submitted", 10.45, "actual")
+            record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
+            store_raw_snapshot(
+                db,
+                source="hko",
+                endpoint="https://example.test/latestReadings",
+                payload="{}",
+                fetch_started_at_utc="2026-05-11T00:00:01+00:00",
+                response_elapsed_ms=123.0,
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn("gate hko_source_timing_observed=pass count=1", text)
+            self.assertNotIn("readiness evidence missing", text)
