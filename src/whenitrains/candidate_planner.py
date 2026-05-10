@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
+
+from .execution_scheduler import CandidateAction
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,20 @@ def plan_actual_cross_actions(
             )
         )
     return actions
+
+
+def executable_candidate_actions(
+    actions: list[PlannedCandidateAction],
+    executor: Callable[[PlannedCandidateAction], object],
+) -> list[CandidateAction]:
+    return [
+        CandidateAction(
+            action.candidate_key,
+            conflict_keys=action.conflict_keys,
+            run=lambda action=action: executor(action),
+        )
+        for action in actions
+    ]
 
 
 def _action(
