@@ -33,6 +33,7 @@ from .storage import (
     list_open_live_positions,
     list_open_paper_positions,
     list_outcomes_for_date,
+    list_outcomes_from_date,
     list_tradeable_forecast_dates,
     observed_min_decreases,
     observed_max_increases,
@@ -197,11 +198,22 @@ def _process_forecast_change_entries_kind(
     )
     if has_processed_event(db, event_key):
         return RunnerResult(notes=(f"{noun} change already processed",))
+    if rows is None:
+        all_rows = list_outcomes_for_date(db, target_date.isoformat())
+        rows = (
+            _lowest_temperature_rows(all_rows)
+            if market_kind == "lowest"
+            else _highest_temperature_rows(all_rows)
+        )
     exit_result = process_forecast_position_exits(
-        db, target_date, new_value, event_key=event_key, market_kind=market_kind
+        db,
+        target_date,
+        new_value,
+        event_key=event_key,
+        market_kind=market_kind,
+        outcome_by_token=_rows_by_token(rows),
     )
 
-    rows = rows or _highest_temperature_rows(list_outcomes_for_date(db, target_date.isoformat()))
     outcomes = [_outcome_from_row(row) for row in rows]
     prior_yes_asks: dict[str, float] = {}
     current_yes_asks: dict[str, float] = {}
@@ -549,15 +561,18 @@ def process_forecast_position_exits(
     new_forecast_max_c: float,
     event_key: str | None = None,
     market_kind: str = "highest",
+    outcome_by_token: dict[str, sqlite3.Row] | None = None,
 ) -> RunnerResult:
     sells_filled = 0
     sells_missed = 0
     notes: list[str] = []
     pending_sells: list[tuple[PlannedCandidateAction, _SellPlan]] = []
     positions = list_open_live_positions(db) if _LIVE_CLIENT is not None else list_open_paper_positions(db)
+    if outcome_by_token is None:
+        outcome_by_token = _rows_by_token(list_outcomes_for_date(db, target_date.isoformat()))
     for pos in positions:
         token_id = pos["outcome_id"]
-        outcome = find_outcome_by_token(db, token_id)
+        outcome = outcome_by_token.get(token_id)
         if outcome is None or outcome["target_date_hkt"] != target_date.isoformat():
             continue
         if _temperature_market_kind_for_row(outcome) != market_kind:
@@ -968,6 +983,32 @@ def _process_actual_transition(
     signals = 0
     event_marked = False
     pending_executions: list[tuple[PlannedCandidateAction, TradeCandidate, float | None]] = []
+
+    def flush_pending_executions() -> None:
+        nonlocal buys_filled, buys_missed, pending_executions
+        if not pending_executions:
+            return
+        execution_lookup = {
+            action.candidate_key: (candidate, max_buy_price)
+            for action, candidate, max_buy_price in pending_executions
+        }
+        scheduled_actions = executable_candidate_actions(
+            [action for action, _, _ in pending_executions],
+            executor=lambda action: _execute_candidate_buy(
+                db,
+                execution_lookup[action.candidate_key][0],
+                event_type="actual_cross",
+                event_key=event_key,
+                max_buy_price=execution_lookup[action.candidate_key][1],
+            ),
+        )
+        for result in ExecutionScheduler(max_workers=1).run(scheduled_actions):
+            if result.value is True:
+                buys_filled += 1
+            elif result.value is False:
+                buys_missed += 1
+        pending_executions = []
+
     for row in rows or _highest_temperature_rows(list_outcomes_for_date(db, today_hkt.isoformat())):
         predicate = parse_outcome_label(row["label"])
         side = _actual_cross_side(predicate, old_max, new_max)
@@ -976,6 +1017,7 @@ def _process_actual_transition(
         token_id = row["yes_token_id"] if side == "YES" else row["no_token_id"]
         signals += 1
         if _actual_cross_guarded_by_forecast(predicate, side, forecast_max):
+            flush_pending_executions()
             if not event_marked:
                 _mark_event_processed(
                     db,
@@ -1004,6 +1046,7 @@ def _process_actual_transition(
             db, today_hkt.isoformat(), new["observed_at_hkt"], new_max
         )
         if exact_fast_lane and not peak_hour_sure_bet:
+            flush_pending_executions()
             if not event_marked:
                 _mark_event_processed(
                     db,
@@ -1029,6 +1072,7 @@ def _process_actual_transition(
             continue
         prices = latest_two_orderbook_prices(db, token_id)
         if len(prices) < 2 or prices[0]["best_ask"] is None or prices[1]["best_ask"] is None:
+            flush_pending_executions()
             store_trading_decision(
                 db,
                 "actual_cross",
@@ -1061,6 +1105,7 @@ def _process_actual_transition(
             )
             event_marked = True
         if stale_move_threshold is not None and current - prior >= stale_move_threshold:
+            flush_pending_executions()
             store_trading_decision(
                 db,
                 "actual_cross",
@@ -1128,25 +1173,7 @@ def _process_actual_transition(
                 max_buy_price,
             )
         )
-    execution_lookup = {
-        action.candidate_key: (candidate, max_buy_price)
-        for action, candidate, max_buy_price in pending_executions
-    }
-    scheduled_actions = executable_candidate_actions(
-        [action for action, _, _ in pending_executions],
-        executor=lambda action: _execute_candidate_buy(
-            db,
-            execution_lookup[action.candidate_key][0],
-            event_type="actual_cross",
-            event_key=event_key,
-            max_buy_price=execution_lookup[action.candidate_key][1],
-        ),
-    )
-    for result in ExecutionScheduler(max_workers=1).run(scheduled_actions):
-        if result.value is True:
-            buys_filled += 1
-        elif result.value is False:
-            buys_missed += 1
+    flush_pending_executions()
     return RunnerResult(
         buys_filled=buys_filled,
         buys_missed=buys_missed,
@@ -1242,7 +1269,9 @@ def _actual_low_cross_side(predicate, old_min: float, new_min: float) -> str | N
 
 
 def process_open_position_exits(
-    db: sqlite3.Connection, today_hkt: date | None = None
+    db: sqlite3.Connection,
+    today_hkt: date | None = None,
+    outcome_by_token: dict[str, sqlite3.Row] | None = None,
 ) -> RunnerResult:
     today = today_hkt or datetime.now(HKT).date()
     sells_filled = 0
@@ -1250,9 +1279,11 @@ def process_open_position_exits(
     notes: list[str] = []
     pending_sells: list[tuple[PlannedCandidateAction, _SellPlan]] = []
     positions = list_open_live_positions(db) if _LIVE_CLIENT is not None else list_open_paper_positions(db)
+    if outcome_by_token is None:
+        outcome_by_token = _rows_by_token(list_outcomes_from_date(db, "0001-01-01"))
     for pos in positions:
         token_id = pos["outcome_id"]
-        outcome = find_outcome_by_token(db, token_id)
+        outcome = outcome_by_token.get(token_id)
         if outcome is None:
             store_trading_decision(
                 db, "exit_check", token_id, None, None, "SELL", "missed", "unknown token"
@@ -1630,6 +1661,14 @@ def _lowest_temperature_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
         for row in rows
         if str(row["slug"]).startswith("lowest-temperature-in-hong-kong-on-")
     ]
+
+
+def _rows_by_token(rows: list[sqlite3.Row]) -> dict[str, sqlite3.Row]:
+    by_token: dict[str, sqlite3.Row] = {}
+    for row in rows:
+        by_token[str(row["yes_token_id"])] = row
+        by_token[str(row["no_token_id"])] = row
+    return by_token
 
 
 def _temperature_market_kind_for_row(row: sqlite3.Row) -> str:
