@@ -1527,7 +1527,7 @@ def _low_latency_readiness_report(
             threshold_seconds=Settings.live_orderbook_cache_max_age_seconds,
         ),
         _count_observed_gate("hko_source_timing_observed", hko_timing_count),
-        _live_money_state_gate(live),
+        _live_money_state_gate(db, live),
         _kill_switch_clear_gate(live),
     ]
     missing_gates = [gate["name"] for gate in gates if gate["status"] != "pass"]
@@ -1660,15 +1660,25 @@ def _count_observed_gate(name: str, count: int) -> dict[str, object]:
     return {"name": name, "status": status, "line": line}
 
 
-def _live_money_state_gate(live: dict[str, object]) -> dict[str, object]:
+def _live_money_state_gate(db, live: dict[str, object]) -> dict[str, object]:
     counts = live["counts"]
     submitted = int(counts["submitted"])
     error = int(counts["error"])
+    unresolved_orders = int(
+        db.execute(
+            """
+            select count(*)
+            from live_orders
+            where status in ('submitted', 'unknown_fill', 'open', 'pending')
+            """
+        ).fetchone()[0]
+    )
     missing_bid_positions = int(live["missing_bid_positions"])
-    clear = submitted == 0 and error == 0 and missing_bid_positions == 0
+    clear = unresolved_orders == 0 and error == 0 and missing_bid_positions == 0
     status = "pass" if clear else "missing"
     line = (
         f"gate live_money_state_clear={status} "
+        f"unresolved_orders={unresolved_orders} "
         f"submitted={submitted} "
         f"error={error} "
         f"missing_bid_positions={missing_bid_positions}"
