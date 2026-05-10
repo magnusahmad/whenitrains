@@ -18,6 +18,8 @@ Low-latency readiness M0/M1 groundwork is now implemented for AWS actual transit
 
 Low-latency readiness M2 groundwork is also partially implemented. `OrderBookCache` can apply Polymarket market-channel `book`, `price_change`, `best_bid_ask`, and `last_trade_price` fixture messages, persist append-only snapshots with WebSocket metadata, reject stale cached books at the configured 250 ms cap, and seed reconnect snapshots. Live buy execution now uses a fresh cache book before falling back to REST `/book`. Active-market YES/NO token listing and subscription-change payload planning are covered so market discovery can drive resubscribe messages without restarting the scheduler. A real network WebSocket loop and scheduler-owned long-running connection remain pending.
 
+Low-latency readiness M3 groundwork has a standalone execution scheduler primitive. Candidate actions declare conflict keys such as token, position, or shared risk budget keys; independent actions can run concurrently, while conflicting actions are serialized in deterministic input order. This is not yet wired into the runner candidate planner.
+
 The paper/live scheduler now performs a startup warmup loop before allowing trading decisions. On process start it may fetch HKO data, discover markets, and fetch orderbooks, but it skips the first trading tick so entries cannot be opened against a partially refreshed local data round.
 
 Dashboard executable PnL now values open positions against only the latest orderbook snapshot. If the latest snapshot has no bid depth, older non-null bids are ignored so stale bids cannot create phantom unrealized gains.
@@ -45,6 +47,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 2026-05-11 low-latency implementation pass: added `src/whenitrains/low_latency.py`, `tests/test_low_latency.py`, append-only `latency_trace_events`, orderbook-age enrichment for paper decisions, scheduler fast-event queue draining, and CLI wiring so paper/live schedulers share the queue with AWS actual ingestion. New tests cover immediate enqueue after AWS actual commit, fake-clock decision start under 1 second after commit, orderbook age in decision details, and scheduler fast-queue precedence over the watchdog tick. Verified targeted suites: `PYTHONPATH=src python3 -m unittest tests.test_low_latency`, `tests.test_scheduler`, `tests.test_runner`, `tests.test_storage`, and two current-temperature CLI tests.
 
 2026-05-11 market WebSocket cache pass: added `src/whenitrains/orderbook_cache.py` with market subscription payloads, fixture-driven book cache updates, stale-cache rejection, snapshot persistence metadata, active token listing, and subscription-change detection. Live execution now accepts an optional book cache and avoids the hot-path REST `/book` fetch when a fresh cache book is available. Verified `PYTHONPATH=src python3 -m unittest tests.test_orderbook_cache` plus focused live runner tests.
+
+2026-05-11 execution scheduler pass: added `src/whenitrains/execution_scheduler.py` and `tests/test_execution_scheduler.py`. Verification covers independent candidate concurrency and deterministic serialization for conflicting token/risk keys. Runner integration and source-event candidate planning remain pending.
 
 Past-date unresolved local positions remain a documented residual risk. The real market should eventually resolve, but local paper/live state still needs a reconcile/settlement path to reflect that resolution in risk and dashboard state if the scheduler missed the same-day exit window.
 
