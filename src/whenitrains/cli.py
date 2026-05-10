@@ -1665,6 +1665,7 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             continue
         path = input_dir / name
         if not path.is_file():
+            messages.append(f"evidence archive checksum file missing: {name}")
             continue
         actual_digest = _sha256_file(path)
         if actual_digest != expected_digest:
