@@ -2037,9 +2037,16 @@ def _readiness_gate_line_malformed(line: str) -> bool:
     for field in rest_parts[1:]:
         if "=" not in field:
             return True
-        key, _value = field.split("=", 1)
+        key, value = field.split("=", 1)
         if not key or key in seen_fields:
             return True
+        if key == "count":
+            try:
+                count = int(value)
+            except ValueError:
+                return True
+            if count < 0:
+                return True
         seen_fields.add(key)
     return False
 
