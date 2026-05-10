@@ -572,6 +572,47 @@ HKO,27.3,28.5,24.0
             self.assertIn("startup warmup: trading skipped", text)
             self.assertIn("decisions skipped: data fetch failed", text)
 
+    def test_scheduler_alerts_on_source_freshness_breach_after_warmup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            times = iter(
+                [
+                    datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT),
+                    datetime(2026, 5, 4, 12, 0, 16, tzinfo=HKT),
+                ]
+            )
+            orderbook_calls = 0
+            alert_sink = MemoryAlertSink()
+
+            def fetch_orderbooks(_target):
+                nonlocal orderbook_calls
+                orderbook_calls += 1
+                if orderbook_calls == 2:
+                    raise OSError("orderbooks unavailable")
+
+            run_scheduled_paper_loop(
+                db,
+                fetch_since_midnight=lambda: "",
+                fetch_bulletin=lambda: "",
+                discover_market=lambda target: None,
+                fetch_orderbooks=fetch_orderbooks,
+                run_tick_fn=lambda _db, today_hkt: RunnerResult(),
+                max_ticks=2,
+                now_fn=lambda: next(times),
+                quiet=True,
+                base_sleep_seconds=0,
+                output_label="live-scheduler",
+                alert_sink=alert_sink,
+            )
+
+            self.assertEqual(len(alert_sink.messages), 1)
+            alert = alert_sink.messages[0]
+            self.assertEqual(alert.title, "live-scheduler source freshness breach")
+            self.assertEqual(alert.severity, "critical")
+            self.assertIn("orderbooks failed: OSError: orderbooks unavailable", alert.details["notes"])
+            self.assertEqual(alert.details["action"], "decisions skipped")
+
     def test_scheduler_startup_warmup_fetches_actual_when_background_poller_is_enabled(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

@@ -325,13 +325,25 @@ def run_scheduled_paper_loop(
                 else:
                     data_failed = True
             if data_failed:
+                warmed_up = state.trading_warmed_up
                 result = RunnerResult(
                     notes=(
                         "decisions skipped: data fetch failed"
-                        if state.trading_warmed_up
+                        if warmed_up
                         else "startup warmup blocked: data fetch failed",
                     )
                 )
+                if warmed_up and alert_sink is not None:
+                    alert_sink.send(
+                        AlertMessage(
+                            title=f"{output_label} source freshness breach",
+                            severity="critical",
+                            details={
+                                "action": "decisions skipped",
+                                "notes": list(notes),
+                            },
+                        )
+                    )
             elif state.trading_warmed_up:
                 tick_fn = run_tick_fn or run_paper_tick
                 result = RunnerResult()
