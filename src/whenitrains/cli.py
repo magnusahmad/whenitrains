@@ -1790,7 +1790,7 @@ def _hko_source_timing_report_content_valid(text: str) -> bool:
         return False
     if row_count <= 0:
         return False
-    if "response_ms " not in text:
+    if not _hko_response_percentiles_valid(lines):
         return False
     offset_prefix = "public_availability_fetch_offsets_seconds="
     for line in lines:
@@ -1798,6 +1798,32 @@ def _hko_source_timing_report_content_valid(text: str) -> bool:
             continue
         offset_value = line[len(offset_prefix) :].strip()
         return _hko_public_offset_buckets_valid(offset_value)
+    return False
+
+
+def _hko_response_percentiles_valid(lines: list[str]) -> bool:
+    prefix = "response_ms "
+    for line in lines:
+        if not line.startswith(prefix):
+            continue
+        parts = line[len(prefix) :].split()
+        values: dict[str, str] = {}
+        for part in parts:
+            if "=" not in part:
+                return False
+            key, value = part.split("=", 1)
+            values[key] = value
+        for key in ("p50", "p95", "p99"):
+            value = values.get(key)
+            if value is None or not value.endswith("ms"):
+                return False
+            try:
+                milliseconds = float(value[:-2])
+            except ValueError:
+                return False
+            if milliseconds < 0:
+                return False
+        return True
     return False
 
 
