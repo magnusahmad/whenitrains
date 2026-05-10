@@ -107,6 +107,13 @@ from .storage import (
 
 HKO_PUBLIC_AVAILABILITY_CLUSTER_SECONDS = 20.0
 HKO_PUBLIC_AVAILABILITY_MIN_CLUSTERED_FETCHES = 2
+LOW_LATENCY_READINESS_LATENCY_PAIRS = [
+    ("db_committed", "decision_started"),
+    ("decision_started", "order_submitted"),
+    ("order_submitted", "fill_confirmed"),
+    ("order_submitted", "order_rejected"),
+    ("db_committed", "decision_completed"),
+]
 LOW_LATENCY_READINESS_GATE_NAMES = [
     "hko_commit_to_decision_under_1s",
     "hko_commit_to_decision_completed_under_1s",
@@ -1795,6 +1802,7 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
         return (
             text.startswith("low latency readiness report\n")
             and _readiness_sections_valid(text)
+            and _readiness_latency_lines_valid(text)
             and bool(_readiness_gate_lines(text))
             and "readiness evidence missing:" not in text
         )
@@ -1970,6 +1978,28 @@ def _readiness_sections_valid(text: str) -> bool:
     ):
         return False
     return lines.index("latency:") < lines.index("evidence gates:") < lines.index("live:")
+
+
+def _readiness_latency_lines_valid(text: str) -> bool:
+    lines = text.splitlines()
+    try:
+        start = lines.index("latency:") + 1
+        end = lines.index("evidence gates:", start)
+    except ValueError:
+        return False
+    section_lines = [line for line in lines[start:end] if line.strip()]
+    if len(section_lines) != len(LOW_LATENCY_READINESS_LATENCY_PAIRS):
+        return False
+    for start_stage, end_stage in LOW_LATENCY_READINESS_LATENCY_PAIRS:
+        pair = f"{start_stage} -> {end_stage}"
+        matching_lines = [
+            line for line in section_lines if line.startswith(f"{pair} count=")
+        ]
+        if len(matching_lines) != 1:
+            return False
+        if not _latency_report_content_valid(pair, matching_lines[0]):
+            return False
+    return True
 
 
 def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
@@ -2414,15 +2444,8 @@ def _low_latency_readiness_report(
     hko_endpoint_contains: str | None = "latestReadings",
     hko_limit: int = 200,
 ) -> tuple[str, dict[str, object]]:
-    latency_pairs = [
-        ("db_committed", "decision_started"),
-        ("decision_started", "order_submitted"),
-        ("order_submitted", "fill_confirmed"),
-        ("order_submitted", "order_rejected"),
-        ("db_committed", "decision_completed"),
-    ]
     lines = ["low latency readiness report", "latency:"]
-    for start_stage, end_stage in latency_pairs:
+    for start_stage, end_stage in LOW_LATENCY_READINESS_LATENCY_PAIRS:
         summary = latency_duration_summary(db, start_stage, end_stage)
         lines.append(
             f"{start_stage} -> {end_stage} "

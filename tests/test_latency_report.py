@@ -106,6 +106,11 @@ def _archive_report_fixture_content(name: str) -> str:
         return (
             "low latency readiness report\n"
             "latency:\n"
+            "db_committed -> decision_started count=1 p50=0.100s p95=0.100s p99=0.100s\n"
+            "decision_started -> order_submitted count=1 p50=0.100s p95=0.100s p99=0.100s\n"
+            "order_submitted -> fill_confirmed count=1 p50=0.100s p95=0.100s p99=0.100s\n"
+            "order_submitted -> order_rejected count=1 p50=0.100s p95=0.100s p99=0.100s\n"
+            "db_committed -> decision_completed count=1 p50=0.100s p95=0.100s p99=0.100s\n"
             "evidence gates:\n"
             f"{gate_lines}\n"
             "live:\n"
@@ -1233,11 +1238,11 @@ class LatencyReportTests(unittest.TestCase):
             name = "readiness_report.txt"
             report = output_dir / name
             report.write_text(
-                "low latency readiness report\n"
-                "latency:\n"
-                "evidence gates:\n"
-                "gate live_network_smoke_ok=missing count=0 latest=none\n"
-                "live:\n"
+                report.read_text().replace(
+                    "gate live_network_smoke_ok=pass count=1\n",
+                    "gate live_network_smoke_ok=missing count=0 latest=none\n",
+                    1,
+                )
             )
             digest = hashlib.sha256(report.read_bytes()).hexdigest()
             manifest = (output_dir / "manifest.txt").read_text()
@@ -1274,11 +1279,11 @@ class LatencyReportTests(unittest.TestCase):
             name = "readiness_report.txt"
             report = output_dir / name
             report.write_text(
-                "low latency readiness report\n"
-                "latency:\n"
-                "evidence gates:\n"
-                "gate hko_commit_to_decision_under_1s=pass count=1\n"
-                "live:\n"
+                report.read_text().replace(
+                    "gate hko_commit_to_decision_completed_under_1s=pass count=1\n",
+                    "",
+                    1,
+                )
             )
             digest = hashlib.sha256(report.read_bytes()).hexdigest()
             manifest = (output_dir / "manifest.txt").read_text()
@@ -1463,6 +1468,41 @@ class LatencyReportTests(unittest.TestCase):
             name = "readiness_report.txt"
             report = output_dir / name
             report.write_text(report.read_text().replace("latency:\n", "", 1))
+            digest = hashlib.sha256(report.read_bytes()).hexdigest()
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                "\n".join(
+                    f"sha256 {name}={digest}"
+                    if line.startswith(f"sha256 {name}=")
+                    else line
+                    for line in manifest.splitlines()
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("evidence archive file malformed: readiness_report.txt", stdout.getvalue())
+
+    def test_low_latency_verify_evidence_archive_fails_readiness_report_without_latency_summaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            name = "readiness_report.txt"
+            report = output_dir / name
+            text = report.read_text()
+            latency_start = text.index("latency:\n") + len("latency:\n")
+            gates_start = text.index("evidence gates:\n")
+            report.write_text(text[:latency_start] + text[gates_start:])
             digest = hashlib.sha256(report.read_bytes()).hexdigest()
             manifest = (output_dir / "manifest.txt").read_text()
             (output_dir / "manifest.txt").write_text(
