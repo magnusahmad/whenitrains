@@ -1651,7 +1651,16 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             "evidence archive manifest entries missing: "
             + ", ".join(missing_manifest_entries)
         )
-    for name, expected_digest in _manifest_checksums(manifest).items():
+    checksums = _manifest_checksums(manifest)
+    missing_checksum_entries = [
+        name for name in required_files if name != "manifest.txt" and name not in checksums
+    ]
+    if missing_checksum_entries:
+        messages.append(
+            "evidence archive checksum entries missing: "
+            + ", ".join(missing_checksum_entries)
+        )
+    for name, expected_digest in checksums.items():
         if name == "manifest.txt":
             continue
         path = input_dir / name

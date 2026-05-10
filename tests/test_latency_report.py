@@ -1,3 +1,4 @@
+import hashlib
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -22,6 +23,17 @@ from whenitrains.live_user_stream import apply_user_channel_event
 from whenitrains.polymarket import OrderBook
 
 
+ARCHIVE_REPORT_FILES = [
+    "latency_db_committed_to_decision_started.txt",
+    "latency_decision_started_to_order_submitted.txt",
+    "latency_order_submitted_to_fill_confirmed.txt",
+    "latency_order_submitted_to_order_rejected.txt",
+    "latency_db_committed_to_decision_completed.txt",
+    "hko_source_timing_report.txt",
+    "readiness_report.txt",
+]
+
+
 def _websocket_orderbook() -> OrderBook:
     return OrderBook(
         "yes25",
@@ -30,6 +42,24 @@ def _websocket_orderbook() -> OrderBook:
         tick_size=0.01,
         min_order_size=5,
     )
+
+
+def _write_complete_evidence_archive(output_dir: Path, *, checksums: bool = True) -> None:
+    output_dir.mkdir()
+    for name in ARCHIVE_REPORT_FILES:
+        (output_dir / name).write_text(f"{name}\n")
+    manifest_lines = [
+        "low latency evidence archive",
+        "all_gates_passed=True",
+        "files:",
+        *[f"- {name}" for name in ARCHIVE_REPORT_FILES],
+    ]
+    if checksums:
+        manifest_lines.append("checksums:")
+        for name in ARCHIVE_REPORT_FILES:
+            digest = hashlib.sha256((output_dir / name).read_bytes()).hexdigest()
+            manifest_lines.append(f"sha256 {name}={digest}")
+    (output_dir / "manifest.txt").write_text("\n".join(manifest_lines) + "\n")
 
 
 class LatencyReportTests(unittest.TestCase):
@@ -151,34 +181,7 @@ class LatencyReportTests(unittest.TestCase):
     def test_low_latency_verify_evidence_archive_passes_complete_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "evidence"
-            output_dir.mkdir()
-            for name in [
-                "latency_db_committed_to_decision_started.txt",
-                "latency_decision_started_to_order_submitted.txt",
-                "latency_order_submitted_to_fill_confirmed.txt",
-                "latency_order_submitted_to_order_rejected.txt",
-                "latency_db_committed_to_decision_completed.txt",
-                "hko_source_timing_report.txt",
-                "readiness_report.txt",
-            ]:
-                (output_dir / name).write_text(f"{name}\n")
-            (output_dir / "manifest.txt").write_text(
-                "\n".join(
-                    [
-                        "low latency evidence archive",
-                        "all_gates_passed=True",
-                        "files:",
-                        "- latency_db_committed_to_decision_started.txt",
-                        "- latency_decision_started_to_order_submitted.txt",
-                        "- latency_order_submitted_to_fill_confirmed.txt",
-                        "- latency_order_submitted_to_order_rejected.txt",
-                        "- latency_db_committed_to_decision_completed.txt",
-                        "- hko_source_timing_report.txt",
-                        "- readiness_report.txt",
-                    ]
-                )
-                + "\n"
-            )
+            _write_complete_evidence_archive(output_dir)
             stdout = StringIO()
 
             with redirect_stdout(stdout):
@@ -196,34 +199,7 @@ class LatencyReportTests(unittest.TestCase):
     def test_low_latency_verify_evidence_archive_does_not_touch_database(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "evidence"
-            output_dir.mkdir()
-            for name in [
-                "latency_db_committed_to_decision_started.txt",
-                "latency_decision_started_to_order_submitted.txt",
-                "latency_order_submitted_to_fill_confirmed.txt",
-                "latency_order_submitted_to_order_rejected.txt",
-                "latency_db_committed_to_decision_completed.txt",
-                "hko_source_timing_report.txt",
-                "readiness_report.txt",
-            ]:
-                (output_dir / name).write_text(f"{name}\n")
-            (output_dir / "manifest.txt").write_text(
-                "\n".join(
-                    [
-                        "low latency evidence archive",
-                        "all_gates_passed=True",
-                        "files:",
-                        "- latency_db_committed_to_decision_started.txt",
-                        "- latency_decision_started_to_order_submitted.txt",
-                        "- latency_order_submitted_to_fill_confirmed.txt",
-                        "- latency_order_submitted_to_order_rejected.txt",
-                        "- latency_db_committed_to_decision_completed.txt",
-                        "- hko_source_timing_report.txt",
-                        "- readiness_report.txt",
-                    ]
-                )
-                + "\n"
-            )
+            _write_complete_evidence_archive(output_dir)
             db_path = Path(tmp) / "should-not-exist.sqlite3"
 
             with redirect_stdout(StringIO()):
@@ -239,6 +215,28 @@ class LatencyReportTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertFalse(db_path.exists())
+
+    def test_low_latency_verify_evidence_archive_fails_missing_checksums(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir, checksums=False)
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive checksum entries missing: "
+                "latency_db_committed_to_decision_started.txt",
+                stdout.getvalue(),
+            )
 
     def test_low_latency_verify_evidence_archive_fails_missing_gates(self):
         with tempfile.TemporaryDirectory() as tmp:
