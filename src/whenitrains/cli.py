@@ -2730,6 +2730,8 @@ def _live_scheduler_smoke_summary(db) -> dict[str, object]:
         select count(*) as count
         from risk_events
         where event_type = 'live_scheduler_smoke_ok'
+          and cast(json_extract(details_json, '$.ticks') as integer) > 0
+          and json_extract(details_json, '$.websockets_enabled') = 1
         """
     ).fetchone()
     latest_row = db.execute(
