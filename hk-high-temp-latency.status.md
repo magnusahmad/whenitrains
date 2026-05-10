@@ -24,6 +24,8 @@ Low-latency readiness M4 groundwork is partially implemented. `live_user_events`
 
 Low-latency readiness M5 polling groundwork is partially implemented. Learned AWS actual publish windows now include a 10-second pre/post burst plan with 0.5-second cadence, while broader catchup polling remains. Scheduler source backoff can slow non-critical HKO sources without suppressing `aws_actual` polling.
 
+Low-latency readiness M6 groundwork has started with a DB-specific exclusive live scheduler lock. `live-scheduler` now fails closed if another process already holds the lock for the same SQLite database. Broader live startup health checks, external alerting, and a complete runbook remain pending.
+
 The paper/live scheduler now performs a startup warmup loop before allowing trading decisions. On process start it may fetch HKO data, discover markets, and fetch orderbooks, but it skips the first trading tick so entries cannot be opened against a partially refreshed local data round.
 
 Dashboard executable PnL now values open positions against only the latest orderbook snapshot. If the latest snapshot has no bid depth, older non-null bids are ignored so stale bids cannot create phantom unrealized gains.
@@ -57,6 +59,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 2026-05-11 user WebSocket reconciliation pass: added `src/whenitrains/live_user_stream.py`, additive `live_user_events` storage, and `tests/test_live_user_stream.py`. Verification covers `PLACEMENT`, `UPDATE`, `CANCELLATION`, `MATCHED`, `MINED`, `CONFIRMED`, `RETRYING`, and `FAILED` order fixtures, idempotent matched trade application, and crash/restart convergence from a submitted row plus a later user trade event.
 
 2026-05-11 polling hardening pass: added sub-second burst cadence for learned AWS actual publish windows and non-critical source backoff isolation. Verified with `PYTHONPATH=src python3 -m unittest tests.test_scheduler`.
+
+2026-05-11 operational lock pass: added `src/whenitrains/operational.py`, `tests/test_operational_readiness.py`, and live-scheduler lock wiring. Verification covers rejecting a second lock holder for the same DB and lock path selection.
 
 Past-date unresolved local positions remain a documented residual risk. The real market should eventually resolve, but local paper/live state still needs a reconcile/settlement path to reflect that resolution in risk and dashboard state if the scheduler missed the same-day exit window.
 
