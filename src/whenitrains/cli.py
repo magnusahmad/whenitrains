@@ -204,6 +204,9 @@ def main(argv: list[str] | None = None) -> int:
     live_preflight.add_argument("--live", action="store_true")
     live_auth_smoke = sub.add_parser("live-auth-smoke")
     live_auth_smoke.add_argument("--live", action="store_true")
+    live_network_smoke = sub.add_parser("live-network-smoke")
+    live_network_smoke.add_argument("--live", action="store_true")
+    live_network_smoke.add_argument("--seconds", type=float, default=5.0)
     live_buy = sub.add_parser("live-buy")
     live_buy.add_argument("label")
     live_buy.add_argument("side", choices=["YES", "NO"])
@@ -528,6 +531,31 @@ def main(argv: list[str] | None = None) -> int:
             f"reason={result.reason}"
         )
         return 0 if result.ok else 2
+    if args.command == "live-network-smoke":
+        migrate(db)
+        if not args.live:
+            print("refusing live network smoke without --live")
+            return 2
+        print("LIVE TRADING network smoke")
+        websocket_runtime = None
+        try:
+            config = load_live_config()
+            websocket_runtime = LiveWebSocketRuntime.for_live_scheduler(
+                db_path=db_path,
+                config=config,
+                min_date_hkt=datetime.now(HKT).date().isoformat(),
+            )
+            websocket_runtime.start()
+            time.sleep(max(args.seconds, 0.0))
+            all_running = websocket_runtime.all_running
+            print(f"live network smoke websocket_all_running={all_running}")
+            return 0 if all_running else 2
+        except LiveTradingError as exc:
+            print(f"live network smoke failed: {exc}")
+            return 2
+        finally:
+            if websocket_runtime is not None:
+                websocket_runtime.stop(timeout=5)
     if args.command == "live-buy":
         migrate(db)
         if not args.live or not args.yes_i_understand:

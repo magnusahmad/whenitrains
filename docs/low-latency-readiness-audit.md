@@ -51,6 +51,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried on 2026-05-11 H
 - Cache writes append-only SQLite snapshots with WebSocket metadata.
 - Active token/condition subscription helpers support runtime resubscribe planning.
 - Live tick receives a scheduler-owned cache and live buys reject missing/stale cache books when a cache is configured.
+- `live-network-smoke --live` starts and stops the scheduler-owned market/user WebSocket runtime without running trading decisions.
 - Evidence: `src/whenitrains/orderbook_cache.py`, `src/whenitrains/market_websocket.py`, `src/whenitrains/live_runtime.py`, `src/whenitrains/runner.py`.
 - Tests: `tests.test_orderbook_cache`, `tests.test_market_websocket`, focused live runner tests.
 - Missing: real Polymarket WebSocket smoke and observed live book age at submission.
@@ -115,7 +116,7 @@ All passed. A single larger combined multi-module run still hit the repository's
 ## Next Steps
 
 1. Restore or expose the live log endpoint on `192.168.1.23:8765`.
-2. Run read-only live scheduler/WebSocket smoke and capture the logs.
+2. Run `live-network-smoke --live` and capture the logs.
 3. Run `live-auth-smoke --live` with credentials on the live machine.
 4. With explicit approval, run minimum-size manual live buy/sell and kill-switch verification.
 5. Run capped live scheduler and collect `latency-report` p50/p95/p99 evidence from the production DB.

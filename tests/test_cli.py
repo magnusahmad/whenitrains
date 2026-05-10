@@ -265,6 +265,53 @@ class CliDiscoveryTests(unittest.TestCase):
             for call in live_tick.call_args_list:
                 self.assertIs(call.kwargs["book_cache"], book_cache)
 
+    def test_live_network_smoke_starts_and_stops_websocket_runtime_without_trading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            runtime_events = []
+
+            class FakeRuntime:
+                all_running = True
+
+                def start(self):
+                    runtime_events.append("start")
+
+                def stop(self, timeout=None):
+                    runtime_events.append(("stop", timeout))
+
+            fake_runtime = FakeRuntime()
+            stdout = StringIO()
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch(
+                    "whenitrains.cli.LiveWebSocketRuntime.for_live_scheduler",
+                    return_value=fake_runtime,
+                ) as runtime_factory,
+                patch("whenitrains.cli.time.sleep") as sleep,
+                patch("whenitrains.cli.run_live_tick") as live_tick,
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-network-smoke",
+                        "--live",
+                        "--seconds",
+                        "0.1",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            runtime_factory.assert_called_once()
+            sleep.assert_called_once_with(0.1)
+            live_tick.assert_not_called()
+            self.assertEqual(runtime_events, ["start", ("stop", 5)])
+            self.assertIn(
+                "live network smoke websocket_all_running=True",
+                stdout.getvalue(),
+            )
+
     def test_live_scheduler_freezes_entries_when_startup_drift_is_detected(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

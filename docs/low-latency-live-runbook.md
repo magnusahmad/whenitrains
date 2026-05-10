@@ -10,13 +10,21 @@ This runbook covers the low-latency live scheduler path for HK temperature marke
 
 1. Confirm the working tree is on the intended branch and no unrelated database operation is in progress.
 2. Confirm live credentials are available with `whenitrains live-env-exports`.
-3. Confirm there is no emergency entry block unless intentional:
+3. Run a no-trade live network smoke to confirm both scheduler-owned WebSocket workers can start:
+
+```bash
+PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-network-smoke --live --seconds 10
+```
+
+Expected output includes `live network smoke websocket_all_running=True`. This command starts and stops the market/user WebSocket runtime but does not run trading decisions.
+
+4. Confirm there is no emergency entry block unless intentional:
 
 ```bash
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch
 ```
 
-4. Start the live scheduler:
+5. Start the live scheduler:
 
 ```bash
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live --verbose
@@ -116,3 +124,4 @@ The webhook receives JSON with `title`, `severity`, `details`, and formatted `te
 - New entries remain blocked until the operator confirms no local/CLOB drift.
 - Latest market WebSocket book age is within `Settings.live_orderbook_cache_max_age_seconds` before relying on hot-path entries.
 - The dashboard live positions, recent live orders, and CLOB state agree.
+- `low-latency-readiness-report` has been archived with scheduler logs after any capped live readiness run.
