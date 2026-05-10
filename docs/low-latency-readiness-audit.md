@@ -125,7 +125,7 @@ PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.t
 git diff --check
 ```
 
-All passed. The combined roadmap verification ran 356 tests under tracemalloc.
+All passed. The combined roadmap verification ran 357 tests under tracemalloc.
 
 ## Next Steps
 

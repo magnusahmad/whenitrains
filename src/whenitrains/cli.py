@@ -2034,13 +2034,30 @@ def _readiness_gate_line_malformed(line: str) -> bool:
         return True
     if len(rest_parts) == 1:
         return True
+    allowed_fields = {
+        "block_new_entries",
+        "count",
+        "error",
+        "evidence",
+        "exit_on_kill_switch",
+        "latest",
+        "latest_drift_count",
+        "missing_bid_positions",
+        "p50",
+        "p95",
+        "p99",
+        "problem_orders",
+        "submitted",
+        "threshold",
+        "unresolved_orders",
+    }
     seen_fields: set[str] = set()
     field_values: dict[str, str] = {}
     for field in rest_parts[1:]:
         if "=" not in field:
             return True
         key, value = field.split("=", 1)
-        if not key or key in seen_fields:
+        if not key or key not in allowed_fields or key in seen_fields:
             return True
         field_values[key] = value
         if key in {
