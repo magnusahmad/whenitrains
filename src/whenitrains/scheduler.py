@@ -224,6 +224,7 @@ def run_scheduled_paper_loop(
     run_tick_fn=None,
     low_latency_event_queue: LowLatencyEventQueue | None = None,
     fast_event_handler=None,
+    reconcile_watchdog_fn=None,
     aws_actual_poll_fetch=None,
     aws_actual_poll_learned_times=None,
     output_label: str = "paper-scheduler",
@@ -331,9 +332,16 @@ def run_scheduled_paper_loop(
                 )
             elif state.trading_warmed_up:
                 tick_fn = run_tick_fn or run_paper_tick
+                result = RunnerResult()
+                if reconcile_watchdog_fn is not None:
+                    result = _merge_runner_results(
+                        result, reconcile_watchdog_fn(db)
+                    )
                 if low_latency_event_queue is not None and not low_latency_event_queue.empty():
                     handler = fast_event_handler or tick_fn
-                    result = RunnerResult(notes=("fast event queue drained",))
+                    result = _merge_runner_results(
+                        result, RunnerResult(notes=("fast event queue drained",))
+                    )
                     while not low_latency_event_queue.empty():
                         fast_result = process_next_fast_event(
                             db,
@@ -344,7 +352,9 @@ def run_scheduled_paper_loop(
                             result = _merge_runner_results(result, fast_result.result)
                     notes.append("fast hko events")
                 else:
-                    result = tick_fn(db, today_hkt=now.date())
+                    result = _merge_runner_results(
+                        result, tick_fn(db, today_hkt=now.date())
+                    )
             else:
                 state.trading_warmed_up = True
                 result = RunnerResult(notes=("startup warmup: trading skipped",))

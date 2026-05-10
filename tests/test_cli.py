@@ -179,6 +179,7 @@ class CliDiscoveryTests(unittest.TestCase):
             fake_runtime = FakeRuntime()
 
             def run_loop(*args, **kwargs):
+                kwargs["reconcile_watchdog_fn"](args[0])
                 kwargs["run_tick_fn"](args[0], date(2026, 5, 4))
                 kwargs["fast_event_handler"](args[0], date(2026, 5, 4))
 
@@ -262,6 +263,57 @@ class CliDiscoveryTests(unittest.TestCase):
             finally:
                 db.close()
             self.assertIn("1 local/CLOB drift items", stdout.getvalue())
+
+    def test_live_scheduler_reconcile_watchdog_freezes_entries_when_drift_appears(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            drift_calls = []
+
+            def run_loop(*args, **kwargs):
+                result = kwargs["reconcile_watchdog_fn"](args[0])
+                self.assertIn("live reconcile watchdog froze entries", result.notes[0])
+
+            def drifts(_db, _client):
+                drift_calls.append("scan")
+                return [] if len(drift_calls) == 1 else [object()]
+
+            stdout = StringIO()
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch("whenitrains.cli.PolymarketClobClient", return_value=object()),
+                patch(
+                    "whenitrains.cli.preflight_live",
+                    return_value=SimpleNamespace(ok=True, reason="ok"),
+                ),
+                patch("whenitrains.cli.find_live_position_drifts", side_effect=drifts),
+                patch("whenitrains.cli.run_scheduled_paper_loop", side_effect=run_loop),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-scheduler",
+                        "--live",
+                        "--ticks",
+                        "0",
+                        "--no-startup-backup",
+                        "--no-websockets",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(drift_calls, ["scan", "scan"])
+            db = connect(db_path)
+            try:
+                self.assertTrue(live_setting_enabled(db, "block_new_entries"))
+                risk = db.execute(
+                    "select event_type, severity from risk_events order by id desc limit 1"
+                ).fetchone()
+                self.assertEqual(risk["event_type"], "live_startup_health_failed")
+                self.assertEqual(risk["severity"], "critical")
+            finally:
+                db.close()
 
     def test_discover_market_fetches_highest_and_lowest_temperature_events(self):
         with tempfile.TemporaryDirectory() as tmp:

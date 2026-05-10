@@ -51,7 +51,7 @@ from .polymarket import (
 )
 from .polymarket import fetch_orderbook
 from .dashboard_server import serve as serve_dashboard
-from .runner import render_dashboard, run_live_tick, run_paper_loop, run_paper_tick
+from .runner import RunnerResult, render_dashboard, run_live_tick, run_paper_loop, run_paper_tick
 from .scheduler import run_scheduled_paper_loop
 from .paper_db import calculate_entry, calculate_exit, execute_paper_buy, execute_paper_sell
 from .live import (
@@ -744,6 +744,25 @@ def main(argv: list[str] | None = None) -> int:
             aws_actual_poll_learned_times = lambda: _list_hko_update_times_for_path(
                 db_path, "aws_gis_actual"
             )
+            def reconcile_watchdog(tick_db):
+                drifts = find_live_position_drifts(tick_db, client)
+                if not drifts:
+                    return RunnerResult()
+                health = evaluate_live_startup_health(
+                    market_websocket_connected=not args.no_websockets,
+                    user_websocket_connected=not args.no_websockets,
+                    rest_fallback_available=True,
+                    credentials_valid=True,
+                    balance_allowance_ok=True,
+                    stale_submitted_orders=0,
+                    local_clob_drift_count=len(drifts),
+                )
+                freeze_new_entries_for_health_failures(tick_db, health)
+                return RunnerResult(
+                    notes=(
+                        f"live reconcile watchdog froze entries: {len(drifts)} local/CLOB drift items",
+                    )
+                )
             try:
                 run_scheduled_paper_loop(
                     db,
@@ -778,6 +797,7 @@ def main(argv: list[str] | None = None) -> int:
                         if websocket_runtime is not None
                         else None,
                     ),
+                    reconcile_watchdog_fn=reconcile_watchdog,
                     aws_actual_poll_fetch=aws_actual_poll_fetch,
                     aws_actual_poll_learned_times=aws_actual_poll_learned_times,
                     output_label="live-scheduler",

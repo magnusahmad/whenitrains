@@ -466,6 +466,41 @@ HKO,27.3,28.5,24.0
             self.assertIn("orderbooks failed: OSError: orderbooks unavailable", text)
             self.assertIn("startup warmup blocked: data fetch failed", text)
 
+    def test_scheduler_runs_reconcile_watchdog_before_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            calls = []
+            output = StringIO()
+            now = datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT)
+
+            def reconcile_watchdog(_db):
+                calls.append("watchdog")
+                return RunnerResult(notes=("live reconcile watchdog checked",))
+
+            def tick_fn(_db, today_hkt):
+                calls.append("tick")
+                return RunnerResult(notes=("tick",))
+
+            with redirect_stdout(output):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: "",
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=lambda target: None,
+                    reconcile_watchdog_fn=reconcile_watchdog,
+                    run_tick_fn=tick_fn,
+                    max_ticks=2,
+                    now_fn=lambda: now,
+                    quiet=False,
+                    base_sleep_seconds=0,
+                    output_label="live-scheduler",
+                )
+
+            self.assertEqual(calls, ["watchdog", "tick"])
+            self.assertIn("live reconcile watchdog checked", output.getvalue())
+
     def test_scheduler_skips_decisions_when_due_orderbook_refresh_fails_after_warmup(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
