@@ -14,6 +14,7 @@ from whenitrains.live import (
     execute_live_sell,
     find_live_position_drifts,
     freeze_new_entries_for_stale_submitted_orders,
+    repair_live_position_drifts,
     reconcile_submitted_live_order,
     rebuild_live_positions_from_filled_orders,
     _floor_decimal,
@@ -944,6 +945,34 @@ class LiveTests(unittest.TestCase):
             drifts = find_live_position_drifts(db, client, tolerance_shares=0.01)
 
             self.assertEqual(drifts, [])
+
+    def test_repair_live_position_drifts_applies_lower_clob_balance_adjustment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            upsert_live_position(db, "yes25", 12.5, 0.40, 0.0)
+            client = FakeClobClient(token_balances={"yes25": 7.0})
+            drifts = find_live_position_drifts(db, client, tolerance_shares=0.01)
+
+            repaired = repair_live_position_drifts(db, drifts, event_key="watchdog")
+
+            self.assertEqual(repaired, 1)
+            position = get_live_position(db, "yes25")
+            self.assertAlmostEqual(position["net_shares"], 7.0)
+            self.assertAlmostEqual(position["realized_pnl"], -2.2)
+            adjustment = db.execute(
+                """
+                select side, action, status, fill_shares, event_type, event_key
+                from live_orders
+                where side = 'RECONCILE_SELL'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(adjustment["action"], "SELL")
+            self.assertEqual(adjustment["status"], "filled")
+            self.assertAlmostEqual(adjustment["fill_shares"], 5.5)
+            self.assertEqual(adjustment["event_type"], "live_position_drift_repair")
+            self.assertEqual(adjustment["event_key"], "watchdog")
 
     def test_execute_live_sell_closes_position_from_fill(self):
         with tempfile.TemporaryDirectory() as tmp:

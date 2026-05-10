@@ -68,6 +68,7 @@ from .live import (
     read_live_env_file,
     rebuild_live_positions_from_filled_orders,
     reconcile_submitted_live_order,
+    repair_live_position_drifts,
     render_live_env_exports,
     store_keychain_secret,
 )
@@ -751,10 +752,25 @@ def main(argv: list[str] | None = None) -> int:
             )
             def reconcile_watchdog(tick_db):
                 drifts = find_live_position_drifts(tick_db, client)
+                repaired = 0
+                if drifts:
+                    repaired = repair_live_position_drifts(
+                        tick_db,
+                        drifts,
+                        event_key="live_reconcile_watchdog",
+                    )
+                    if repaired:
+                        drifts = find_live_position_drifts(tick_db, client)
                 websocket_stalled = (
                     websocket_runtime is not None and not websocket_runtime.all_running
                 )
                 if not drifts and not websocket_stalled:
+                    if repaired:
+                        return RunnerResult(
+                            notes=(
+                                f"live reconcile watchdog repaired {repaired} local/CLOB drift items",
+                            )
+                        )
                     return RunnerResult()
                 health = evaluate_live_startup_health(
                     market_websocket_connected=not args.no_websockets and not websocket_stalled,

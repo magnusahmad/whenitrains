@@ -1297,6 +1297,32 @@ def find_live_position_drifts(
     return drifts
 
 
+def repair_live_position_drifts(
+    db: sqlite3.Connection,
+    drifts: list[LivePositionDrift],
+    *,
+    event_key: str | None = None,
+) -> int:
+    repaired = 0
+    for drift in drifts:
+        if drift.clob_sellable_shares is None or drift.drift_shares is None:
+            continue
+        if drift.drift_shares <= 0:
+            continue
+        _record_live_balance_adjustment(
+            db,
+            token_id=drift.token_id,
+            label=None,
+            missing_shares=drift.drift_shares,
+            local_shares=drift.local_shares,
+            clob_sellable_shares=drift.clob_sellable_shares,
+            event_type="live_position_drift_repair",
+            event_key=event_key,
+        )
+        repaired += 1
+    return repaired
+
+
 def _order_id(response: dict) -> str | None:
     for key in ("orderID", "orderId", "order_id", "id"):
         value = response.get(key)

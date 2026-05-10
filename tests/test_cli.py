@@ -278,7 +278,14 @@ class CliDiscoveryTests(unittest.TestCase):
 
             def drifts(_db, _client):
                 drift_calls.append("scan")
-                return [] if len(drift_calls) == 1 else [object()]
+                return [] if len(drift_calls) == 1 else [
+                    SimpleNamespace(
+                        token_id="yes25",
+                        local_shares=12.5,
+                        clob_sellable_shares=None,
+                        drift_shares=None,
+                    )
+                ]
 
             stdout = StringIO()
             with (
@@ -289,6 +296,7 @@ class CliDiscoveryTests(unittest.TestCase):
                     return_value=SimpleNamespace(ok=True, reason="ok"),
                 ),
                 patch("whenitrains.cli.find_live_position_drifts", side_effect=drifts),
+                patch("whenitrains.cli.repair_live_position_drifts", return_value=0),
                 patch("whenitrains.cli.run_scheduled_paper_loop", side_effect=run_loop),
                 redirect_stdout(stdout),
             ):
@@ -315,6 +323,70 @@ class CliDiscoveryTests(unittest.TestCase):
                 ).fetchone()
                 self.assertEqual(risk["event_type"], "live_startup_health_failed")
                 self.assertEqual(risk["severity"], "critical")
+            finally:
+                db.close()
+
+    def test_live_scheduler_reconcile_watchdog_repairs_lower_clob_drift_before_freezing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            drift = SimpleNamespace(
+                token_id="yes25",
+                local_shares=12.5,
+                clob_sellable_shares=7.0,
+                drift_shares=5.5,
+            )
+
+            class FakeRuntime:
+                book_cache = object()
+                all_running = True
+
+                def start(self):
+                    return None
+
+                def stop(self, timeout=None):
+                    return None
+
+            def run_loop(*args, **kwargs):
+                result = kwargs["reconcile_watchdog_fn"](args[0])
+                self.assertEqual(result.notes, ("live reconcile watchdog repaired 1 local/CLOB drift items",))
+
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch("whenitrains.cli.PolymarketClobClient", return_value=object()),
+                patch(
+                    "whenitrains.cli.preflight_live",
+                    return_value=SimpleNamespace(ok=True, reason="ok"),
+                ),
+                patch(
+                    "whenitrains.cli.find_live_position_drifts",
+                    side_effect=[[], [drift], []],
+                ) as find_drifts,
+                patch(
+                    "whenitrains.cli.LiveWebSocketRuntime.for_live_scheduler",
+                    return_value=FakeRuntime(),
+                ),
+                patch("whenitrains.cli.repair_live_position_drifts", return_value=1) as repair,
+                patch("whenitrains.cli.run_scheduled_paper_loop", side_effect=run_loop),
+                redirect_stdout(StringIO()),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-scheduler",
+                        "--live",
+                        "--ticks",
+                        "0",
+                        "--no-startup-backup",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(find_drifts.call_count, 3)
+            repair.assert_called_once()
+            db = connect(db_path)
+            try:
+                self.assertFalse(live_setting_enabled(db, "block_new_entries"))
             finally:
                 db.close()
 
