@@ -1765,7 +1765,11 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
             and "\ngate " in text
         )
     if name == "hko_source_timing_report.txt":
-        return text.startswith("hko source timing rows=") and "response_ms " in text
+        return (
+            text.startswith("hko source timing rows=")
+            and "response_ms " in text
+            and "public_availability_fetch_offsets_seconds=" in text
+        )
     if name.startswith("latency_") and name.endswith(".txt"):
         pair = name[len("latency_") : -len(".txt")].replace("_to_", " -> ")
         return (
