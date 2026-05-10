@@ -1637,8 +1637,12 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
         if name == "manifest.txt":
             continue
         path = input_dir / name
-        if path.is_file() and not path.read_text().strip():
-            messages.append(f"evidence archive file empty: {name}")
+        if path.is_file():
+            text = path.read_text()
+            if not text.strip():
+                messages.append(f"evidence archive file empty: {name}")
+            elif not _evidence_report_content_valid(name, text):
+                messages.append(f"evidence archive file malformed: {name}")
     manifest_path = input_dir / "manifest.txt"
     manifest = manifest_path.read_text() if manifest_path.is_file() else ""
     for key in _manifest_duplicate_keys(manifest, ["all_gates_passed", "missing_gates"]):
@@ -1697,6 +1701,17 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
 
 def _is_sha256_digest(value: str) -> bool:
     return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+def _evidence_report_content_valid(name: str, text: str) -> bool:
+    if name == "readiness_report.txt":
+        return text.startswith("low latency readiness report\n") and "evidence gates:" in text
+    if name == "hko_source_timing_report.txt":
+        return text.startswith("hko source timing rows=") and "response_ms " in text
+    if name.startswith("latency_") and name.endswith(".txt"):
+        pair = name[len("latency_") : -len(".txt")].replace("_to_", " -> ")
+        return text.startswith(f"{pair} count=") and " p50=" in text and " p95=" in text
+    return False
 
 
 def _sha256_file(path: Path) -> str:

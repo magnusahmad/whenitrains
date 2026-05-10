@@ -48,7 +48,7 @@ def _websocket_orderbook() -> OrderBook:
 def _write_complete_evidence_archive(output_dir: Path, *, checksums: bool = True) -> None:
     output_dir.mkdir()
     for name in ARCHIVE_REPORT_FILES:
-        (output_dir / name).write_text(f"{name}\n")
+        (output_dir / name).write_text(_archive_report_fixture_content(name))
     manifest_lines = [
         "low latency evidence archive",
         "all_gates_passed=True",
@@ -61,6 +61,17 @@ def _write_complete_evidence_archive(output_dir: Path, *, checksums: bool = True
             digest = hashlib.sha256((output_dir / name).read_bytes()).hexdigest()
             manifest_lines.append(f"sha256 {name}={digest}")
     (output_dir / "manifest.txt").write_text("\n".join(manifest_lines) + "\n")
+
+
+def _archive_report_fixture_content(name: str) -> str:
+    if name == "hko_source_timing_report.txt":
+        return "hko source timing rows=1\nresponse_ms p50=10.000ms p95=10.000ms p99=10.000ms\n"
+    if name == "readiness_report.txt":
+        return "low latency readiness report\nlatency:\nevidence gates:\n"
+    if name.startswith("latency_") and name.endswith(".txt"):
+        stage_pair = name[len("latency_") : -len(".txt")].replace("_to_", " -> ")
+        return f"{stage_pair} count=1 p50=0.100s p95=0.100s p99=0.100s\n"
+    raise AssertionError(f"unknown archive fixture report {name}")
 
 
 class LatencyReportTests(unittest.TestCase):
@@ -589,6 +600,41 @@ class LatencyReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn(
                 "evidence archive file empty: latency_db_committed_to_decision_started.txt",
+                stdout.getvalue(),
+            )
+
+    def test_low_latency_verify_evidence_archive_fails_malformed_report_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            name = "latency_db_committed_to_decision_started.txt"
+            report = output_dir / name
+            report.write_text("unrelated report content\n")
+            digest = hashlib.sha256(report.read_bytes()).hexdigest()
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                "\n".join(
+                    f"sha256 {name}={digest}"
+                    if line.startswith(f"sha256 {name}=")
+                    else line
+                    for line in manifest.splitlines()
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive file malformed: latency_db_committed_to_decision_started.txt",
                 stdout.getvalue(),
             )
 
