@@ -94,6 +94,8 @@ class LatencyReportTests(unittest.TestCase):
             record_latency_stage(db, "event-1", "decision_started", 10.4, "actual")
             record_latency_stage(db, "event-1", "order_submitted", 10.45, "actual")
             record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
+            record_latency_stage(db, "event-2", "order_submitted", 20.0, "actual")
+            record_latency_stage(db, "event-2", "order_rejected", 20.2, "actual")
             store_live_order(
                 db,
                 outcome_id="yes25",
@@ -122,6 +124,7 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("db_committed -> decision_started count=1 p50=0.400s", text)
             self.assertIn("decision_started -> order_submitted count=1 p50=0.050s", text)
             self.assertIn("order_submitted -> fill_confirmed count=1 p50=0.350s", text)
+            self.assertIn("order_submitted -> order_rejected count=1 p50=0.200s", text)
             self.assertIn("live orders total=1 submitted=1 error=0", text)
             self.assertIn("live open_positions=0 open_exposure_usd=0.00", text)
             self.assertIn("kill_switch block_new_entries=True exit_on_kill_switch=False", text)
@@ -169,6 +172,11 @@ class LatencyReportTests(unittest.TestCase):
             )
             self.assertIn(
                 "gate submit_to_fill_observed=pass count=1 p95=0.350s",
+                text,
+            )
+            self.assertIn(
+                "gate submit_to_reject_observed=pass evidence=not_observed "
+                "count=0 p95=n/a",
                 text,
             )
             self.assertIn("gate clob_ack_observed=pass count=1 p95=0.050s", text)

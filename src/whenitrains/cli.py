@@ -1559,6 +1559,7 @@ def _low_latency_readiness_report(
         ("db_committed", "decision_started"),
         ("decision_started", "order_submitted"),
         ("order_submitted", "fill_confirmed"),
+        ("order_submitted", "order_rejected"),
         ("db_committed", "decision_completed"),
     ]
     lines = ["low latency readiness report", "latency:"]
@@ -1575,6 +1576,7 @@ def _low_latency_readiness_report(
     commit_to_completion = latency_duration_summary(db, "db_committed", "decision_completed")
     decision_to_submit = latency_duration_summary(db, "decision_started", "order_submitted")
     submit_to_fill = latency_duration_summary(db, "order_submitted", "fill_confirmed")
+    submit_to_reject = latency_duration_summary(db, "order_submitted", "order_rejected")
     submit_to_ack = latency_duration_summary(db, "order_submitted", "clob_ack")
     submit_to_match = latency_duration_summary(db, "order_submitted", "fill_matched")
     orderbook_age = _decision_orderbook_age_summary(db)
@@ -1611,6 +1613,10 @@ def _low_latency_readiness_report(
         _latency_observed_gate(
             "submit_to_fill_observed",
             submit_to_fill,
+        ),
+        _latency_optional_gate(
+            "submit_to_reject_observed",
+            submit_to_reject,
         ),
         _latency_observed_gate(
             "clob_ack_observed",
@@ -1822,6 +1828,16 @@ def _latency_observed_gate(name: str, summary: dict[str, object]) -> dict[str, o
     status = "pass" if count > 0 else "missing"
     line = f"gate {name}={status} count={count} p95={_fmt_seconds(summary['p95_seconds'])}"
     return {"name": name, "status": status, "line": line}
+
+
+def _latency_optional_gate(name: str, summary: dict[str, object]) -> dict[str, object]:
+    count = int(summary["count"])
+    evidence = "observed" if count > 0 else "not_observed"
+    line = (
+        f"gate {name}=pass evidence={evidence} "
+        f"count={count} p95={_fmt_seconds(summary['p95_seconds'])}"
+    )
+    return {"name": name, "status": "pass", "line": line}
 
 
 def _value_threshold_gate(

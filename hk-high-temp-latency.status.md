@@ -188,6 +188,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 checklist kill-switch/settlement pass: `live-readiness-checklist` now includes the persistent kill-switch verification sequence and an explicit live settlement validation reminder for the first resolved live market, so the generated evidence plan covers the remaining M6 proof points as well as network/auth/manual-money/capped-scheduler evidence. Verified with `PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_live_readiness_checklist_prints_ordered_evidence_commands`.
 
+2026-05-11 submit-to-reject latency pass: submitted live orders that reconcile to a non-fill terminal status now record an `order_rejected` latency stage, and `low-latency-readiness-report` prints `order_submitted -> order_rejected` percentiles plus optional submit-to-reject evidence. This lets production evidence answer the roadmap's submit-to-fill/reject timing requirement instead of fill-only timing. Verified with `PYTHONPATH=src python3 -m unittest tests.test_live.LiveTests.test_execute_live_buy_records_rejected_terminal_latency_stage tests.test_latency_report`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

@@ -883,6 +883,35 @@ class LiveTests(unittest.TestCase):
                 ["order_submitted", "clob_ack", "fill_matched", "fill_confirmed"],
             )
 
+    def test_execute_live_buy_records_rejected_terminal_latency_stage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            client = FakeClobClient(reconcile_payload={"status": "cancelled"})
+
+            result = execute_live_buy(
+                db,
+                client,
+                token_id="yes25",
+                side="YES",
+                size_usd=5,
+                asks=[(0.40, 100)],
+                reason="test live buy",
+                max_price=0.40,
+                min_fill_usd=5,
+                order_cap_usd=5,
+                label="25C",
+                event_type="aws_actual_transition",
+                event_key="actual:2026-05-08:max",
+            )
+
+            self.assertEqual(result.status, "cancelled")
+            stages = [
+                row["stage"]
+                for row in latency_stages_for_event(db, "actual:2026-05-08:max")
+            ]
+            self.assertEqual(stages, ["order_submitted", "clob_ack", "order_rejected"])
+
     def test_execute_live_buy_decision_to_submit_latency_under_100ms_with_fake_clock(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

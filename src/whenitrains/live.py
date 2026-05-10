@@ -432,6 +432,27 @@ def _record_live_latency_stage(
     record_latency_stage(db, event_key, stage, time.monotonic(), event_type, details)
 
 
+def _record_live_order_rejected_stage(
+    db: sqlite3.Connection,
+    event_key: str | None,
+    status: str,
+    event_type: str | None,
+    *,
+    token_id: str,
+    clob_order_id: str | None = None,
+) -> None:
+    if status in {"submitted", "open", "pending", "unknown_fill"}:
+        return
+    _record_live_latency_stage(
+        db,
+        event_key,
+        "order_rejected",
+        event_type,
+        token_id=token_id,
+        clob_order_id=clob_order_id,
+    )
+
+
 def _floor_decimal(value: float, quantum: str) -> float:
     return float(Decimal(str(value)).quantize(Decimal(quantum), rounding=ROUND_DOWN))
 
@@ -811,6 +832,15 @@ def execute_live_buy(
             token_id=token_id,
             clob_order_id=clob_order_id,
         )
+    else:
+        _record_live_order_rejected_stage(
+            db,
+            event_key,
+            status,
+            event_type,
+            token_id=token_id,
+            clob_order_id=clob_order_id,
+        )
     return LiveExecutionResult(status, token_id, f"BUY_{side}", fill_price, fill_size_usd, fill_shares, reason, clob_order_id)
 
 
@@ -1039,6 +1069,15 @@ def execute_live_sell(
             db,
             event_key,
             "fill_confirmed",
+            event_type,
+            token_id=token_id,
+            clob_order_id=clob_order_id,
+        )
+    else:
+        _record_live_order_rejected_stage(
+            db,
+            event_key,
+            status,
             event_type,
             token_id=token_id,
             clob_order_id=clob_order_id,
