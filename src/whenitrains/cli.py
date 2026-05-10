@@ -2087,6 +2087,9 @@ def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
     db_path = _manifest_value(manifest, "db_path")
     if db_path is not None and not db_path.strip():
         invalid.append("db_path")
+    hko_endpoint_contains = _manifest_value(manifest, "hko_endpoint_contains")
+    if hko_endpoint_contains is not None and not hko_endpoint_contains.strip():
+        invalid.append("hko_endpoint_contains")
     hko_limit = _manifest_value(manifest, "hko_limit")
     if hko_limit is not None:
         try:
