@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import queue
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Callable
 
 from .runner import (
@@ -13,7 +15,7 @@ from .runner import (
     process_forecast_entries,
     process_open_position_exits,
 )
-from .storage import record_latency_stage
+from .storage import connect, record_latency_stage
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,62 @@ class LowLatencyEventQueue:
 
     def empty(self) -> bool:
         return self._queue.empty()
+
+
+class FastDecisionWorker:
+    def __init__(
+        self,
+        *,
+        db_path: Path,
+        event_queue: LowLatencyEventQueue,
+        decision_handler: Callable[[sqlite3.Connection, date], object] | None = None,
+        result_callback: Callable[[FastEventResult], None] | None = None,
+        poll_timeout: float = 0.5,
+        monotonic_fn: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._db_path = db_path
+        self._event_queue = event_queue
+        self._decision_handler = decision_handler
+        self._result_callback = result_callback
+        self._poll_timeout = poll_timeout
+        self._monotonic_fn = monotonic_fn
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float | None = None) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def _run(self) -> None:
+        db = connect(self._db_path)
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    event = self._event_queue.get(timeout=self._poll_timeout)
+                except queue.Empty:
+                    continue
+                result = process_fast_event(
+                    db,
+                    event,
+                    decision_handler=self._decision_handler,
+                    monotonic_fn=self._monotonic_fn,
+                )
+                if self._result_callback is not None:
+                    self._result_callback(result)
+        finally:
+            db.close()
 
 
 def enqueue_hko_actual_transition_events(
@@ -283,6 +341,21 @@ def process_next_fast_event(
     monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> FastEventResult:
     event = event_queue.get_nowait()
+    return process_fast_event(
+        db,
+        event,
+        decision_handler=decision_handler,
+        monotonic_fn=monotonic_fn,
+    )
+
+
+def process_fast_event(
+    db: sqlite3.Connection,
+    event: AlphaEvent,
+    *,
+    decision_handler: Callable[[sqlite3.Connection, date], object] | None = None,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> FastEventResult:
     target = date.fromisoformat(event.target_date_hkt)
     record_latency_stage(
         db,

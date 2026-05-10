@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import unittest
 from datetime import date, datetime
 from pathlib import Path
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 from whenitrains.hko import HKT, HkoCurrentTemperature, OcfForecastSample
 from whenitrains.low_latency import (
+    FastDecisionWorker,
     LowLatencyEventQueue,
     compact_latency_event_line,
     process_next_fast_event,
@@ -216,6 +218,56 @@ class LowLatencyReadinessTests(unittest.TestCase):
                 process_next_fast_event(db, queue, monotonic_fn=_FakeMonotonic([600.0, 600.1]))
 
             handler.assert_called_once_with(db, date(2026, 5, 4))
+
+    def test_fast_decision_worker_blocks_on_queue_and_processes_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            db.close()
+            queue = LowLatencyEventQueue()
+            processed = threading.Event()
+            calls = []
+
+            def handler(worker_db, target):
+                calls.append((worker_db is not db, target))
+                return object()
+
+            def callback(_result):
+                processed.set()
+
+            worker = FastDecisionWorker(
+                db_path=db_path,
+                event_queue=queue,
+                decision_handler=handler,
+                result_callback=callback,
+                poll_timeout=0.01,
+                monotonic_fn=_FakeMonotonic([700.0, 700.1]),
+            )
+            worker.start()
+            try:
+                queue.put(
+                    _alpha_event(
+                        kind="forecast_sample_changed",
+                        event_key="forecast_sample_changed:2026-05-04:1->2",
+                    )
+                )
+                self.assertTrue(processed.wait(timeout=1.0))
+            finally:
+                worker.stop(timeout=1.0)
+
+            self.assertEqual(calls, [(True, date(2026, 5, 4))])
+            verify_db = connect(db_path)
+            try:
+                stages = latency_stages_for_event(
+                    verify_db, "forecast_sample_changed:2026-05-04:1->2"
+                )
+            finally:
+                verify_db.close()
+            self.assertEqual(
+                [stage["stage"] for stage in stages],
+                ["decision_started", "decision_completed"],
+            )
 
     def test_trading_decision_records_orderbook_state_age(self):
         with tempfile.TemporaryDirectory() as tmp:
