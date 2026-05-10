@@ -2047,6 +2047,18 @@ def _readiness_gate_line_malformed(line: str) -> bool:
                 return True
             if count < 0:
                 return True
+        if key in {"p50", "p95", "p99", "threshold"}:
+            if value == "n/a":
+                seen_fields.add(key)
+                continue
+            if not value.endswith("s"):
+                return True
+            try:
+                seconds = float(value[:-1])
+            except ValueError:
+                return True
+            if seconds < 0:
+                return True
         seen_fields.add(key)
     return False
 

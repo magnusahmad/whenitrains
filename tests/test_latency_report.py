@@ -1833,6 +1833,47 @@ class LatencyReportTests(unittest.TestCase):
                 stdout.getvalue(),
             )
 
+    def test_low_latency_verify_evidence_archive_fails_non_numeric_readiness_gate_duration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            name = "readiness_report.txt"
+            report = output_dir / name
+            report.write_text(
+                report.read_text().replace(
+                    "gate hko_commit_to_decision_under_1s=pass count=1\n",
+                    "gate hko_commit_to_decision_under_1s=pass count=1 p95=bad\n",
+                    1,
+                )
+            )
+            digest = hashlib.sha256(report.read_bytes()).hexdigest()
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                "\n".join(
+                    f"sha256 {name}={digest}"
+                    if line.startswith(f"sha256 {name}=")
+                    else line
+                    for line in manifest.splitlines()
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive readiness gate malformed: gate hko_commit_to_decision_under_1s=pass count=1 p95=bad",
+                stdout.getvalue(),
+            )
+
     def test_low_latency_verify_evidence_archive_ignores_gate_lines_outside_evidence_section(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "evidence"
