@@ -443,6 +443,7 @@ class CliDiscoveryTests(unittest.TestCase):
         text = stdout.getvalue()
         self.assertEqual(exit_code, 0)
         self.assertIn("1. live-network-smoke --live --require-connected", text)
+        self.assertIn("archive live-reconcile output as REST/recent-trades validation evidence", text)
         self.assertIn(
             "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
             "live-buy 30 YES 5.00 --date 2026-05-11 --market-kind highest "

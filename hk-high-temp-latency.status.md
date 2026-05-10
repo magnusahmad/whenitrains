@@ -246,6 +246,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-HKO-checklist live log endpoint retry: `curl -L --max-time 8 http://192.168.1.23:8765/` failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 0 ms: Couldn't connect to server`. Live/account proof remains blocked on endpoint availability.
 
+2026-05-11 checklist reconcile evidence pass: tightened `live-readiness-checklist` so each manual live-money reconciliation step explicitly tells the operator to archive `live-reconcile` output as REST/recent-trades validation evidence, matching the M4 account-side validation gap. Verified red/green with `PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_live_readiness_checklist_prints_ordered_evidence_commands`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
