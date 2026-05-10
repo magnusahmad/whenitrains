@@ -80,6 +80,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live log access attempt: attempted to fetch `http://192.168.1.23:8765/` from this machine for live smoke evidence, but the request timed out after 75 seconds without connecting. Live network smoke and production sub-second commit-to-decision proof remain unverified in this session.
 
+2026-05-11 live log access retry: retried `curl -L --max-time 8 http://192.168.1.23:8765/`. The sandboxed request timed out after 8 seconds, and the approved LAN request failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765`. Live-log access is blocked on the LAN endpoint being reachable.
+
 2026-05-11 live execution benchmark pass: added a fake-clock test that records `decision_started` then runs `execute_live_buy`, verifying `decision_started -> order_submitted` p95 is under 100 ms excluding network.
 
 2026-05-11 actual-cross runner planner pass: actual max-cross candidate executions now flow through planned candidate actions and `ExecutionScheduler`, with single-worker in-thread execution to avoid SQLite cross-thread access. Verification covers fast-lane bridge use plus the focused actual-cross behavior matrix.
