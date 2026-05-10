@@ -839,6 +839,34 @@ def _process_actual_transition(
             )
             buys_missed += 1
             continue
+        exact_fast_lane = side == "YES" and predicate.type == PredicateType.EXACT_C
+        peak_hour_sure_bet = _actual_cross_is_peak_hour_sure_bet(
+            db, today_hkt.isoformat(), new["observed_at_hkt"], new_max
+        )
+        if exact_fast_lane and not peak_hour_sure_bet:
+            if not event_marked:
+                _mark_event_processed(
+                    db,
+                    event_type="actual_cross",
+                    event_key=event_key,
+                    reason=f"observed max changed {old_max} -> {new_max}",
+                    details=actual_details,
+                )
+                event_marked = True
+            store_trading_decision(
+                db,
+                "actual_cross",
+                token_id,
+                row["label"],
+                side,
+                "BUY",
+                "missed",
+                "latest hourly forecast does not confirm exact-bucket fast lane",
+                actual_details,
+                event_key=event_key,
+            )
+            buys_missed += 1
+            continue
         prices = latest_two_orderbook_prices(db, token_id)
         if len(prices) < 2 or prices[0]["best_ask"] is None or prices[1]["best_ask"] is None:
             store_trading_decision(
@@ -860,7 +888,7 @@ def _process_actual_transition(
         is_invalidated_bucket = side == "NO"
         stale_move_threshold = (
             None
-            if is_invalidated_bucket
+            if is_invalidated_bucket or exact_fast_lane
             else Settings.actual_new_bucket_stale_price_min_move
         )
         if not event_marked:
@@ -913,9 +941,7 @@ def _process_actual_transition(
             Settings.actual_invalidated_bucket_max_entry_price
             if is_invalidated_bucket
             else Settings.peak_hour_actual_cross_max_yes_ask
-            if _actual_cross_is_peak_hour_sure_bet(
-                db, today_hkt.isoformat(), new["observed_at_hkt"], new_max
-            )
+            if peak_hour_sure_bet
             else Settings.actual_new_bucket_max_entry_price
         )
         filled = _execute_candidate_buy(
@@ -944,7 +970,13 @@ def _actual_cross_side(predicate, old_max: float, new_max: float) -> str | None:
         if old_max < predicate.value_c <= new_max:
             return "YES"
         return None
-    if predicate.type in {PredicateType.EXACT_C, PredicateType.BOTTOM_BUCKET_LTE_C}:
+    if predicate.type == PredicateType.EXACT_C:
+        if old_max < predicate.value_c <= new_max < predicate.value_c + 1:
+            return "YES"
+        upper_boundary = predicate.value_c + 1
+        if old_max < upper_boundary <= new_max:
+            return "NO"
+    if predicate.type == PredicateType.BOTTOM_BUCKET_LTE_C:
         upper_boundary = predicate.value_c + 1
         if old_max < upper_boundary <= new_max:
             return "NO"
@@ -965,22 +997,27 @@ def _actual_cross_is_peak_hour_sure_bet(
     observed_at_hkt: str,
     actual_max_c: float,
 ) -> bool:
-    relevant = _latest_hourly_forecast_values(db, target_date_hkt)
-    if not relevant:
-        return False
     observed_hour = _hkt_hour(observed_at_hkt)
     if observed_hour is None:
         return False
-    peak = max(value for _, value in relevant)
-    if actual_max_c < peak:
+    preceding = _latest_hourly_forecast_values_as_of(
+        db, target_date_hkt, observed_at_hkt
+    )
+    latest = _latest_hourly_forecast_values(db, target_date_hkt)
+    if not preceding or not latest:
         return False
-    peak_hours = [hour for hour, value in relevant if value >= peak]
-    if observed_hour not in peak_hours:
+    preceding_peak = max(value for _, value in preceding)
+    if actual_max_c <= preceding_peak:
         return False
-    future_values = [value for hour, value in relevant if hour > observed_hour]
+    preceding_hour_values = [
+        value for hour, value in preceding if hour == observed_hour
+    ]
+    if not preceding_hour_values or max(preceding_hour_values) < preceding_peak:
+        return False
+    future_values = [value for hour, value in latest if hour > observed_hour]
     if not future_values:
         return False
-    return max(future_values) < peak
+    return max(future_values) < actual_max_c
 
 
 def _hkt_hour(value: str) -> int | None:
@@ -1874,6 +1911,38 @@ def _latest_hourly_forecast_values(
 ) -> list[tuple[int, float]]:
     rows = _latest_hourly_forecast_for_date(db, target_date_hkt)
     return _hourly_values_from_items(target_date_hkt, rows)
+
+
+def _latest_hourly_forecast_values_as_of(
+    db: sqlite3.Connection, target_date_hkt: str, as_of_hkt: str
+) -> list[tuple[int, float]]:
+    try:
+        cutoff = datetime.fromisoformat(as_of_hkt).astimezone(timezone.utc)
+    except ValueError:
+        return []
+    rows = db.execute(
+        """
+        select fetched_at_utc, hourly_temperatures_json
+        from ocf_forecast_samples
+        where forecast_date_hkt = ?
+          and hourly_temperatures_json is not null
+          and hourly_temperatures_json != '[]'
+        order by fetched_at_utc desc, id desc
+        """,
+        (target_date_hkt,),
+    ).fetchall()
+    for row in rows:
+        try:
+            fetched_at = datetime.fromisoformat(row["fetched_at_utc"]).astimezone(
+                timezone.utc
+            )
+        except (TypeError, ValueError):
+            continue
+        if fetched_at <= cutoff:
+            return _hourly_values_from_json(
+                target_date_hkt, row["hourly_temperatures_json"]
+            )
+    return []
 
 
 def _hourly_values_from_json(

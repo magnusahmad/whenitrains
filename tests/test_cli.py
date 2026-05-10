@@ -1,4 +1,6 @@
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from datetime import date
@@ -10,6 +12,7 @@ from whenitrains.cli import (
     _discover_market,
     _fetch_current_temperature,
     _fetch_ocf_forecast,
+    _fetch_orderbooks,
     main,
 )
 from whenitrains.hko import (
@@ -19,10 +22,82 @@ from whenitrains.hko import (
     OCF_STATION_URL,
     RHRREAD_URL,
 )
-from whenitrains.storage import connect, migrate
+from whenitrains.markets import parse_outcome_label
+from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
+from whenitrains.storage import connect, migrate, store_polymarket_event
 
 
 class CliDiscoveryTests(unittest.TestCase):
+    def test_fetch_orderbooks_fetches_tokens_concurrently_and_stores_snapshots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_polymarket_event(
+                db,
+                TemperatureMarket(
+                    event_id="event",
+                    event_slug="highest-temperature-in-hong-kong-on-may-10-2026",
+                    title="Highest temperature",
+                    target_date=date(2026, 5, 10),
+                    outcomes=[
+                        Outcome(
+                            market_id="m26",
+                            label="26°C",
+                            predicate=parse_outcome_label("26°C"),
+                            yes_token_id="yes26",
+                            no_token_id="no26",
+                        ),
+                        Outcome(
+                            market_id="m27",
+                            label="27°C",
+                            predicate=parse_outcome_label("27°C"),
+                            yes_token_id="yes27",
+                            no_token_id="no27",
+                        ),
+                    ],
+                ),
+            )
+            active_fetches = 0
+            max_active_fetches = 0
+            lock = threading.Lock()
+
+            def fake_fetch(token_id):
+                nonlocal active_fetches, max_active_fetches
+                with lock:
+                    active_fetches += 1
+                    max_active_fetches = max(max_active_fetches, active_fetches)
+                time.sleep(0.02)
+                with lock:
+                    active_fetches -= 1
+                return OrderBook(
+                    token_id,
+                    bids=[(0.10, 10)],
+                    asks=[(0.20, 10)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                )
+
+            with patch("whenitrains.cli.fetch_orderbook", side_effect=fake_fetch):
+                _fetch_orderbooks(db, date(2026, 5, 10), quiet=True, max_workers=4)
+
+            self.assertGreater(max_active_fetches, 1)
+            rows = db.execute(
+                """
+                select outcome_id, best_bid, best_ask
+                from orderbook_snapshots
+                order by outcome_id
+                """
+            ).fetchall()
+            self.assertEqual(
+                [(row["outcome_id"], row["best_bid"], row["best_ask"]) for row in rows],
+                [
+                    ("no26", 0.10, 0.20),
+                    ("no27", 0.10, 0.20),
+                    ("yes26", 0.10, 0.20),
+                    ("yes27", 0.10, 0.20),
+                ],
+            )
+
     def test_live_env_exports_prints_shell_safe_required_exports(self):
         with tempfile.TemporaryDirectory() as tmp:
             env_path = Path(tmp) / "live.env"

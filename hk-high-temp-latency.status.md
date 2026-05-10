@@ -1,6 +1,6 @@
 # HK High Temp Latency Status
 
-Last updated: 2026-05-08 HKT
+Last updated: 2026-05-10 HKT
 
 ## Current State
 
@@ -31,6 +31,10 @@ Forecast-change and actual-cross events are retryable when orderbook prerequisit
 Actual-cross source preference now applies per value transition. AWS actual transitions are preferred when AWS provides a max/min transition; otherwise the runner falls back to the since-midnight observation stream instead of suppressing usable CSDI transitions merely because any AWS row exists.
 
 Dashboard forecast-panel loading is optimized for the append-only live database. The page still loads stats, forecast panels, and PnL in parallel, but forecast panels no longer compute latest orderbooks by grouping the full `orderbook_snapshots` table for every panel. They now fetch the small set of market tokens first, read each token's latest ask through the existing latest-orderbook index, bucket orderbook chart history in SQL, parse OCF high/low series in one pass per panel, and skip duplicate OCF rows with the same HKO update timestamp before JSON parsing.
+
+The scheduler orderbook refresh now fetches independent CLOB token books concurrently, then writes snapshots through the main SQLite connection in deterministic outcome order. The previous implementation fetched every outcome as serial `YES` then `NO` HTTP calls, so a 15-second refresh interval could still take close to a minute when many current/future HK outcomes were active. Individual token failures remain non-fatal warnings.
+
+2026-05-10 live audit finding: the 15:50 HKT AWS actual max transition `25.6 -> 26.1` was first stored locally at 15:57:52 HKT, while the 26°C YES ask had already moved from about `0.14` at 15:46:52 to `0.95` at 15:57:48. The scheduler did observe the actual max change, but prior actual-cross logic did not emit exact-bucket YES candidates and the fallback forecast-value path skipped `26°C YES` because later hourly forecast values were below the bucket guard. Exact-bucket actual-cross fast-lane logic now includes both the crossed exact-bucket YES token and any NO token invalidated by the same official actual move, with a `0.75` YES cap. The surprise basis uses the preceding hourly forecast as of the actual observation, while the later-hours-lower confirmation uses the newest hourly forecast available at decision time.
 
 Past-date unresolved local positions remain a documented residual risk. The real market should eventually resolve, but local paper/live state still needs a reconcile/settlement path to reflect that resolution in risk and dashboard state if the scheduler missed the same-day exit window.
 
@@ -255,6 +259,55 @@ Green result after preferring AWS only when it provides a same-value transition:
 
 ```text
 Ran 2 tests in 0.017s
+OK
+```
+
+Concurrent orderbook refresh red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_fetch_orderbooks_fetches_tokens_concurrently_and_stores_snapshots
+```
+
+Red result: `_fetch_orderbooks` rejected the test-only `max_workers` argument and still had no concurrent fetch path.
+
+Green result after fetching token books in a `ThreadPoolExecutor` and storing snapshots sequentially:
+
+```text
+Ran 1 test in 0.042s
+OK
+```
+
+Exact-bucket actual-cross fast-lane red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest \
+  tests.test_runner.RunnerTests.test_actual_cross_yes_allows_seventy_five_cent_entry_in_peak_hour_sure_bet \
+  tests.test_runner.RunnerTests.test_actual_cross_yes_rejects_above_seventy_five_cents_in_peak_hour_sure_bet \
+  tests.test_runner.RunnerTests.test_actual_cross_fast_lane_buys_exact_yes_and_invalidated_no_when_latest_forecast_agrees \
+  tests.test_runner.RunnerTests.test_actual_cross_fast_lane_skips_exact_yes_when_latest_forecast_later_hour_reaches_actual
+```
+
+Red result: peak-hour actual-cross YES still allowed `0.76`, exact-bucket crosses did not buy the crossed exact YES token, and a failed newest-hourly-forecast confirmation produced no terminal missed decision.
+
+Green result after lowering the peak-hour cap to `0.75`, adding exact-bucket YES side selection, bypassing stale-price movement only for confirmed exact-bucket fast-lane YES, and requiring the preceding hourly forecast to put the observed hour at the forecast peak while the newest hourly forecast keeps every later same-day hour below the actual cross:
+
+```text
+Ran 6 tests in 0.197s
+OK
+```
+
+Forecast-timing refinement:
+
+```bash
+PYTHONPATH=src python3 -m unittest \
+  tests.test_runner.RunnerTests.test_actual_cross_fast_lane_uses_preceding_forecast_even_when_new_forecast_marks_current_hour_at_actual \
+  tests.test_runner.RunnerTests.test_actual_cross_fast_lane_requires_preceding_forecast_basis
+```
+
+Green result after splitting the guard into a preceding hourly forecast selected by `fetched_at_utc <= observed_at_hkt` for the surprise basis and the newest hourly forecast for later-hour confirmation:
+
+```text
+Ran 2 tests
 OK
 ```
 
@@ -537,6 +590,7 @@ Scheduler defaults for the POC:
 - Future-date forecast trading: market discovery now runs for every OCF forecast date at or after the current HKT date. Orderbook polling covers all discovered HK high-temperature outcomes. Forecast-change entries are evaluated per target date.
 - Current-day actual trading: AWS GIS actual-cross entries, actual invalidation, and hold-to-maturity logic remain current-day only. Future-date positions can still exit by forecast invalidation or risk rule, but are not invalidated by today's actual max.
 - Current scheduler implementation: `paper-scheduler` runs a dedicated AWS actual polling worker, evaluates other HKO source windows every loop, refreshes all discovered HK high-temperature orderbooks on a separate 15-second cadence, discovers markets for all current/future OCF forecast dates on a 5-minute cadence, and runs the paper decision pass every loop.
+- Orderbook refresh now runs concurrent per-token CLOB fetches with a default worker cap of 16, then persists snapshots sequentially. This keeps SQLite single-threaded while avoiding the previous full-sweep latency from serial YES/NO HTTP calls.
 - Scheduler output is quiet by default: orderbook-only/no-op ticks are suppressed. It prints when HKO is fetched, a signal/trade/missed-trade occurs, a non-noop decision is made, or AWS actual fetch fails.
 - Use `paper-scheduler --verbose` to restore noisy output: every scheduler tick plus all orderbook bid/ask lines.
 - HKO source polling respects the in-window 10-second cadence; unchanged HKO payloads no longer print every scheduler tick.

@@ -1190,7 +1190,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result.buys_filled, 0)
             self.assertEqual(result.signals, 0)
 
-    def test_actual_cross_yes_allows_eighty_cent_entry_in_peak_hour_sure_bet(self):
+    def test_actual_cross_yes_allows_seventy_five_cent_entry_in_peak_hour_sure_bet(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
                 Path(tmp) / "test.db",
@@ -1205,10 +1205,11 @@ class RunnerTests(unittest.TestCase):
                 ],
             )
             _store_forecast(db, 29.0, "2026-05-04T00:45:00+08:00")
+            _set_latest_ocf_sample_fetched_at(db, "2026-05-04T00:45:00+08:00")
             _store_peak_decline_hourly_forecast(db, date(2026, 5, 4), peak=29.0)
             _store_aws_actual(db, high=28.7, hour=13)
             _store_aws_actual(db, high=29.2, hour=14)
-            _store_book_pair(db, "yes29", old_ask=0.76, new_ask=0.76)
+            _store_book_pair(db, "yes29", old_ask=0.75, new_ask=0.75)
 
             result = process_actual_entries(db, date(2026, 5, 4))
 
@@ -1222,6 +1223,42 @@ class RunnerTests(unittest.TestCase):
                 """
             ).fetchone()
             self.assertEqual(decision["status"], "filled")
+
+    def test_actual_cross_yes_rejects_above_seventy_five_cents_in_peak_hour_sure_bet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m29",
+                        label="29°C or higher",
+                        predicate=parse_outcome_label("29°C or higher"),
+                        yes_token_id="yes29",
+                        no_token_id="no29",
+                    )
+                ],
+            )
+            _store_forecast(db, 29.0, "2026-05-04T00:45:00+08:00")
+            _set_latest_ocf_sample_fetched_at(db, "2026-05-04T00:45:00+08:00")
+            _store_peak_decline_hourly_forecast(db, date(2026, 5, 4), peak=29.0)
+            _store_aws_actual(db, high=28.7, hour=13)
+            _store_aws_actual(db, high=29.2, hour=14)
+            _store_book_pair(db, "yes29", old_ask=0.76, new_ask=0.76)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(result.buys_missed, 1)
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'actual_cross' and action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "missed")
+            self.assertEqual(decision["reason"], "no ask depth at or below max price")
 
     def test_actual_cross_yes_does_not_raise_entry_threshold_when_peak_repeats(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1238,6 +1275,7 @@ class RunnerTests(unittest.TestCase):
                 ],
             )
             _store_forecast(db, 29.0, "2026-05-04T00:45:00+08:00")
+            _set_latest_ocf_sample_fetched_at(db, "2026-05-04T00:45:00+08:00")
             _store_early_breach_hourly_forecast(db, date(2026, 5, 4), bucket=29.0)
             _store_aws_actual(db, high=28.7, hour=13)
             _store_aws_actual(db, high=29.2, hour=14)
@@ -1257,6 +1295,150 @@ class RunnerTests(unittest.TestCase):
             ).fetchone()
             self.assertEqual(decision["status"], "missed")
             self.assertEqual(decision["reason"], "no ask depth at or below max price")
+
+    def test_actual_cross_fast_lane_buys_exact_yes_and_invalidated_no_when_latest_forecast_agrees(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m25",
+                        label="25°C",
+                        predicate=parse_outcome_label("25°C"),
+                        yes_token_id="yes25",
+                        no_token_id="no25",
+                    ),
+                    Outcome(
+                        market_id="m26",
+                        label="26°C",
+                        predicate=parse_outcome_label("26°C"),
+                        yes_token_id="yes26",
+                        no_token_id="no26",
+                    ),
+                ],
+            )
+            _store_forecast(db, 25.8, "2026-05-04T00:45:00+08:00")
+            _set_latest_ocf_sample_fetched_at(db, "2026-05-04T00:45:00+08:00")
+            _store_peak_decline_hourly_forecast(
+                db, date(2026, 5, 4), peak=25.8, fetched_at_hkt="2026-05-04T13:55:00+08:00"
+            )
+            _store_current_hour_matches_actual_future_declines_forecast(
+                db, date(2026, 5, 4), actual=26.1, fetched_at_hkt="2026-05-04T14:01:00+08:00"
+            )
+            _store_aws_actual(db, high=25.6, hour=13, minute=50)
+            _store_aws_actual(db, high=26.1, hour=14, minute=0)
+            _store_book_pair(db, "no25", old_ask=0.74, new_ask=0.74)
+            _store_book_pair(db, "yes26", old_ask=0.50, new_ask=0.74)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 2)
+            bought = {
+                row["label"] + " " + row["side"]
+                for row in db.execute(
+                    "select label, side from paper_decisions where action = 'BUY' and status = 'filled'"
+                )
+            }
+            self.assertEqual(bought, {"25°C NO", "26°C YES"})
+
+    def test_actual_cross_fast_lane_skips_exact_yes_when_latest_forecast_later_hour_reaches_actual(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m26",
+                        label="26°C",
+                        predicate=parse_outcome_label("26°C"),
+                        yes_token_id="yes26",
+                        no_token_id="no26",
+                    )
+                ],
+            )
+            _store_forecast(db, 25.8, "2026-05-04T00:45:00+08:00")
+            _set_latest_ocf_sample_fetched_at(db, "2026-05-04T00:45:00+08:00")
+            _store_peak_decline_hourly_forecast(
+                db, date(2026, 5, 4), peak=25.8, fetched_at_hkt="2026-05-04T13:55:00+08:00"
+            )
+            _store_successive_hour_not_below_actual_forecast(
+                db, date(2026, 5, 4), actual=26.1, fetched_at_hkt="2026-05-04T14:01:00+08:00"
+            )
+            _store_aws_actual(db, high=25.6, hour=13, minute=50)
+            _store_aws_actual(db, high=26.1, hour=14, minute=0)
+            _store_book_pair(db, "yes26", old_ask=0.50, new_ask=0.74)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(result.buys_missed, 1)
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'actual_cross' and action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "missed")
+            self.assertEqual(decision["reason"], "latest hourly forecast does not confirm exact-bucket fast lane")
+
+    def test_actual_cross_fast_lane_uses_preceding_forecast_even_when_new_forecast_marks_current_hour_at_actual(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m26",
+                        label="26°C",
+                        predicate=parse_outcome_label("26°C"),
+                        yes_token_id="yes26",
+                        no_token_id="no26",
+                    )
+                ],
+            )
+            _store_forecast(db, 25.8, "2026-05-04T00:45:00+08:00")
+            _set_latest_ocf_sample_fetched_at(db, "2026-05-04T00:45:00+08:00")
+            _store_peak_decline_hourly_forecast(
+                db, date(2026, 5, 4), peak=25.8, fetched_at_hkt="2026-05-04T13:55:00+08:00"
+            )
+            _store_current_hour_matches_actual_future_declines_forecast(
+                db, date(2026, 5, 4), actual=26.1, fetched_at_hkt="2026-05-04T14:01:00+08:00"
+            )
+            _store_aws_actual(db, high=25.6, hour=13, minute=50)
+            _store_aws_actual(db, high=26.1, hour=14, minute=0)
+            _store_book_pair(db, "yes26", old_ask=0.50, new_ask=0.74)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 1)
+
+    def test_actual_cross_fast_lane_requires_preceding_forecast_basis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m26",
+                        label="26°C",
+                        predicate=parse_outcome_label("26°C"),
+                        yes_token_id="yes26",
+                        no_token_id="no26",
+                    )
+                ],
+            )
+            _store_forecast(db, 25.8, "2026-05-04T14:01:00+08:00")
+            _set_latest_ocf_sample_fetched_at(db, "2026-05-04T14:01:00+08:00")
+            _store_current_hour_matches_actual_future_declines_forecast(
+                db, date(2026, 5, 4), actual=26.1, fetched_at_hkt="2026-05-04T14:01:00+08:00"
+            )
+            _store_aws_actual(db, high=25.6, hour=13, minute=50)
+            _store_aws_actual(db, high=26.1, hour=14, minute=0)
+            _store_book_pair(db, "yes26", old_ask=0.50, new_ask=0.74)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(result.buys_missed, 1)
 
     def test_actual_cross_ignores_previous_day_observation_transition(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2472,7 +2654,9 @@ def _store_late_peak_hourly_forecast(db, forecast_date: date, peak: float):
     )
 
 
-def _store_peak_decline_hourly_forecast(db, forecast_date: date, peak: float):
+def _store_peak_decline_hourly_forecast(
+    db, forecast_date: date, peak: float, fetched_at_hkt: str | None = None
+):
     snapshot = store_raw_snapshot(
         db, "hko", f"ocf-hourly-peak-decline-{forecast_date}", str(peak)
     )
@@ -2508,6 +2692,94 @@ def _store_peak_decline_hourly_forecast(db, forecast_date: date, peak: float):
             )
         ],
     )
+    _set_latest_ocf_sample_fetched_at(
+        db, fetched_at_hkt or f"{forecast_date.isoformat()}T13:11:53+08:00"
+    )
+
+
+def _store_successive_hour_not_below_actual_forecast(
+    db, forecast_date: date, actual: float, fetched_at_hkt: str | None = None
+):
+    snapshot = store_raw_snapshot(
+        db, "hko", f"ocf-hourly-future-not-below-{forecast_date}", str(actual)
+    )
+    store_ocf_forecast_samples(
+        db,
+        snapshot.id,
+        [
+            OcfForecastSample(
+                forecast_date_hkt=forecast_date,
+                forecast_min_c=None,
+                forecast_max_c=int(actual),
+                raw_min_c=None,
+                raw_max_c=actual,
+                hourly_temperatures=[
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T13:00:00+08:00",
+                        "temperature_c": actual - 0.5,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T14:00:00+08:00",
+                        "temperature_c": actual - 0.3,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T15:00:00+08:00",
+                        "temperature_c": actual,
+                    },
+                ],
+                raw={"LastModified": int(f"{forecast_date:%Y%m%d}131154")},
+            )
+        ],
+    )
+    if fetched_at_hkt is not None:
+        _set_latest_ocf_sample_fetched_at(db, fetched_at_hkt)
+
+
+def _store_current_hour_matches_actual_future_declines_forecast(
+    db, forecast_date: date, actual: float, fetched_at_hkt: str | None = None
+):
+    snapshot = store_raw_snapshot(
+        db, "hko", f"ocf-hourly-current-actual-{forecast_date}", str(actual)
+    )
+    store_ocf_forecast_samples(
+        db,
+        snapshot.id,
+        [
+            OcfForecastSample(
+                forecast_date_hkt=forecast_date,
+                forecast_min_c=None,
+                forecast_max_c=int(actual),
+                raw_min_c=None,
+                raw_max_c=actual,
+                hourly_temperatures=[
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T14:00:00+08:00",
+                        "temperature_c": actual,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T15:00:00+08:00",
+                        "temperature_c": actual - 0.4,
+                    },
+                    {
+                        "forecast_hour_hkt": f"{forecast_date.isoformat()}T16:00:00+08:00",
+                        "temperature_c": actual - 0.8,
+                    },
+                ],
+                raw={"LastModified": int(f"{forecast_date:%Y%m%d}140100")},
+            )
+        ],
+    )
+    if fetched_at_hkt is not None:
+        _set_latest_ocf_sample_fetched_at(db, fetched_at_hkt)
+
+
+def _set_latest_ocf_sample_fetched_at(db, fetched_at_hkt: str):
+    fetched_at_utc = datetime.fromisoformat(fetched_at_hkt).astimezone(timezone.utc).isoformat()
+    db.execute(
+        "update ocf_forecast_samples set fetched_at_utc = ? where id = (select max(id) from ocf_forecast_samples)",
+        (fetched_at_utc,),
+    )
+    db.commit()
 
 
 def _store_below_bucket_hourly_forecast(db, forecast_date: date, bucket: float):

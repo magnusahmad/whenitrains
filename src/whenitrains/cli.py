@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -1011,31 +1012,58 @@ def _discover_markets_for_forecast_dates(db, today_hkt) -> int:
     return discovered
 
 
-def _fetch_orderbooks(db, target_date=None, quiet: bool = False) -> None:
+def _fetch_orderbooks(
+    db,
+    target_date=None,
+    quiet: bool = False,
+    max_workers: int = 16,
+) -> None:
     outcomes = (
         list_outcomes_for_date(db, target_date.isoformat())
         if target_date is not None
         else list_outcomes_from_date(db, datetime.now(HKT).date().isoformat())
     )
-    for outcome in outcomes:
-        try:
-            yes_book = fetch_orderbook(outcome["yes_token_id"])
+    requests = []
+    for outcome_index, outcome in enumerate(outcomes):
+        requests.append((outcome_index, outcome, "YES", outcome["yes_token_id"]))
+        requests.append((outcome_index, outcome, "NO", outcome["no_token_id"]))
+    if not requests:
+        return
+
+    books = {}
+    errors = {}
+    worker_count = max(1, min(max_workers, len(requests)))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {
+            executor.submit(fetch_orderbook, token_id): (outcome_index, outcome, side, token_id)
+            for outcome_index, outcome, side, token_id in requests
+        }
+        for future in as_completed(future_map):
+            outcome_index, outcome, side, token_id = future_map[future]
+            try:
+                books[(outcome_index, side)] = future.result()
+            except Exception as exc:
+                errors[(outcome_index, side)] = exc
+
+    for outcome_index, outcome in enumerate(outcomes):
+        yes_book = books.get((outcome_index, "YES"))
+        no_book = books.get((outcome_index, "NO"))
+        if yes_book is not None:
             store_orderbook(db, outcome["yes_token_id"], yes_book)
-        except Exception as exc:
+        else:
+            exc = errors.get((outcome_index, "YES"))
             if quiet:
                 print(f"orderbook warning {outcome['label']} YES: {exc}")
             else:
                 print(f"{outcome['label']} | YES error {exc}")
-            yes_book = None
-        try:
-            no_book = fetch_orderbook(outcome["no_token_id"])
+        if no_book is not None:
             store_orderbook(db, outcome["no_token_id"], no_book)
-        except Exception as exc:
+        else:
+            exc = errors.get((outcome_index, "NO"))
             if quiet:
                 print(f"orderbook warning {outcome['label']} NO: {exc}")
             else:
                 print(f"{outcome['label']} | NO error {exc}")
-            no_book = None
         if not quiet:
             print(
                 f"{outcome['label']} | "
