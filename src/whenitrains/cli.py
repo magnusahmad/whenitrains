@@ -2702,6 +2702,11 @@ def _live_network_smoke_summary(db) -> dict[str, object]:
         select count(*) as count
         from risk_events
         where event_type = 'live_network_smoke_ok'
+          and json_extract(details_json, '$.all_running') = 1
+          and json_extract(details_json, '$.connected_once_all') = 1
+          and cast(json_extract(details_json, '$.required_clients') as integer) >= 2
+          and cast(json_extract(details_json, '$.client_count') as integer)
+              >= cast(json_extract(details_json, '$.required_clients') as integer)
         """
     ).fetchone()
     latest_row = db.execute(

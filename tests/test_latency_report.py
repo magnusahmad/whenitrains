@@ -1892,7 +1892,12 @@ class LatencyReportTests(unittest.TestCase):
                 db,
                 "live_network_smoke_ok",
                 "info",
-                {"all_running": True, "connected_once_all": True, "client_count": 2},
+                {
+                    "all_running": True,
+                    "connected_once_all": True,
+                    "client_count": 2,
+                    "required_clients": 2,
+                },
             )
             store_risk_event(
                 db,
@@ -1917,6 +1922,42 @@ class LatencyReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn(
                 "gate live_network_smoke_ok=missing count=1 latest=failed",
+                text,
+            )
+
+    def test_low_latency_readiness_report_fails_when_network_smoke_ok_lacks_required_clients(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_risk_event(
+                db,
+                "live_network_smoke_ok",
+                "info",
+                {
+                    "all_running": True,
+                    "connected_once_all": True,
+                    "client_count": 1,
+                    "required_clients": 2,
+                },
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "gate live_network_smoke_ok=missing count=0 latest=ok",
                 text,
             )
 
