@@ -1795,7 +1795,7 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
         return (
             text.startswith("low latency readiness report\n")
             and "evidence gates:" in text
-            and "\ngate " in text
+            and bool(_readiness_gate_lines(text))
         )
     if name == "hko_source_timing_report.txt":
         return _hko_source_timing_report_content_valid(text)
@@ -1909,9 +1909,7 @@ def _hko_public_offset_buckets_valid(value: str) -> bool:
 
 def _non_passing_readiness_gates(text: str) -> list[str]:
     non_passing: list[str] = []
-    for line in text.splitlines():
-        if not line.startswith("gate ") or "=" not in line:
-            continue
+    for line in _readiness_gate_lines(text):
         gate_name, rest = line[len("gate ") :].split("=", 1)
         status = rest.split(" ", 1)[0]
         if status != "pass":
@@ -1921,9 +1919,7 @@ def _non_passing_readiness_gates(text: str) -> list[str]:
 
 def _missing_readiness_gate_names(text: str) -> list[str]:
     observed = set()
-    for line in text.splitlines():
-        if not line.startswith("gate ") or "=" not in line:
-            continue
+    for line in _readiness_gate_lines(text):
         gate_name, _rest = line[len("gate ") :].split("=", 1)
         observed.add(gate_name)
     return [gate for gate in LOW_LATENCY_READINESS_GATE_NAMES if gate not in observed]
@@ -1932,9 +1928,7 @@ def _missing_readiness_gate_names(text: str) -> list[str]:
 def _duplicate_readiness_gate_names(text: str) -> list[str]:
     observed = set()
     duplicates: list[str] = []
-    for line in text.splitlines():
-        if not line.startswith("gate ") or "=" not in line:
-            continue
+    for line in _readiness_gate_lines(text):
         gate_name, _rest = line[len("gate ") :].split("=", 1)
         if gate_name in observed and gate_name not in duplicates:
             duplicates.append(gate_name)
@@ -1945,13 +1939,25 @@ def _duplicate_readiness_gate_names(text: str) -> list[str]:
 def _unexpected_readiness_gate_names(text: str) -> list[str]:
     expected = set(LOW_LATENCY_READINESS_GATE_NAMES)
     unexpected: list[str] = []
-    for line in text.splitlines():
-        if not line.startswith("gate ") or "=" not in line:
-            continue
+    for line in _readiness_gate_lines(text):
         gate_name, _rest = line[len("gate ") :].split("=", 1)
         if gate_name not in expected and gate_name not in unexpected:
             unexpected.append(gate_name)
     return unexpected
+
+
+def _readiness_gate_lines(text: str) -> list[str]:
+    lines = text.splitlines()
+    try:
+        start = lines.index("evidence gates:") + 1
+        end = lines.index("live:", start)
+    except ValueError:
+        return []
+    return [
+        line
+        for line in lines[start:end]
+        if line.startswith("gate ") and "=" in line
+    ]
 
 
 def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
