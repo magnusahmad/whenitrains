@@ -336,6 +336,32 @@ class LatencyReportTests(unittest.TestCase):
                 fill_shares=25.0,
                 reason="resolved market settlement",
             )
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="BUY_YES",
+                action="BUY",
+                status="filled",
+                event_type="manual_live",
+                event_key="manual_live_buy:yes25",
+                fill_price=0.2,
+                fill_size_usd=5.0,
+                fill_shares=25.0,
+                reason="manual live buy 25C YES",
+            )
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="SELL",
+                action="SELL",
+                status="filled",
+                event_type="manual_live",
+                event_key="manual_live_sell:yes25",
+                fill_price=0.2,
+                fill_size_usd=5.0,
+                fill_shares=25.0,
+                reason="manual live sell 25C YES",
+            )
             store_risk_event(
                 db,
                 "live_clob_drift_scan_clear",
@@ -395,7 +421,44 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("gate live_clob_drift_scan_clear=pass count=1", text)
             self.assertIn("gate live_auth_smoke_ok=pass count=1 latest=ok", text)
             self.assertIn("gate live_network_smoke_ok=pass count=1 latest=ok", text)
+            self.assertIn("gate manual_live_buy_observed=pass count=1", text)
+            self.assertIn("gate manual_live_sell_observed=pass count=1", text)
             self.assertNotIn("readiness evidence missing", text)
+
+    def test_low_latency_readiness_report_fails_without_manual_live_sell(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="BUY_YES",
+                action="BUY",
+                status="filled",
+                event_type="manual_live",
+                fill_price=0.2,
+                fill_size_usd=5.0,
+                fill_shares=25.0,
+                reason="manual live buy 25C YES",
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("gate manual_live_buy_observed=pass count=1", text)
+            self.assertIn("gate manual_live_sell_observed=missing count=0", text)
 
     def test_low_latency_readiness_report_fails_when_latest_network_smoke_failed(self):
         with tempfile.TemporaryDirectory() as tmp:

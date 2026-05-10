@@ -1735,6 +1735,8 @@ def _low_latency_readiness_report(
     live_clob_drift_scan = _live_clob_drift_scan_summary(db)
     live_auth_smoke = _live_auth_smoke_summary(db)
     live_network_smoke = _live_network_smoke_summary(db)
+    manual_live_buy_count = _manual_live_order_count(db, action="BUY")
+    manual_live_sell_count = _manual_live_order_count(db, action="SELL")
     live = live_dashboard_stats(db)
     counts = live["counts"]
     gates = [
@@ -1791,6 +1793,8 @@ def _low_latency_readiness_report(
         _live_clob_drift_scan_gate(live_clob_drift_scan),
         _live_auth_smoke_gate(live_auth_smoke),
         _live_network_smoke_gate(live_network_smoke),
+        _count_observed_gate("manual_live_buy_observed", manual_live_buy_count),
+        _count_observed_gate("manual_live_sell_observed", manual_live_sell_count),
         _live_money_state_gate(db, live),
         _kill_switch_clear_gate(live),
     ]
@@ -2036,6 +2040,20 @@ def _live_network_smoke_summary(db) -> dict[str, object]:
     if latest_row is not None:
         latest = "ok" if latest_row["event_type"] == "live_network_smoke_ok" else "failed"
     return {"ok_count": int(ok_row["count"] or 0), "latest": latest}
+
+
+def _manual_live_order_count(db, *, action: str) -> int:
+    row = db.execute(
+        """
+        select count(*) as count
+        from live_orders
+        where event_type = 'manual_live'
+          and action = ?
+          and status = 'filled'
+        """,
+        (action,),
+    ).fetchone()
+    return int(row["count"] or 0)
 
 
 def _websocket_orderbook_snapshot_count(db) -> int:

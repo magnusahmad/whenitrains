@@ -202,6 +202,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live network smoke evidence gate pass: `live-network-smoke --live --require-connected` now records `live_network_smoke_ok` or `live_network_smoke_failed` risk events with runtime liveness, connected-once status, client count, required client count, per-client attempts/messages/errors, and any command error. `low-latency-readiness-report --require-evidence` now requires the latest live network smoke event to be OK. Verified with `PYTHONPATH=src python3 -m unittest tests.test_cli.CliDiscoveryTests.test_live_network_smoke_starts_and_stops_websocket_runtime_without_trading tests.test_cli.CliDiscoveryTests.test_live_network_smoke_require_connected_fails_when_client_never_connected tests.test_latency_report.LatencyReportTests.test_low_latency_readiness_report_fails_when_latest_network_smoke_failed`.
 
+2026-05-11 manual live order evidence gate pass: `low-latency-readiness-report --require-evidence` now requires filled `manual_live` BUY and SELL order rows, so the explicit minimum-size manual buy/sell smoke cannot be satisfied by scheduler-generated live fills. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_readiness_report_fails_without_manual_live_sell`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
