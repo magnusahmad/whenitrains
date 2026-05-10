@@ -1655,8 +1655,12 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             "evidence archive manifest sections missing: "
             + ", ".join(missing_sections)
         )
+    manifest_lines = manifest.splitlines()
+    if "files:" in manifest_lines and "checksums:" in manifest_lines:
+        if manifest_lines.index("files:") > manifest_lines.index("checksums:"):
+            messages.append("evidence archive manifest sections out of order")
     for section in _duplicate_values(
-        [line[:-1] for line in manifest.splitlines() if line in {"files:", "checksums:"}]
+        [line[:-1] for line in manifest_lines if line in {"files:", "checksums:"}]
     ):
         messages.append(f"evidence archive duplicate manifest section: {section}")
     required_metadata_keys = [

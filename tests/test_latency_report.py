@@ -491,6 +491,32 @@ class LatencyReportTests(unittest.TestCase):
                 stdout.getvalue(),
             )
 
+    def test_low_latency_verify_evidence_archive_fails_reversed_manifest_sections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            lines = (output_dir / "manifest.txt").read_text().splitlines()
+            files_index = lines.index("files:")
+            checksums_index = lines.index("checksums:")
+            lines[files_index], lines[checksums_index] = lines[checksums_index], lines[files_index]
+            (output_dir / "manifest.txt").write_text("\n".join(lines) + "\n")
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive manifest sections out of order",
+                stdout.getvalue(),
+            )
+
     def test_low_latency_verify_evidence_archive_ignores_file_entries_outside_files_section(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "evidence"
