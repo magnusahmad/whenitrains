@@ -1862,6 +1862,8 @@ def _latency_report_content_valid(pair: str, text: str) -> bool:
         if "=" not in field:
             return False
         key, value = field.split("=", 1)
+        if key in values:
+            return False
         values[key] = value
     for key in ("p50", "p95", "p99"):
         value = values.get(key)
@@ -1911,6 +1913,8 @@ def _hko_response_percentiles_valid(lines: list[str]) -> bool:
             if "=" not in part:
                 return False
             key, value = part.split("=", 1)
+            if key in values:
+                return False
             values[key] = value
         for key in ("p50", "p95", "p99"):
             value = values.get(key)
@@ -2093,6 +2097,8 @@ def _readiness_latency_line_well_formed(pair: str, line: str) -> bool:
         if "=" not in field:
             return False
         key, value = field.split("=", 1)
+        if key in values:
+            return False
         values[key] = value
     for key in ("p50", "p95", "p99"):
         value = values.get(key)

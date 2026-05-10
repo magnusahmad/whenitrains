@@ -125,7 +125,7 @@ PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.t
 git diff --check
 ```
 
-All passed. The combined roadmap verification ran 344 tests under tracemalloc without the previous unclosed-SQLite ResourceWarning cascade.
+All passed. The combined roadmap verification ran 346 tests under tracemalloc without the previous unclosed-SQLite ResourceWarning cascade.
 
 ## Next Steps
 
