@@ -124,6 +124,7 @@ class LatencyReportTests(unittest.TestCase):
             record_latency_stage(db, "event-1", "clob_ack", 10.5, "actual")
             record_latency_stage(db, "event-1", "fill_matched", 10.7, "actual")
             record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
+            record_latency_stage(db, "event-1", "decision_completed", 10.9, "actual")
             db.close()
             stdout = StringIO()
 
@@ -142,6 +143,11 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn(
                 "gate hko_commit_to_decision_under_1s=pass "
                 "count=1 p95=0.400s threshold=1.000s",
+                text,
+            )
+            self.assertIn(
+                "gate hko_commit_to_decision_completed_under_1s=pass "
+                "count=1 p95=0.900s threshold=1.000s",
                 text,
             )
             self.assertIn(
@@ -233,6 +239,7 @@ class LatencyReportTests(unittest.TestCase):
             record_latency_stage(db, "event-1", "clob_ack", 10.5, "actual")
             record_latency_stage(db, "event-1", "fill_matched", 10.7, "actual")
             record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
+            record_latency_stage(db, "event-1", "decision_completed", 10.9, "actual")
             store_trading_decision(
                 db,
                 event_type="actual",
@@ -281,6 +288,7 @@ class LatencyReportTests(unittest.TestCase):
             record_latency_stage(db, "event-1", "clob_ack", 10.5, "actual")
             record_latency_stage(db, "event-1", "fill_matched", 10.7, "actual")
             record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
+            record_latency_stage(db, "event-1", "decision_completed", 10.9, "actual")
             store_trading_decision(
                 db,
                 event_type="actual",

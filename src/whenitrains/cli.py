@@ -1482,6 +1482,7 @@ def _low_latency_readiness_report(
             f"p99={_fmt_seconds(summary['p99_seconds'])}"
         )
     commit_to_decision = latency_duration_summary(db, "db_committed", "decision_started")
+    commit_to_completion = latency_duration_summary(db, "db_committed", "decision_completed")
     decision_to_submit = latency_duration_summary(db, "decision_started", "order_submitted")
     submit_to_fill = latency_duration_summary(db, "order_submitted", "fill_confirmed")
     submit_to_ack = latency_duration_summary(db, "order_submitted", "clob_ack")
@@ -1497,6 +1498,11 @@ def _low_latency_readiness_report(
         _latency_threshold_gate(
             "hko_commit_to_decision_under_1s",
             commit_to_decision,
+            threshold_seconds=1.0,
+        ),
+        _latency_threshold_gate(
+            "hko_commit_to_decision_completed_under_1s",
+            commit_to_completion,
             threshold_seconds=1.0,
         ),
         _latency_observed_gate(

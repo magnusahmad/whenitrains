@@ -166,6 +166,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 CLOB lifecycle evidence gate pass: `low-latency-readiness-report --require-evidence` now requires observed `order_submitted -> clob_ack` and `order_submitted -> fill_matched` stage pairs in addition to submit-to-fill-confirmed timing, so the production report proves the intermediate CLOB lifecycle stages named by the roadmap. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
 
+2026-05-11 decision-completion evidence gate pass: `low-latency-readiness-report --require-evidence` now requires `db_committed -> decision_completed` p95 to stay under 1 second, so production evidence must prove fast decisions finish rather than only start quickly. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
