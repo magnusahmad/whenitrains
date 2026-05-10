@@ -22,7 +22,7 @@ Low-latency readiness M3 groundwork has standalone execution scheduler and candi
 
 Low-latency readiness M4 groundwork is partially implemented. `live_user_events` stores authenticated user-channel order/trade lifecycle events independently from final live position state, and `apply_user_channel_event` can map order lifecycle statuses, apply matched trade deltas to local positions exactly once, and converge a submitted order after a restart when a later user trade event arrives. A real authenticated WebSocket client, reconnect loop, startup watchdog integration, and freeze-on-drift policy remain pending.
 
-Low-latency readiness M5 polling groundwork is partially implemented. Learned AWS actual publish windows now include a 10-second pre/post burst plan with 0.5-second cadence, while broader catchup polling remains. Scheduler source backoff can slow non-critical HKO sources without suppressing `aws_actual` polling.
+Low-latency readiness M5 polling groundwork is partially implemented. Learned AWS actual publish windows now include a 10-second pre/post burst plan with 0.5-second cadence, while broader catchup polling remains. Scheduler source backoff can slow non-critical HKO sources without suppressing `aws_actual` polling. Live hot-path buys now fail closed when a configured Polymarket WebSocket orderbook cache is missing or stale instead of silently falling back to REST.
 
 Low-latency readiness M6 groundwork has started with a DB-specific exclusive live scheduler lock and stale submitted-order watchdog. `live-scheduler` now fails closed if another process already holds the lock for the same SQLite database, and it freezes new entries when previously submitted live orders are older than the configured watchdog threshold. Broader live startup health checks, external alerting, and a complete runbook remain pending.
 
@@ -63,6 +63,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 2026-05-11 user WebSocket reconciliation pass: added `src/whenitrains/live_user_stream.py`, additive `live_user_events` storage, and `tests/test_live_user_stream.py`. Verification covers `PLACEMENT`, `UPDATE`, `CANCELLATION`, `MATCHED`, `MINED`, `CONFIRMED`, `RETRYING`, and `FAILED` order fixtures, idempotent matched trade application, and crash/restart convergence from a submitted row plus a later user trade event.
 
 2026-05-11 polling hardening pass: added sub-second burst cadence for learned AWS actual publish windows and non-critical source backoff isolation. Verified with `PYTHONPATH=src python3 -m unittest tests.test_scheduler`.
+
+2026-05-11 orderbook freshness gate pass: live hot-path buys with a configured `OrderBookCache` now skip trading when the cache is missing or stale, preserving REST fallback only when no WebSocket cache has been configured. Verified with focused live runner tests for stale cache skip, fresh cache no-REST execution, and no-cache REST refresh.
 
 2026-05-11 operational lock pass: added `src/whenitrains/operational.py`, `tests/test_operational_readiness.py`, and live-scheduler lock wiring. Verification covers rejecting a second lock holder for the same DB and lock path selection.
 

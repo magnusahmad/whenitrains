@@ -1684,9 +1684,38 @@ def _execute_candidate_buy(
         book = None
     reference_best_ask = book.best_ask if book is not None else None
     if _LIVE_CLIENT is not None:
-        cached_book = _fresh_cached_orderbook(token_id)
-        if cached_book is not None:
-            book = cached_book
+        if _BOOK_CACHE is not None:
+            try:
+                book = _BOOK_CACHE.latest_orderbook(
+                    token_id,
+                    max_age_seconds=Settings.live_orderbook_cache_max_age_seconds,
+                )
+            except BookCacheMiss:
+                store_trading_decision(
+                    db,
+                    event_type,
+                    token_id,
+                    candidate.outcome.label,
+                    side,
+                    "BUY",
+                    "missed",
+                    "missing Polymarket orderbook cache",
+                    event_key=event_key,
+                )
+                return False
+            except BookCacheStale:
+                store_trading_decision(
+                    db,
+                    event_type,
+                    token_id,
+                    candidate.outcome.label,
+                    side,
+                    "BUY",
+                    "missed",
+                    "stale Polymarket orderbook cache",
+                    event_key=event_key,
+                )
+                return False
         else:
             try:
                 book = fetch_orderbook(token_id)
