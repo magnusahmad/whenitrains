@@ -1768,7 +1768,12 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
         return text.startswith("hko source timing rows=") and "response_ms " in text
     if name.startswith("latency_") and name.endswith(".txt"):
         pair = name[len("latency_") : -len(".txt")].replace("_to_", " -> ")
-        return text.startswith(f"{pair} count=") and " p50=" in text and " p95=" in text
+        return (
+            text.startswith(f"{pair} count=")
+            and " p50=" in text
+            and " p95=" in text
+            and " p99=" in text
+        )
     return False
 
 
