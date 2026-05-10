@@ -182,6 +182,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live readiness checklist pass: added read-only `live-readiness-checklist`, which renders the exact command sequence for live network smoke, auth smoke, kill-switch status, minimum-size manual buy/sell with explicit approval flags, reconcile checks, capped scheduler smoke, latency reports, and `low-latency-readiness-report --require-evidence`. This makes the remaining live evidence run repeatable once the live endpoint is reachable. Verified with `PYTHONPATH=src python3 -m unittest tests.test_cli`.
 
+2026-05-11 live reconcile evidence gate pass: `low-latency-readiness-report --require-evidence` now requires at least one live order with `reconciled_at_utc`, so production readiness cannot pass unless the live-money path has archived REST/order reconciliation evidence after manual or capped live testing. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

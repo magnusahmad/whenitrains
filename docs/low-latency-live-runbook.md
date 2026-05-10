@@ -101,6 +101,7 @@ Expected behavior:
 - Submitted and unknown-fill live orders are checked through CLOB REST.
 - Filled orders rebuild live positions.
 - User-channel trade events, when available, apply matched deltas exactly once.
+- `low-latency-readiness-report --require-evidence` will fail until at least one live order row has `reconciled_at_utc`, so archive this output after the manual buy/sell reconciliation pass.
 
 ## Restart After Crash
 
