@@ -214,6 +214,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 recorded fixture integration pass: added recorded HKO AWS GIS, Gamma event, and CLOB book fixtures plus `tests.test_recorded_fixtures`, covering parser-to-storage integration for the low-latency data sources without live network access. Verified with `PYTHONPATH=src python3 -m unittest tests.test_recorded_fixtures`.
 
+2026-05-11 evidence archive command pass: added `low-latency-archive-evidence --output-dir ... --require-evidence`, which writes latency reports, HKO source timing, readiness output, and a manifest into a durable evidence directory. The command writes artifacts before returning `2` when readiness gates are missing. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report.LatencyReportTests.test_low_latency_archive_evidence_writes_reports tests.test_latency_report.LatencyReportTests.test_low_latency_archive_evidence_require_evidence_returns_missing_status_after_writing`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

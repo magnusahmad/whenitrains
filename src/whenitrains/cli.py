@@ -8,7 +8,7 @@ import shlex
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
@@ -164,6 +164,11 @@ def main(argv: list[str] | None = None) -> int:
     readiness_report.add_argument("--hko-endpoint-contains", default="latestReadings")
     readiness_report.add_argument("--hko-limit", type=int, default=200)
     readiness_report.add_argument("--require-evidence", action="store_true")
+    archive_evidence = sub.add_parser("low-latency-archive-evidence")
+    archive_evidence.add_argument("--output-dir", required=True)
+    archive_evidence.add_argument("--hko-endpoint-contains", default="latestReadings")
+    archive_evidence.add_argument("--hko-limit", type=int, default=200)
+    archive_evidence.add_argument("--require-evidence", action="store_true")
     accuracy = sub.add_parser("research-forecast-accuracy")
     accuracy.add_argument("--start")
     accuracy.add_argument("--end")
@@ -297,13 +302,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "latency-report":
         migrate(db)
         summary = latency_duration_summary(db, args.start_stage, args.end_stage)
-        print(
-            f"{summary['start_stage']} -> {summary['end_stage']} "
-            f"count={summary['count']} "
-            f"p50={_fmt_seconds(summary['p50_seconds'])} "
-            f"p95={_fmt_seconds(summary['p95_seconds'])} "
-            f"p99={_fmt_seconds(summary['p99_seconds'])}"
-        )
+        print(_render_latency_summary(summary))
         return 0
     if args.command == "hko-source-timing-report":
         migrate(db)
@@ -322,6 +321,26 @@ def main(argv: list[str] | None = None) -> int:
             hko_limit=args.hko_limit,
         )
         print(report)
+        if args.require_evidence and not gate_status["all_passed"]:
+            print(
+                "readiness evidence missing: "
+                + ", ".join(gate_status["missing_gates"])
+            )
+            return 2
+        return 0
+    if args.command == "low-latency-archive-evidence":
+        migrate(db)
+        output_dir = Path(args.output_dir)
+        report_paths, gate_status = _archive_low_latency_evidence(
+            db,
+            db_path=db_path,
+            output_dir=output_dir,
+            hko_endpoint_contains=args.hko_endpoint_contains,
+            hko_limit=args.hko_limit,
+        )
+        print(f"archived low latency evidence to {output_dir}")
+        for path in report_paths:
+            print(path)
         if args.require_evidence and not gate_status["all_passed"]:
             print(
                 "readiness evidence missing: "
@@ -1512,6 +1531,74 @@ def _fmt_seconds(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.3f}s"
 
 
+def _render_latency_summary(summary: dict[str, object]) -> str:
+    return (
+        f"{summary['start_stage']} -> {summary['end_stage']} "
+        f"count={summary['count']} "
+        f"p50={_fmt_seconds(summary['p50_seconds'])} "
+        f"p95={_fmt_seconds(summary['p95_seconds'])} "
+        f"p99={_fmt_seconds(summary['p99_seconds'])}"
+    )
+
+
+def _archive_low_latency_evidence(
+    db,
+    *,
+    db_path: Path,
+    output_dir: Path,
+    hko_endpoint_contains: str | None,
+    hko_limit: int,
+) -> tuple[list[Path], dict[str, object]]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    latency_pairs = [
+        ("db_committed", "decision_started"),
+        ("decision_started", "order_submitted"),
+        ("order_submitted", "fill_confirmed"),
+        ("order_submitted", "order_rejected"),
+        ("db_committed", "decision_completed"),
+    ]
+    written: list[Path] = []
+    manifest_lines = [
+        "low latency evidence archive",
+        f"created_at_utc={datetime.now(timezone.utc).isoformat()}",
+        f"db_path={db_path}",
+        f"hko_endpoint_contains={hko_endpoint_contains or ''}",
+        f"hko_limit={hko_limit}",
+        "files:",
+    ]
+    for start_stage, end_stage in latency_pairs:
+        summary = latency_duration_summary(db, start_stage, end_stage)
+        path = output_dir / f"latency_{start_stage}_to_{end_stage}.txt"
+        path.write_text(_render_latency_summary(summary) + "\n")
+        written.append(path)
+        manifest_lines.append(f"- {path.name}")
+    hko_report = _hko_source_timing_report(
+        db,
+        endpoint_contains=hko_endpoint_contains,
+        limit=hko_limit,
+    )
+    hko_path = output_dir / "hko_source_timing_report.txt"
+    hko_path.write_text(hko_report + "\n")
+    written.append(hko_path)
+    manifest_lines.append(f"- {hko_path.name}")
+    readiness_report, gate_status = _low_latency_readiness_report(
+        db,
+        hko_endpoint_contains=hko_endpoint_contains,
+        hko_limit=hko_limit,
+    )
+    readiness_path = output_dir / "readiness_report.txt"
+    readiness_path.write_text(readiness_report + "\n")
+    written.append(readiness_path)
+    manifest_lines.append(f"- {readiness_path.name}")
+    manifest_lines.append(f"all_gates_passed={gate_status['all_passed']}")
+    if gate_status["missing_gates"]:
+        manifest_lines.append("missing_gates=" + ",".join(gate_status["missing_gates"]))
+    manifest_path = output_dir / "manifest.txt"
+    manifest_path.write_text("\n".join(manifest_lines) + "\n")
+    written.append(manifest_path)
+    return written, gate_status
+
+
 def _render_live_readiness_checklist(args, db_path: Path) -> str:
     base = [
         "PYTHONPATH=src",
@@ -1580,6 +1667,12 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         command("latency-report", "decision_started", "order_submitted"),
         command("latency-report", "order_submitted", "fill_confirmed"),
         command("low-latency-readiness-report", "--require-evidence"),
+        command(
+            "low-latency-archive-evidence",
+            "--output-dir",
+            "data/low-latency-evidence/<run-id>",
+            "--require-evidence",
+        ),
     ]
     return "\n".join(lines)
 

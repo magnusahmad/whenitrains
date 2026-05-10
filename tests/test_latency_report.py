@@ -86,6 +86,67 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("db_committed -> decision_started count=1", stdout.getvalue())
             self.assertIn("p50=0.500s", stdout.getvalue())
 
+    def test_low_latency_archive_evidence_writes_reports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            output_dir = Path(tmp) / "evidence"
+            db = connect(db_path)
+            migrate(db)
+            record_latency_stage(db, "event-1", "db_committed", 10.0, "actual")
+            record_latency_stage(db, "event-1", "decision_started", 10.5, "actual")
+            record_latency_stage(db, "event-1", "order_submitted", 10.7, "actual")
+            record_latency_stage(db, "event-1", "fill_confirmed", 11.0, "actual")
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-archive-evidence",
+                        "--output-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn(f"archived low latency evidence to {output_dir}", stdout.getvalue())
+            manifest = (output_dir / "manifest.txt").read_text()
+            self.assertIn("db_path=", manifest)
+            self.assertIn("readiness_report.txt", manifest)
+            self.assertIn("latency_db_committed_to_decision_started.txt", manifest)
+            readiness = (output_dir / "readiness_report.txt").read_text()
+            self.assertIn("low latency readiness report", readiness)
+            latency = (output_dir / "latency_db_committed_to_decision_started.txt").read_text()
+            self.assertIn("db_committed -> decision_started count=1 p50=0.500s", latency)
+
+    def test_low_latency_archive_evidence_require_evidence_returns_missing_status_after_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            output_dir = Path(tmp) / "evidence"
+            db = connect(db_path)
+            migrate(db)
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-archive-evidence",
+                        "--output-dir",
+                        str(output_dir),
+                        "--require-evidence",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertTrue((output_dir / "manifest.txt").exists())
+            self.assertTrue((output_dir / "readiness_report.txt").exists())
+            self.assertIn("readiness evidence missing:", stdout.getvalue())
+
     def test_low_latency_readiness_report_prints_latency_and_live_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"
