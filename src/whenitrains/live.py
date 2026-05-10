@@ -1120,6 +1120,59 @@ def rebuild_live_positions_from_filled_orders(db: sqlite3.Connection) -> int:
     return len(positions)
 
 
+def freeze_new_entries_for_stale_submitted_orders(
+    db: sqlite3.Connection,
+    *,
+    now: datetime | None = None,
+    max_age_seconds: float = Settings.live_submitted_order_stale_seconds,
+) -> int:
+    now = now or datetime.now(timezone.utc)
+    stale_rows = []
+    rows = db.execute(
+        """
+        select id, clob_order_id, outcome_id, status, submitted_at_utc
+        from live_orders
+        where status in ('submitted', 'unknown_fill')
+          and submitted_at_utc is not null
+        order by submitted_at_utc asc, id asc
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            submitted_at = datetime.fromisoformat(row["submitted_at_utc"])
+        except (TypeError, ValueError):
+            stale_rows.append(row)
+            continue
+        if submitted_at.tzinfo is None:
+            submitted_at = submitted_at.replace(tzinfo=timezone.utc)
+        age_seconds = (now - submitted_at.astimezone(timezone.utc)).total_seconds()
+        if age_seconds >= max_age_seconds:
+            stale_rows.append(row)
+    if not stale_rows:
+        return 0
+    set_live_setting(db, "block_new_entries", True)
+    store_risk_event(
+        db,
+        "live_stale_submitted_orders",
+        "critical",
+        {
+            "count": len(stale_rows),
+            "max_age_seconds": max_age_seconds,
+            "orders": [
+                {
+                    "id": int(row["id"]),
+                    "clob_order_id": row["clob_order_id"],
+                    "outcome_id": row["outcome_id"],
+                    "status": row["status"],
+                    "submitted_at_utc": row["submitted_at_utc"],
+                }
+                for row in stale_rows
+            ],
+        },
+    )
+    return len(stale_rows)
+
+
 def _order_id(response: dict) -> str | None:
     for key in ("orderID", "orderId", "order_id", "id"):
         value = response.get(key)

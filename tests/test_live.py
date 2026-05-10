@@ -2,6 +2,7 @@ import json
 import tempfile
 import types
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,7 @@ from whenitrains.live import (
     PolymarketClobClient,
     execute_live_buy,
     execute_live_sell,
+    freeze_new_entries_for_stale_submitted_orders,
     reconcile_submitted_live_order,
     rebuild_live_positions_from_filled_orders,
     _floor_decimal,
@@ -693,6 +695,43 @@ class LiveTests(unittest.TestCase):
 
             self.assertTrue(result.ok)
             self.assertEqual(result.reason, "ok")
+
+    def test_stale_submitted_order_watchdog_freezes_new_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="BUY_YES",
+                action="BUY",
+                status="submitted",
+                clob_order_id="order-1",
+                requested_size_usd=5.0,
+                limit_price=0.40,
+            )
+            db.execute(
+                """
+                update live_orders
+                set submitted_at_utc = '2026-05-08T01:00:00+00:00'
+                where clob_order_id = 'order-1'
+                """
+            )
+            db.commit()
+
+            frozen = freeze_new_entries_for_stale_submitted_orders(
+                db,
+                now=datetime(2026, 5, 8, 1, 5, tzinfo=timezone.utc),
+                max_age_seconds=60,
+            )
+
+            self.assertEqual(frozen, 1)
+            self.assertTrue(live_setting_enabled(db, "block_new_entries"))
+            risk = db.execute(
+                "select event_type, severity from risk_events order by id desc limit 1"
+            ).fetchone()
+            self.assertEqual(risk["event_type"], "live_stale_submitted_orders")
+            self.assertEqual(risk["severity"], "critical")
 
     def test_execute_live_buy_blocks_when_kill_switch_enabled(self):
         with tempfile.TemporaryDirectory() as tmp:

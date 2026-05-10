@@ -30,6 +30,7 @@ class Settings:
     live_total_open_exposure_cap_usd: float = 200.0
     live_daily_realized_loss_cap_usd: float = 200.0
     live_orderbook_cache_max_age_seconds: float = 0.25
+    live_submitted_order_stale_seconds: float = 60.0
     live_keychain_service: str = "whenitrains-polymarket"
     live_keychain_account: str = "bot-private-key"
     live_kill_switch_path: Path = Path("data/KILL_SWITCH")

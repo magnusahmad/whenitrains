@@ -53,6 +53,7 @@ from .live import (
     PolymarketClobClient,
     execute_live_buy,
     execute_live_sell,
+    freeze_new_entries_for_stale_submitted_orders,
     load_live_config,
     preflight_live,
     read_live_env_file,
@@ -673,6 +674,12 @@ def main(argv: list[str] | None = None) -> int:
             print("creating startup backup...", flush=True)
             backup_path = backup_sqlite_database(db_path)
             print(f"created startup backup {backup_path}", flush=True)
+        stale_submitted = freeze_new_entries_for_stale_submitted_orders(db)
+        if stale_submitted:
+            print(
+                f"blocked new entries: {stale_submitted} stale submitted live orders",
+                flush=True,
+            )
         print("loading live config and running preflight...", flush=True)
         try:
             config = load_live_config()
