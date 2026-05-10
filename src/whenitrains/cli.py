@@ -1682,6 +1682,8 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             elif not _evidence_report_content_valid(name, text):
                 messages.append(f"evidence archive file malformed: {name}")
             elif name == "readiness_report.txt":
+                for line in _malformed_readiness_gate_lines(text):
+                    messages.append(f"evidence archive readiness gate malformed: {line}")
                 for gate in _missing_readiness_gate_names(text):
                     messages.append(f"evidence archive readiness gate missing: {gate}")
                 for gate in _duplicate_readiness_gate_names(text):
@@ -1992,8 +1994,35 @@ def _readiness_gate_lines(text: str) -> list[str]:
     return [
         line
         for line in lines[start:end]
-        if line.startswith("gate ") and "=" in line
+        if line.startswith("gate ") and "=" in line and not _readiness_gate_line_malformed(line)
     ]
+
+
+def _malformed_readiness_gate_lines(text: str) -> list[str]:
+    lines = text.splitlines()
+    try:
+        start = lines.index("evidence gates:") + 1
+        end = lines.index("live:", start)
+    except ValueError:
+        return []
+    return [
+        line
+        for line in lines[start:end]
+        if line.startswith("gate ") and _readiness_gate_line_malformed(line)
+    ]
+
+
+def _readiness_gate_line_malformed(line: str) -> bool:
+    if "=" not in line:
+        return True
+    gate_part, rest = line.split("=", 1)
+    gate_tokens = gate_part.split()
+    if len(gate_tokens) != 2 or gate_tokens[0] != "gate":
+        return True
+    if not gate_tokens[1]:
+        return True
+    status = rest.split(" ", 1)[0]
+    return status not in {"pass", "missing"}
 
 
 def _readiness_sections_valid(text: str) -> bool:
