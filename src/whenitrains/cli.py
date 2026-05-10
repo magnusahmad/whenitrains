@@ -1794,7 +1794,7 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
     if name == "readiness_report.txt":
         return (
             text.startswith("low latency readiness report\n")
-            and "evidence gates:" in text
+            and _readiness_sections_valid(text)
             and bool(_readiness_gate_lines(text))
         )
     if name == "hko_source_timing_report.txt":
@@ -1958,6 +1958,13 @@ def _readiness_gate_lines(text: str) -> list[str]:
         for line in lines[start:end]
         if line.startswith("gate ") and "=" in line
     ]
+
+
+def _readiness_sections_valid(text: str) -> bool:
+    lines = text.splitlines()
+    if lines.count("evidence gates:") != 1 or lines.count("live:") != 1:
+        return False
+    return lines.index("evidence gates:") < lines.index("live:")
 
 
 def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
