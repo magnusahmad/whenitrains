@@ -55,6 +55,19 @@ SHA,9999,5,12,29.0,68,30.1,23.2,,,,1010.6,5.1,26.1,
         self.assertEqual(obs.since_midnight_max_c, 29.3)
         self.assertEqual(obs.since_midnight_min_c, 24.0)
 
+    def test_parse_aws_gis_midnight_extremes_are_previous_day(self):
+        payload = """Latest readings recorded at 00:00 Hong Kong Time 10 May 2026
+STN,WINDDIRECTION,WINDSPEED,GUST,TEMP,RH,MAXTEMP,MINTEMP,GRASSTEMP,GRASSMINTEMP,VISIBILITY,PRESSURE,TEMPDIFFERENCE,HEATINDEX,
+HKO,,,,23.8,82,26.1,23.0,,,,1015.3,-2.3,21.7,
+"""
+        obs = parse_aws_gis_current_temperature(payload)
+
+        self.assertEqual(obs.station, "HKO")
+        self.assertEqual(obs.observed_at_hkt.isoformat(), "2026-05-10T00:00:00+08:00")
+        self.assertEqual(obs.temperature_c, 23.8)
+        self.assertIsNone(obs.since_midnight_max_c)
+        self.assertIsNone(obs.since_midnight_min_c)
+
     def test_parse_flw_webpage_bulletin_time_and_range(self):
         html = """
         <html><body>

@@ -169,13 +169,18 @@ def parse_aws_gis_current_temperature(
         value = _parse_aws_gis_float(row.get("TEMP"))
         if value is None:
             raise ValueError(f"{station_code} temperature missing in AWS GIS readings")
+        max_temp = _parse_aws_gis_float(row.get("MAXTEMP"))
+        min_temp = _parse_aws_gis_float(row.get("MINTEMP"))
+        if observed_at.hour == 0 and observed_at.minute == 0:
+            max_temp = None
+            min_temp = None
         return HkoCurrentTemperature(
             observed_at_hkt=observed_at,
             station=station_code.upper(),
             temperature_c=value,
             raw={"row": row, "header": lines[0]},
-            since_midnight_max_c=_parse_aws_gis_float(row.get("MAXTEMP")),
-            since_midnight_min_c=_parse_aws_gis_float(row.get("MINTEMP")),
+            since_midnight_max_c=max_temp,
+            since_midnight_min_c=min_temp,
         )
     raise ValueError(f"{station_code} row not found in AWS GIS readings")
 

@@ -3,14 +3,20 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import threading
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Callable
 from urllib.parse import parse_qs, urlparse
 
 from .hko import HKT
-from .storage import connect, live_dashboard_stats as storage_live_dashboard_stats
+from .storage import (
+    connect,
+    list_live_orders_for_reconcile,
+    live_dashboard_stats as storage_live_dashboard_stats,
+)
 
 
 ACTIVE_PAPER_ORDER_FILTER = """
@@ -18,6 +24,8 @@ not exists (
     select 1 from paper_order_exclusions poe where poe.order_id = po.id
 )
 """
+
+_LIVE_DASHBOARD_RECONCILE_LOCK = threading.Lock()
 
 
 def _to_unix(iso_ts: str | None) -> int | None:
@@ -334,6 +342,62 @@ def live_dashboard_payload(db: sqlite3.Connection) -> dict:
             "cancel_open_orders_and_exit_positions", False
         ),
     }
+
+
+def reconcile_live_dashboard_orders(
+    db: sqlite3.Connection,
+    *,
+    client_factory: Callable[[], object] | None = None,
+) -> dict:
+    rows = list_live_orders_for_reconcile(db)
+    summary = {
+        "attempted": len(rows),
+        "filled": 0,
+        "errors": 0,
+        "rebuilt_positions": 0,
+        "error": None,
+    }
+    if not rows:
+        return summary
+
+    try:
+        from .live import (
+            PolymarketClobClient,
+            rebuild_live_positions_from_filled_orders,
+            reconcile_submitted_live_order,
+            load_live_config,
+        )
+
+        client = (
+            client_factory()
+            if client_factory is not None
+            else PolymarketClobClient(load_live_config())
+        )
+    except Exception as exc:
+        summary["errors"] = len(rows)
+        summary["error"] = f"{type(exc).__name__}: {exc}"
+        return summary
+
+    for row in rows:
+        try:
+            result = reconcile_submitted_live_order(db, client, row)
+        except Exception as exc:
+            summary["errors"] += 1
+            summary["error"] = f"{type(exc).__name__}: {exc}"
+            continue
+        if result.status == "filled":
+            summary["filled"] += 1
+    summary["rebuilt_positions"] = rebuild_live_positions_from_filled_orders(db)
+    return summary
+
+
+def _maybe_reconcile_live_dashboard_orders(db: sqlite3.Connection) -> dict | None:
+    if not _LIVE_DASHBOARD_RECONCILE_LOCK.acquire(blocking=False):
+        return {"attempted": 0, "filled": 0, "errors": 0, "skipped": "in_progress"}
+    try:
+        return reconcile_live_dashboard_orders(db)
+    finally:
+        _LIVE_DASHBOARD_RECONCILE_LOCK.release()
 
 
 def latest_observation_stats(db: sqlite3.Connection) -> dict | None:
@@ -4139,6 +4203,7 @@ def _build_handler(db_path: Path):
                         self._send_json(dashboard_stats(db))
                         return
                     if path == "/api/live/stats":
+                        _maybe_reconcile_live_dashboard_orders(db)
                         self._send_json(live_dashboard_payload(db))
                         return
                     if path == "/api/historicals":
@@ -4166,6 +4231,7 @@ def _build_handler(db_path: Path):
                         self._send_json(forecast_panels(db, token_side=token_side))
                         return
                     if path == "/api/live/forecast-panels":
+                        _maybe_reconcile_live_dashboard_orders(db)
                         token_side = query.get("side", ["YES"])[0]
                         self._send_json(
                             forecast_panels(
@@ -4177,6 +4243,7 @@ def _build_handler(db_path: Path):
                         self._send_json(pnl_series(db))
                         return
                     if path == "/api/live/pnl":
+                        _maybe_reconcile_live_dashboard_orders(db)
                         self._send_json(live_pnl_series(db))
                         return
                     if path == "/api/paper-trades":
@@ -4184,6 +4251,7 @@ def _build_handler(db_path: Path):
                         self._send_json(paper_trade_rows(db, view))
                         return
                     if path == "/api/live/trades":
+                        _maybe_reconcile_live_dashboard_orders(db)
                         view = query.get("view", ["open"])[0]
                         self._send_json(live_trade_rows(db, view))
                         return

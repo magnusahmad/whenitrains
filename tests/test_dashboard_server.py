@@ -24,6 +24,7 @@ from whenitrains.dashboard_server import (
     historicals_payload,
     live_dashboard_payload,
     live_pnl_series,
+    reconcile_live_dashboard_orders,
     live_trade_rows,
 )
 from whenitrains.hko import (
@@ -1142,6 +1143,57 @@ class DashboardServerTests(unittest.TestCase):
             self.assertTrue(pnl["realized"])
             self.assertEqual(panel["top_tokens"][0]["markers"][0]["text"], "B")
 
+    def test_live_dashboard_reconcile_makes_submitted_fill_visible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.31, 100)],
+                    asks=[(0.33, 100)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            db.execute(
+                """
+                insert into live_orders (
+                    created_at_utc, outcome_id, label, side, action, clob_order_id,
+                    order_type, status, requested_size_usd, limit_price, reason
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "2026-05-06T04:00:00+00:00",
+                    "yes25",
+                    "25°C",
+                    "BUY_YES",
+                    "BUY",
+                    "0xorder",
+                    "FAK",
+                    "submitted",
+                    20.0,
+                    0.30,
+                    "test submitted live buy",
+                ),
+            )
+            db.commit()
+
+            summary = reconcile_live_dashboard_orders(
+                db, client_factory=lambda: _FakeLiveReconcileClient()
+            )
+
+            rows = live_trade_rows(db, "open")["rows"]
+            self.assertEqual(summary["attempted"], 1)
+            self.assertEqual(summary["filled"], 1)
+            self.assertEqual(rows[0]["id"], 1)
+            self.assertEqual(rows[0]["action"], "BUY_YES")
+            self.assertAlmostEqual(rows[0]["fill_price"], 0.29)
+            self.assertAlmostEqual(rows[0]["shares"], 68.503)
+            self.assertAlmostEqual(rows[0]["fill_size_usd"], 19.86587)
+
     def test_live_trade_rows_backfill_zero_fill_size_from_price_and_shares(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_dashboard_db(Path(tmp) / "test.db")
@@ -1598,6 +1650,24 @@ def _insert_historical_order(
             (created_at, token_id, token_id, token_side, decision_reason),
         )
     db.commit()
+
+
+class _FakeLiveReconcileClient:
+    def reconcile_order(self, order_id: str | None, token_id: str) -> dict:
+        return {"order_id": order_id, "token_id": token_id, "status": "unknown"}
+
+    def trades_for_order(self, order_id: str | None, token_id: str) -> list[dict]:
+        return [
+            {
+                "id": "trade-1",
+                "taker_order_id": order_id,
+                "asset_id": token_id,
+                "side": "BUY",
+                "size": "68.503",
+                "price": "0.29",
+                "status": "CONFIRMED",
+            }
+        ]
 
 
 if __name__ == "__main__":

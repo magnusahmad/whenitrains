@@ -1,6 +1,6 @@
 # Live Trading Status
 
-Last updated: 2026-05-09 HKT
+Last updated: 2026-05-10 HKT
 
 ## Current State
 
@@ -30,6 +30,10 @@ Live balance mismatches now write explicit local reconciliation adjustments. Whe
 
 Live buys now reconcile reported fills against the wallet's conditional-token balance delta. If CLOB exposes pre/post token balances and the received token delta is smaller than the reported fill, the local fill is capped to the observed delta; if no tokens arrive, the order is marked `unknown_fill` and no local position is opened.
 
+The live dashboard now runs the live-order reconcile path before serving live stats, forecast panels, PnL, and trade drilldowns. This lets submitted or `unknown_fill` orders become filled live orders and rebuilt open positions through ordinary dashboard refreshes, instead of requiring a separate manual `live-reconcile` before the dashboard can show overnight fills.
+
+AWS GIS actual readings remain enabled for low-latency current temperature and extrema, but `MAXTEMP`/`MINTEMP` from exactly `00:00 HKT` are treated as previous-day rollover extrema and are not stored as same-day since-midnight max/min values. This prevents a midnight carryover such as `MAXTEMP=26.1` from triggering current-day actual-cross buys.
+
 Relevant existing implementation:
 
 - Strategy/decision path: `src/whenitrains/runner.py`
@@ -45,6 +49,15 @@ Known local tree state at the time this status file was updated:
 
 - There are existing uncommitted changes across live, scheduler, runner, dashboard, CLI, config, and storage code.
 - The status/spec updates describe those changes without attempting to reset or overwrite them.
+
+Session verification on 2026-05-10 HKT:
+
+- Red/green test added: `test_live_dashboard_reconcile_makes_submitted_fill_visible`.
+- Red/green test added: `test_parse_aws_gis_midnight_extremes_are_previous_day`.
+- `PYTHONPATH=src python3 -m unittest tests.test_dashboard_server` passes.
+- `PYTHONPATH=src python3 -m unittest tests.test_hko` passes.
+- Browser visual check completed against `http://127.0.0.1:8788/live` using a temporary `/private/tmp` SQLite DB.
+- `curl -L http://127.0.0.1:8788/api/live/stats` returned a valid live payload.
 
 ## Decisions
 
