@@ -1667,7 +1667,12 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             "evidence archive manifest metadata invalid: "
             + ", ".join(invalid_metadata_keys)
         )
-    for key in _manifest_duplicate_keys(manifest, ["all_gates_passed", "missing_gates"]):
+    unique_manifest_keys = [
+        *required_metadata_keys,
+        "all_gates_passed",
+        "missing_gates",
+    ]
+    for key in _manifest_duplicate_keys(manifest, unique_manifest_keys):
         messages.append(f"evidence archive duplicate manifest key: {key}")
     if _manifest_value(manifest, "all_gates_passed") != "True":
         missing_gates = _manifest_value(manifest, "missing_gates")
