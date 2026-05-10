@@ -1797,8 +1797,27 @@ def _hko_source_timing_report_content_valid(text: str) -> bool:
         if not line.startswith(offset_prefix):
             continue
         offset_value = line[len(offset_prefix) :].strip()
-        return bool(offset_value) and offset_value != "none"
+        return _hko_public_offset_buckets_valid(offset_value)
     return False
+
+
+def _hko_public_offset_buckets_valid(value: str) -> bool:
+    if not value or value == "none":
+        return False
+    total_count = 0
+    for bucket in value.split(","):
+        if ":" not in bucket:
+            return False
+        seconds_text, count_text = bucket.split(":", 1)
+        try:
+            float(seconds_text)
+            count = int(count_text)
+        except ValueError:
+            return False
+        if count <= 0:
+            return False
+        total_count += count
+    return total_count > 0
 
 
 def _non_passing_readiness_gates(text: str) -> list[str]:
