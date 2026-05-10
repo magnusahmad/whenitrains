@@ -1581,6 +1581,7 @@ def _low_latency_readiness_report(
     )
     websocket_orderbook_count = _websocket_orderbook_snapshot_count(db)
     user_event_count = _live_user_event_count(db)
+    user_trade_applied_count = _live_user_trade_applied_count(db)
     live_reconcile_count = _live_reconcile_count(db)
     live = live_dashboard_stats(db)
     counts = live["counts"]
@@ -1628,6 +1629,7 @@ def _low_latency_readiness_report(
             websocket_orderbook_count,
         ),
         _count_observed_gate("user_channel_events_observed", user_event_count),
+        _count_observed_gate("user_channel_trade_applied", user_trade_applied_count),
         _count_observed_gate("live_reconcile_observed", live_reconcile_count),
         _live_money_state_gate(db, live),
         _kill_switch_clear_gate(live),
@@ -1753,6 +1755,18 @@ def _hko_public_availability_cluster_count(
 
 def _live_user_event_count(db) -> int:
     row = db.execute("select count(*) as count from live_user_events").fetchone()
+    return int(row["count"] or 0)
+
+
+def _live_user_trade_applied_count(db) -> int:
+    row = db.execute(
+        """
+        select count(*) as count
+        from live_user_events
+        where event_type = 'trade'
+          and applied_position_delta = 1
+        """
+    ).fetchone()
     return int(row["count"] or 0)
 
 

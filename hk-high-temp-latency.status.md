@@ -184,6 +184,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live reconcile evidence gate pass: `low-latency-readiness-report --require-evidence` now requires at least one live order with `reconciled_at_utc`, so production readiness cannot pass unless the live-money path has archived REST/order reconciliation evidence after manual or capped live testing. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
 
+2026-05-11 user trade evidence gate pass: `low-latency-readiness-report --require-evidence` now requires a stored user-channel `trade` event with `applied_position_delta = 1`, so order lifecycle messages alone cannot satisfy M4 matched-trade evidence. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
