@@ -1643,6 +1643,9 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
                 messages.append(f"evidence archive file empty: {name}")
             elif not _evidence_report_content_valid(name, text):
                 messages.append(f"evidence archive file malformed: {name}")
+            elif name == "readiness_report.txt":
+                for gate in _non_passing_readiness_gates(text):
+                    messages.append(f"evidence archive readiness gate not passing: {gate}")
     manifest_path = input_dir / "manifest.txt"
     manifest = manifest_path.read_text() if manifest_path.is_file() else ""
     if not manifest.startswith("low latency evidence archive\n"):
@@ -1767,6 +1770,18 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
         pair = name[len("latency_") : -len(".txt")].replace("_to_", " -> ")
         return text.startswith(f"{pair} count=") and " p50=" in text and " p95=" in text
     return False
+
+
+def _non_passing_readiness_gates(text: str) -> list[str]:
+    non_passing: list[str] = []
+    for line in text.splitlines():
+        if not line.startswith("gate ") or "=" not in line:
+            continue
+        gate_name, rest = line[len("gate ") :].split("=", 1)
+        status = rest.split(" ", 1)[0]
+        if status != "pass":
+            non_passing.append(gate_name)
+    return non_passing
 
 
 def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
