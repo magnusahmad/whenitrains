@@ -6,7 +6,9 @@ from whenitrains.operational import (
     LiveSchedulerLock,
     LiveSchedulerLockError,
     evaluate_live_startup_health,
+    freeze_new_entries_for_health_failures,
 )
+from whenitrains.storage import connect, live_setting_enabled, migrate
 
 
 class OperationalReadinessTests(unittest.TestCase):
@@ -68,3 +70,47 @@ class OperationalReadinessTests(unittest.TestCase):
                 "1 local/CLOB drift items",
             ),
         )
+
+    def test_health_failure_freezes_entries_and_records_risk_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            health = evaluate_live_startup_health(
+                market_websocket_connected=False,
+                user_websocket_connected=True,
+                rest_fallback_available=True,
+                credentials_valid=True,
+                balance_allowance_ok=True,
+                stale_submitted_orders=0,
+                local_clob_drift_count=0,
+            )
+
+            frozen = freeze_new_entries_for_health_failures(db, health)
+
+            self.assertTrue(frozen)
+            self.assertTrue(live_setting_enabled(db, "block_new_entries"))
+            risk = db.execute(
+                "select event_type, severity, details_json from risk_events"
+            ).fetchone()
+            self.assertEqual(risk["event_type"], "live_startup_health_failed")
+            self.assertEqual(risk["severity"], "critical")
+            self.assertIn("market websocket disconnected", risk["details_json"])
+
+    def test_healthy_startup_health_does_not_freeze_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            health = evaluate_live_startup_health(
+                market_websocket_connected=True,
+                user_websocket_connected=True,
+                rest_fallback_available=True,
+                credentials_valid=True,
+                balance_allowance_ok=True,
+                stale_submitted_orders=0,
+                local_clob_drift_count=0,
+            )
+
+            frozen = freeze_new_entries_for_health_failures(db, health)
+
+            self.assertFalse(frozen)
+            self.assertFalse(live_setting_enabled(db, "block_new_entries"))
