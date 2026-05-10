@@ -1476,7 +1476,7 @@ class LatencyReportTests(unittest.TestCase):
                     "price": "0.2",
                 },
             )
-            store_live_order(
+            settlement_order_id = store_live_order(
                 db,
                 outcome_id="yes25",
                 side="SETTLEMENT",
@@ -1562,7 +1562,7 @@ class LatencyReportTests(unittest.TestCase):
                 "live_settlement_validation_ok",
                 "info",
                 {
-                    "live_order_id": 1,
+                    "live_order_id": settlement_order_id,
                     "outcome_id": "yes25",
                     "reference": "clob-trade-123/onchain-456",
                 },
@@ -1622,6 +1622,51 @@ class LatencyReportTests(unittest.TestCase):
                 fill_size_usd=25.0,
                 fill_shares=25.0,
                 reason="resolved market settlement",
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-report",
+                        "--require-evidence",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("gate live_settlement_observed=pass count=1", text)
+            self.assertIn("gate live_settlement_validated=missing count=0", text)
+
+    def test_low_latency_readiness_report_fails_when_settlement_validation_is_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="SETTLEMENT",
+                action="SELL",
+                status="filled",
+                event_type="market_resolution",
+                fill_price=1.0,
+                fill_size_usd=25.0,
+                fill_shares=25.0,
+                reason="resolved market settlement",
+            )
+            store_risk_event(
+                db,
+                "live_settlement_validation_ok",
+                "info",
+                {
+                    "live_order_id": 999,
+                    "outcome_id": "yes25",
+                    "reference": "stale-validation",
+                },
             )
             db.close()
             stdout = StringIO()

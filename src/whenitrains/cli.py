@@ -2616,9 +2616,17 @@ def _is_filled_live_settlement_row(row) -> bool:
 def _live_settlement_validation_count(db) -> int:
     row = db.execute(
         """
-        select count(*) as count
+        select count(distinct live_orders.id) as count
         from risk_events
-        where event_type = 'live_settlement_validation_ok'
+        join live_orders
+          on live_orders.id = cast(json_extract(risk_events.details_json, '$.live_order_id') as integer)
+        where risk_events.event_type = 'live_settlement_validation_ok'
+          and live_orders.status = 'filled'
+          and (
+            live_orders.side = 'SETTLEMENT'
+            or live_orders.event_type = 'market_resolution'
+            or live_orders.reason = 'resolved market settlement'
+          )
         """
     ).fetchone()
     return int(row["count"] or 0)
