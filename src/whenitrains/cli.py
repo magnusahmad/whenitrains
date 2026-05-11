@@ -2636,10 +2636,8 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
                 "fetch_started_at_utc is not null and response_elapsed_ms is not null",
             ),
             "orderbook_snapshots": _read_only_count(db, "orderbook_snapshots"),
-            "websocket_orderbook_snapshots": _read_only_count_where(
-                db,
-                "orderbook_snapshots",
-                "depth_json like '%polymarket_market_websocket%'",
+            "websocket_orderbook_snapshots": _usable_websocket_orderbook_snapshot_count(
+                db
             ),
             "paper_decisions_with_orderbook_age": _read_only_count_where(
                 db,
@@ -2809,6 +2807,27 @@ def _read_only_latency_pair_count(
         )
     except sqlite3.OperationalError:
         return 0
+
+
+def _usable_websocket_orderbook_snapshot_count(db: sqlite3.Connection) -> int:
+    if not _read_only_table_exists(db, "orderbook_snapshots"):
+        return 0
+    try:
+        row = db.execute(
+            """
+            select count(*) as count
+            from orderbook_snapshots
+            where depth_json like '%"source": "polymarket_market_websocket"%'
+              and best_bid is not null
+              and best_ask is not null
+              and mid is not null
+              and json_array_length(json_extract(depth_json, '$.bids')) > 0
+              and json_array_length(json_extract(depth_json, '$.asks')) > 0
+            """
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int(row["count"] or 0)
 
 
 def _read_only_table_exists(db: sqlite3.Connection, table: str) -> bool:
@@ -3563,19 +3582,7 @@ def _manual_live_order_count(db, *, action: str) -> int:
 
 
 def _websocket_orderbook_snapshot_count(db) -> int:
-    row = db.execute(
-        """
-        select count(*) as count
-        from orderbook_snapshots
-        where depth_json like '%"source": "polymarket_market_websocket"%'
-          and best_bid is not null
-          and best_ask is not null
-          and mid is not null
-          and json_array_length(json_extract(depth_json, '$.bids')) > 0
-          and json_array_length(json_extract(depth_json, '$.asks')) > 0
-        """
-    ).fetchone()
-    return int(row["count"] or 0)
+    return _usable_websocket_orderbook_snapshot_count(db)
 
 
 def _latency_threshold_gate(

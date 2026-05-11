@@ -18,7 +18,7 @@ Local implementation is substantially complete and covered by targeted automated
 
 The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT after the live concurrency checklist update. The sandboxed request timed out after 8 seconds, and the approved LAN retry failed immediately with connection refused.
 
-`low-latency-readiness-db-audit` inspected `data/whenitrains.sqlite3` read-only on 2026-05-11 HKT and was rechecked after the roadmap endpoint status refresh. It found 22,372 historical HKO raw snapshots and 637,810 orderbook snapshots, but no production readiness evidence yet: zero required latency-stage pairs, zero timed HKO `raw_snapshots` rows with `fetch_started_at_utc` and `response_elapsed_ms`, zero WebSocket orderbook snapshots, zero paper decisions carrying `orderbook_state_age_seconds`, zero manual live buy/sell orders, zero reconciled or settlement live orders, zero live user events or applied user trades, and zero live network/auth/scheduler/kill-switch/drift/settlement-validation risk-event records.
+`low-latency-readiness-db-audit` inspected `data/whenitrains.sqlite3` read-only on 2026-05-11 HKT and was rechecked after the roadmap endpoint status refresh. It found 22,372 historical HKO raw snapshots and 637,810 orderbook snapshots, but no production readiness evidence yet: zero required latency-stage pairs, zero timed HKO `raw_snapshots` rows with `fetch_started_at_utc` and `response_elapsed_ms`, zero usable WebSocket orderbook snapshots with bid/ask/mid and non-empty depth, zero paper decisions carrying `orderbook_state_age_seconds`, zero manual live buy/sell orders, zero reconciled or settlement live orders, zero live user events or applied user trades, and zero live network/auth/scheduler/kill-switch/drift/settlement-validation risk-event records.
 
 ## Prompt-To-Artifact Checklist
 
@@ -55,7 +55,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - Live tick receives a scheduler-owned cache and live buys reject missing/stale cache books when a cache is configured.
 - `live-network-smoke --live --require-connected` starts and stops the scheduler-owned market/user WebSocket runtime without running trading decisions, reports per-client connection attempts, connected-once state, applied messages, and last error, and exits nonzero if fewer than the market/user clients are reported or any client never connected.
 - `live-network-smoke --live --require-connected` records `live_network_smoke_ok`/`live_network_smoke_failed` evidence, and `low-latency-readiness-report --require-evidence` requires the latest network smoke event to be OK with both required WebSocket clients running and connected at least once.
-- `low-latency-readiness-report --require-evidence` requires at least one persisted orderbook snapshot with `polymarket_market_websocket` metadata, usable bid/ask/mid prices, and non-empty bid/ask depth, so the production report cannot pass on connection liveness or placeholder snapshots alone.
+- `low-latency-readiness-report --require-evidence` and `low-latency-readiness-db-audit` require at least one persisted orderbook snapshot with `polymarket_market_websocket` metadata, usable bid/ask/mid prices, and non-empty bid/ask depth, so production evidence cannot pass on connection liveness or placeholder snapshots alone.
 - Evidence: `src/whenitrains/orderbook_cache.py`, `src/whenitrains/market_websocket.py`, `src/whenitrains/live_runtime.py`, `src/whenitrains/runner.py`.
 - Tests: `tests.test_orderbook_cache`, `tests.test_market_websocket`, `tests.test_recorded_fixtures`, focused live runner tests.
 - Missing: real Polymarket WebSocket smoke and observed live book age at submission.
@@ -131,7 +131,7 @@ PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/b
 git diff --check
 ```
 
-All passed. The combined roadmap verification ran 368 tests under tracemalloc after switching generated live readiness commands to `.venv/bin/python`. The broader venv discovery command also passed with 448 tests while escalating `ResourceWarning` to an error, confirming the broader dashboard, experiment, hourly, paper, and user WebSocket fixture connections are closed cleanly. `git diff --check` passed.
+All passed. The combined roadmap verification ran 368 tests under tracemalloc after switching generated live readiness commands to `.venv/bin/python`. The broader venv discovery command also passed with 449 tests while escalating `ResourceWarning` to an error, confirming the broader dashboard, experiment, hourly, paper, and user WebSocket fixture connections are closed cleanly and the DB-audit usable WebSocket book regression is covered. `git diff --check` passed.
 
 ## Next Steps
 

@@ -722,6 +722,10 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 readiness audit warning-clean refresh: updated `docs/low-latency-readiness-audit.md` so the latest verification section records the broader 448-test venv discovery pass with `ResourceWarning` escalated instead of the earlier warning-emitting run.
 
+2026-05-11 DB-audit WebSocket book evidence tightening: red/green added a regression proving `low-latency-readiness-db-audit` does not count placeholder WebSocket orderbook snapshots that only contain `polymarket_market_websocket` metadata. The DB audit now shares the readiness report's usable-book criteria: source metadata, bid, ask, mid, and non-empty bid/ask depth. Verified `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py'` passing 33 tests and `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_latency_report.py'` passing 106 tests.
+
+2026-05-11 post-DB-audit-tightening full venv verification: `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passed with 449 tests.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

@@ -572,6 +572,55 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("live_settlement_validation_records", text)
             self.assertIn("readiness_db_audit=missing_evidence", text)
 
+    def test_low_latency_readiness_db_audit_requires_usable_websocket_book(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            db.execute(
+                """
+                insert into orderbook_snapshots
+                (outcome_id, fetched_at_utc, best_bid, best_ask, mid, depth_json)
+                values (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "placeholder",
+                    "2026-05-11T00:00:00+00:00",
+                    None,
+                    None,
+                    None,
+                    '{"source": "polymarket_market_websocket"}',
+                ),
+            )
+            db.commit()
+            store_orderbook(
+                db,
+                "usable",
+                OrderBook(
+                    token_id="usable",
+                    bids=[(0.4, 10.0)],
+                    asks=[(0.5, 12.0)],
+                    tick_size=0.01,
+                    min_order_size=5.0,
+                ),
+                metadata={"source": "polymarket_market_websocket"},
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-db-audit",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("websocket_orderbook_snapshots=1", text)
+
     def test_low_latency_readiness_db_audit_does_not_create_missing_database(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "missing.db"
