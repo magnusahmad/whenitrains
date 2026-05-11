@@ -658,6 +658,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-readiness-cleanup live log endpoint retry: sandboxed and approved LAN `curl -L --max-time 8 http://192.168.1.23:8765/` both timed out after 8 seconds. Live/account evidence capture remains blocked on endpoint availability.
 
+2026-05-11 post-cleanup read-only production DB audit: reran `PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 low-latency-readiness-db-audit`. It exited `2` with the same production evidence gap: 22,372 HKO raw snapshots and 637,810 orderbook snapshots exist, but all required latency pairs, timed HKO raw rows, WebSocket orderbook snapshots, orderbook-age decisions, live orders/user events, and live smoke/verification records remain zero.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
