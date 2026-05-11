@@ -714,6 +714,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 README venv setup pass: added explicit README setup commands for creating `.venv` and installing the package before the README's `.venv/bin/python` command examples.
 
+2026-05-11 full venv discovery verification: `PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passed with 448 tests. Python 3.14 emitted existing unclosed-SQLite `ResourceWarning`s from broader dashboard/experiment/hourly/paper tests outside the low-latency roadmap subset, but the suite exited `0`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
