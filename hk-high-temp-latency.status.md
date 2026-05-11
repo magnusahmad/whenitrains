@@ -728,6 +728,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-DB-audit-tightening live log endpoint retry: sandboxed `curl -L --max-time 8 http://192.168.1.23:8765/` timed out after 8 seconds; the approved LAN retry failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 1 ms: Couldn't connect to server`. Live network smoke, live-account evidence, and production latency capture remain blocked on endpoint availability.
 
+2026-05-11 post-DB-audit-tightening production DB audit: reran `PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 low-latency-readiness-db-audit`. It exited `2` with 22,372 HKO raw snapshots and 637,810 orderbook snapshots, but zero latency trace rows, zero latency stage pairs, zero timed HKO rows, zero usable WebSocket orderbook snapshots, zero orderbook-age decisions, zero live orders/user events, and zero live smoke/auth/scheduler/kill-switch/drift/settlement-validation records.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
