@@ -814,6 +814,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 copied-log checklist full verification: reran `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` after the checklist renderer change; full discovery passed 467 tests.
 
+2026-05-11 reachable-log checklist wording pass: tightened the `--live-log-url` checklist heading to say the scheduler logs must be published on a reachable live host. Verified with focused checklist tests, a URL-mode manual checklist render, and `test_cli.py` passing 37 tests.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

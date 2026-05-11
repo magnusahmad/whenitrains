@@ -2740,7 +2740,7 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
 
     live_log_lines = (
         [
-            "0. publish live scheduler logs before evidence capture",
+            "0. publish live scheduler logs on a reachable live host",
             "mkdir -p ~/whenitrains-live-logs",
             "cd ~/whenitrains-live-logs",
             "python3 -m http.server 8765 --bind 0.0.0.0",

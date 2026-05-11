@@ -702,7 +702,7 @@ class CliDiscoveryTests(unittest.TestCase):
 
         text = stdout.getvalue()
         self.assertEqual(exit_code, 0)
-        self.assertIn("0. publish live scheduler logs before evidence capture", text)
+        self.assertIn("0. publish live scheduler logs on a reachable live host", text)
         self.assertIn("mkdir -p ~/whenitrains-live-logs", text)
         self.assertIn("python3 -m http.server 8765 --bind 0.0.0.0", text)
         self.assertIn("curl -L http://192.168.1.50:8765/", text)
