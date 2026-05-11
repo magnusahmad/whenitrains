@@ -718,6 +718,10 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 readiness audit venv discovery refresh: updated `docs/low-latency-readiness-audit.md` so the latest verification section records both the 368-test roadmap subset and the broader 448-test venv discovery pass with its warning scope.
 
+2026-05-11 broad venv SQLite lifecycle cleanup pass: closed SQLite handles in broader dashboard, experiment, hourly, ladder metadata, paper, and user WebSocket tests so full discovery is clean under Python 3.14 warning escalation. Verified `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_user_websocket.py'` passing 3 tests and `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passing 448 tests.
+
+2026-05-11 readiness audit warning-clean refresh: updated `docs/low-latency-readiness-audit.md` so the latest verification section records the broader 448-test venv discovery pass with `ResourceWarning` escalated instead of the earlier warning-emitting run.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

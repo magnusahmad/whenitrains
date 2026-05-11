@@ -127,10 +127,11 @@ Combined verification after the latest local changes:
 
 ```bash
 PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.test_live tests.test_cli tests.test_low_latency tests.test_storage tests.test_markets tests.test_orderbook_cache tests.test_recorded_fixtures tests.test_latency_report tests.test_scheduler tests.test_operational_readiness tests.test_alerting tests.test_live_user_stream tests.test_user_websocket tests.test_execution_scheduler tests.test_candidate_planner tests.test_ladder_metadata
+PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
 git diff --check
 ```
 
-All passed. The combined roadmap verification ran 368 tests under tracemalloc after switching generated live readiness commands to `.venv/bin/python`, and `git diff --check` passed. The broader venv discovery command, `PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests`, also passed with 448 tests; Python 3.14 emitted existing unclosed-SQLite `ResourceWarning`s from broader dashboard/experiment/hourly/paper tests outside this roadmap subset.
+All passed. The combined roadmap verification ran 368 tests under tracemalloc after switching generated live readiness commands to `.venv/bin/python`. The broader venv discovery command also passed with 448 tests while escalating `ResourceWarning` to an error, confirming the broader dashboard, experiment, hourly, paper, and user WebSocket fixture connections are closed cleanly. `git diff --check` passed.
 
 ## Next Steps
 

@@ -73,6 +73,7 @@ class PaperDbTests(unittest.TestCase):
     def test_paper_buy_and_sell_persist_position_and_pnl(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
+            self.addCleanup(db.close)
             migrate(db)
             buy = execute_paper_buy(
                 db,
@@ -101,6 +102,7 @@ class PaperDbTests(unittest.TestCase):
     def test_calculate_exit_sells_after_max_hold_time(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
+            self.addCleanup(db.close)
             migrate(db)
             execute_paper_buy(
                 db,

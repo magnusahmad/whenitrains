@@ -19,6 +19,7 @@ class LadderMetadataTests(unittest.TestCase):
     def test_builds_token_side_budget_and_orderbook_metadata_for_active_ladder(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
+            self.addCleanup(db.close)
             migrate(db)
             store_polymarket_event(
                 db,

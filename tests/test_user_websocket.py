@@ -39,68 +39,71 @@ class UserWebSocketTests(unittest.IsolatedAsyncioTestCase):
     async def test_subscribes_and_applies_user_events(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
-            migrate(db)
-            store_live_order(
-                db,
-                outcome_id="yes25",
-                side="BUY_YES",
-                action="BUY",
-                status="submitted",
-                clob_order_id="order-1",
-                requested_size_usd=5.0,
-                limit_price=0.40,
-            )
-            connection = _FakeConnection(
-                [
-                    json.dumps(
+            try:
+                migrate(db)
+                store_live_order(
+                    db,
+                    outcome_id="yes25",
+                    side="BUY_YES",
+                    action="BUY",
+                    status="submitted",
+                    clob_order_id="order-1",
+                    requested_size_usd=5.0,
+                    limit_price=0.40,
+                )
+                connection = _FakeConnection(
+                    [
+                        json.dumps(
+                            {
+                                "event_type": "trade",
+                                "id": "trade-1",
+                                "order_id": "order-1",
+                                "asset_id": "yes25",
+                                "side": "BUY",
+                                "status": "MATCHED",
+                                "size": "12.5",
+                                "price": "0.40",
+                            }
+                        )
+                    ]
+                )
+                client = UserWebSocketClient(
+                    db=db,
+                    auth=UserWebSocketAuth(
+                        api_key="key",
+                        api_secret="secret",
+                        api_passphrase="passphrase",
+                    ),
+                    market_ids_fn=lambda: ["condition-1"],
+                    connect_factory=lambda url: connection,
+                )
+
+                applied = await client.run_once()
+
+                self.assertEqual(applied, 1)
+                self.assertEqual(client.status.connection_attempts, 1)
+                self.assertTrue(client.status.connected_once)
+                self.assertEqual(client.status.messages_applied, 1)
+                self.assertIsNone(client.status.last_error)
+                self.assertEqual(
+                    connection.sent,
+                    [
                         {
-                            "event_type": "trade",
-                            "id": "trade-1",
-                            "order_id": "order-1",
-                            "asset_id": "yes25",
-                            "side": "BUY",
-                            "status": "MATCHED",
-                            "size": "12.5",
-                            "price": "0.40",
+                            "auth": {
+                                "apiKey": "key",
+                                "secret": "secret",
+                                "passphrase": "passphrase",
+                            },
+                            "markets": ["condition-1"],
+                            "type": "user",
                         }
-                    )
-                ]
-            )
-            client = UserWebSocketClient(
-                db=db,
-                auth=UserWebSocketAuth(
-                    api_key="key",
-                    api_secret="secret",
-                    api_passphrase="passphrase",
-                ),
-                market_ids_fn=lambda: ["condition-1"],
-                connect_factory=lambda url: connection,
-            )
-
-            applied = await client.run_once()
-
-            self.assertEqual(applied, 1)
-            self.assertEqual(client.status.connection_attempts, 1)
-            self.assertTrue(client.status.connected_once)
-            self.assertEqual(client.status.messages_applied, 1)
-            self.assertIsNone(client.status.last_error)
-            self.assertEqual(
-                connection.sent,
-                [
-                    {
-                        "auth": {
-                            "apiKey": "key",
-                            "secret": "secret",
-                            "passphrase": "passphrase",
-                        },
-                        "markets": ["condition-1"],
-                        "type": "user",
-                    }
-                ],
-            )
-            pos = get_live_position(db, "yes25")
-            self.assertIsNotNone(pos)
-            self.assertAlmostEqual(pos["net_shares"], 12.5)
+                    ],
+                )
+                pos = get_live_position(db, "yes25")
+                self.assertIsNotNone(pos)
+                self.assertAlmostEqual(pos["net_shares"], 12.5)
+            finally:
+                db.close()
 
     def test_default_url_is_polymarket_user_channel(self):
         self.assertEqual(

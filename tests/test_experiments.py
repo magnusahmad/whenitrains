@@ -26,6 +26,7 @@ class ExperimentHarnessTests(unittest.TestCase):
     def test_migration_creates_experiment_tables(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
+            self.addCleanup(db.close)
             migrate(db)
 
             tables = {
@@ -44,6 +45,7 @@ class ExperimentHarnessTests(unittest.TestCase):
     def test_experiment_tick_writes_only_experiment_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
+            self.addCleanup(db.close)
             migrate(db)
             _seed_forecast_market_and_book(db, forecast=26, ask=0.25)
             config = ExperimentConfig()
@@ -70,6 +72,7 @@ class ExperimentHarnessTests(unittest.TestCase):
     def test_experiment_tick_dedupes_same_signal(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
+            self.addCleanup(db.close)
             migrate(db)
             _seed_forecast_market_and_book(db, forecast=26, ask=0.25)
             config = ExperimentConfig()
@@ -109,6 +112,7 @@ class ExperimentHarnessTests(unittest.TestCase):
             self.assertEqual(result.open_position_count, 1)
             self.assertGreater(result.cost_basis, 0)
             replay_db = connect(replay)
+            self.addCleanup(replay_db.close)
             self.assertEqual(
                 replay_db.execute("select count(*) from paper_orders").fetchone()[0], 0
             )
@@ -209,4 +213,3 @@ def _seed_forecast_market_and_book(db, forecast: float, ask: float) -> None:
 
 if __name__ == "__main__":
     unittest.main()
-

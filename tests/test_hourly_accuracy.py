@@ -21,6 +21,7 @@ class HourlyAccuracyTests(unittest.TestCase):
     def test_matches_ocf_hourly_forecast_to_current_temperature_by_lead_hour(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
+            self.addCleanup(db.close)
             migrate(db)
             ocf_snapshot = store_raw_snapshot(db, "hko", "ocf", "{}")
             store_ocf_forecast_samples(

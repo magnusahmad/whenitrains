@@ -51,7 +51,19 @@ from whenitrains.storage import (
 )
 
 
+_OPEN_DASHBOARD_DBS = []
+
+
 class DashboardServerTests(unittest.TestCase):
+    def setUp(self):
+        _OPEN_DASHBOARD_DBS.clear()
+        self.addCleanup(self._close_dashboard_dbs)
+
+    def _close_dashboard_dbs(self):
+        for db in reversed(_OPEN_DASHBOARD_DBS):
+            db.close()
+        _OPEN_DASHBOARD_DBS.clear()
+
     def test_historicals_payload_measures_ocf_accuracy_against_final_max_time(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_dashboard_db(Path(tmp) / "test.db")
@@ -1577,6 +1589,7 @@ class DashboardServerTests(unittest.TestCase):
 
 def _seed_dashboard_db(path: Path):
     db = connect(path)
+    _OPEN_DASHBOARD_DBS.append(db)
     migrate(db)
     store_polymarket_event(
         db,
