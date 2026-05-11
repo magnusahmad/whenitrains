@@ -1,6 +1,6 @@
 # HK High Temp Latency Status
 
-Last updated: 2026-05-10 HKT
+Last updated: 2026-05-11 HKT
 
 ## Current State
 
@@ -37,6 +37,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 2026-05-10 live audit finding: the 15:50 HKT AWS actual max transition `25.6 -> 26.1` was first stored locally at 15:57:52 HKT, while the 26°C YES ask had already moved from about `0.14` at 15:46:52 to `0.95` at 15:57:48. The scheduler did observe the actual max change, but prior actual-cross logic did not emit exact-bucket YES candidates and the fallback forecast-value path skipped `26°C YES` because later hourly forecast values were below the bucket guard. Exact-bucket actual-cross fast-lane logic now includes both the crossed exact-bucket YES token and any NO token invalidated by the same official actual move, with a `0.75` YES cap. The surprise basis uses the preceding hourly forecast as of the actual observation, while the later-hours-lower confirmation uses the newest hourly forecast available at decision time.
 
 Past-date unresolved local positions remain a documented residual risk. The real market should eventually resolve, but local paper/live state still needs a reconcile/settlement path to reflect that resolution in risk and dashboard state if the scheduler missed the same-day exit window.
+
+2026-05-11 live audit finding: repeated `sell missed 29°C YES: no sellable token balance` messages are mostly dust after live sells left only `0.003` local shares, below the exchange submission precision. Separately, the May 11 lowest-temperature `22°C YES` and `23°C NO` buys were real matched CLOB responses, but local reconciliation left them as `unknown_fill` because the later order lookup returned uppercase `MATCHED` and the fill parser did not normalize that status or reuse `makingAmount` / `takingAmount`. Live reconciliation now normalizes matched CLOB payloads with amount fields so a future reconcile pass can recover those positions from the order ledger.
 
 ## API Discovery Findings
 
@@ -146,6 +148,21 @@ Current green run after adding the paper runner, dashboard, missed-decision logg
 
 ```text
 Ran 151 tests in 0.690s
+OK
+```
+
+Uppercase matched live reconcile red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_live.LiveTests.test_reconcile_uppercase_matched_order_amounts_apply_position
+```
+
+Red result: an order lookup payload with `status=MATCHED`, `makingAmount`, and `takingAmount` stayed `unknown_fill` with zero shares.
+
+Green result after normalizing matched CLOB reconciliation payloads with amount fields:
+
+```text
+Ran 1 test in 0.022s
 OK
 ```
 

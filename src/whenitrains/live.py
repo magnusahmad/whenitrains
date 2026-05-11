@@ -1142,6 +1142,11 @@ def _reconcile_payload(
             return {"order_id": order_id, "token_id": token_id, **fallback}
     if payload is None:
         return {"order_id": order_id, "token_id": token_id, "status": "unknown"}
+    response_fill = _response_fill_payload(payload, action)
+    if response_fill is not None and (
+        "fill_shares" in response_fill or "fill_size_usd" in response_fill
+    ):
+        return {"order_id": order_id, "token_id": token_id, **payload, **response_fill}
     return payload
 
 
@@ -1283,7 +1288,8 @@ def _fill_values(
     *,
     allow_default_fill: bool = True,
 ) -> tuple[float | None, float, float]:
-    filled = payload.get("filled") or payload.get("status") in ("filled", "matched")
+    status = str(payload.get("status") or "").lower()
+    filled = payload.get("filled") or status in ("filled", "matched")
     shares = _optional_float(payload, "fill_shares", "filled_shares", "size_matched", "matched_size")
     size_usd = _optional_float(payload, "fill_size_usd", "filled_amount", "amount_matched", "matched_amount")
     price = _optional_float(payload, "fill_price", "avg_price", "price")

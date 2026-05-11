@@ -406,6 +406,54 @@ class LiveTests(unittest.TestCase):
             self.assertIsNotNone(pos)
             self.assertAlmostEqual(pos["net_shares"], 12.5)
 
+    def test_reconcile_uppercase_matched_order_amounts_apply_position(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            order_id = db.execute(
+                """
+                insert into live_orders (
+                    created_at_utc, submitted_at_utc, outcome_id, label, side, action,
+                    clob_order_id, order_type, status, requested_size_usd, limit_price,
+                    reason, raw_request_json, raw_response_json, raw_reconcile_json
+                )
+                values (
+                    '2026-05-08T01:00:00+00:00', '2026-05-08T01:00:00+00:00',
+                    'yes25', '25C', 'BUY_YES', 'BUY', 'buy-1', 'FAK', 'unknown_fill',
+                    5.0, 0.40, 'late live buy', '{}', ?, '{}'
+                )
+                """,
+                (
+                    json.dumps(
+                        {
+                            "orderID": "buy-1",
+                            "status": "matched",
+                            "makingAmount": "5000000",
+                            "takingAmount": "12500000",
+                        }
+                    ),
+                ),
+            ).lastrowid
+            db.commit()
+            row = db.execute("select * from live_orders where id = ?", (order_id,)).fetchone()
+            client = FakeClobClient(
+                reconcile_payload={
+                    "id": "buy-1",
+                    "status": "MATCHED",
+                    "makingAmount": "5000000",
+                    "takingAmount": "12500000",
+                }
+            )
+
+            result = reconcile_submitted_live_order(db, client, row)
+
+            self.assertEqual(result.status, "filled")
+            self.assertAlmostEqual(result.shares, 12.5)
+            pos = get_live_position(db, "yes25")
+            self.assertIsNotNone(pos)
+            self.assertAlmostEqual(pos["net_shares"], 12.5)
+            self.assertAlmostEqual(pos["avg_price"], 0.4)
+
     def test_reconcile_unknown_fill_applies_trade_history_fill_to_position(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

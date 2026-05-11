@@ -231,6 +231,16 @@ After every live submit:
 - Update live positions only from actual fills.
 - Record unmatched or ambiguous responses as risk events.
 
+The order-status and trade-history payloads are not perfectly uniform across
+CLOB client paths. Reconciliation must normalize status casing before deciding
+whether an order filled, and it must parse exact amount fields from any matched
+payload that provides them. In particular, an order lookup may return
+`status=MATCHED` with `makingAmount` and `takingAmount`; for buys, `takingAmount`
+is filled outcome shares and `makingAmount` is USDC cost, while sells invert
+those meanings. If a matched payload has no exact amount fields, keep it as
+`unknown_fill` until trade history or token-balance reconciliation proves the
+fill, because defaulting from requested size can create phantom positions.
+
 ## 6. Persistence
 
 Do not overload paper tables with real orders. Add live-specific tables so paper backtests and real-money audit trails cannot be confused.
@@ -421,7 +431,7 @@ Live mode must not share paper positions for duplicate-position checks. It must 
 - Live buy updates live positions only from actual fills.
 - Live sell rejects when local/reconciled position is zero.
 - Live sell caps shares to confirmed held amount.
-- Live reconcile handles partial fill, full fill, canceled, rejected, and missing order IDs.
+- Live reconcile handles partial fill, full fill, canceled, rejected, missing order IDs, and uppercase matched CLOB order lookups with exact amount fields.
 - Kill switch blocks entries.
 - Critical risk event blocks live scheduler startup.
 

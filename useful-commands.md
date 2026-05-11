@@ -485,11 +485,19 @@ PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-sel
 ```
 
 Reconcile submitted live orders and rebuild local live positions from filled
-orders:
+orders. This mutates `live_orders` and `live_positions`, so create the standard
+SQLite backup first when running against `data/whenitrains.sqlite3`:
 
 ```bash
+PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db
 PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-reconcile --live
 ```
+
+`live-reconcile` is the recovery path for delayed or ambiguous CLOB fills. It
+normalizes matched order statuses, including uppercase `MATCHED`, and uses exact
+`makingAmount` / `takingAmount` fields when present. Matched orders without
+exact fill amounts stay `unknown_fill` until trade history or token-balance
+evidence is available.
 
 Cancel one live order:
 
