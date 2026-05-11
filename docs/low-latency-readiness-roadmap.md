@@ -25,7 +25,7 @@ Remaining readiness gaps require live-environment evidence rather than more loca
 - Real-account kill-switch and settlement validation.
 - Production p50/p95/p99 evidence for DB commit to decision, decision to submit, submit to fill/reject, and local-vs-CLOB drift.
 
-The live-log endpoint `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT after tightening evidence archive verification and failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765`, so live evidence remains blocked on endpoint availability.
+The live-log endpoint `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT after tightening evidence archive verification. The sandboxed request timed out after 8 seconds, and the approved LAN retry failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765`, so live evidence remains blocked on endpoint availability.
 
 ## Research Findings
 
