@@ -782,6 +782,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 disposable current-evidence archive smoke: copied the latest `.49` scheduler log into `/private/tmp/whenitrains-current-evidence/live-scheduler.log` and ran `low-latency-archive-evidence --require-evidence` against `data/whenitrains.sqlite3`; the command wrote all archive files including the scheduler log and exited `2` with the expected missing readiness gates. `low-latency-verify-evidence-archive --input-dir /private/tmp/whenitrains-current-evidence` also exited `2`, rejecting zero-sample latency reports, missing HKO timed-response evidence, failed DB audit, non-passing readiness gates, and the old scheduler log that lacks successful smoke/concurrency evidence.
 
+2026-05-11 DB-audit smoke-latest consistency verifier pass: tightened `low-latency-verify-evidence-archive` so read-only DB audit artifacts cannot claim positive live smoke record counts while reporting the corresponding latest status as `missing`, or report zero smoke records with a non-missing latest status. Verified red/green with the focused inconsistent DB-audit archive test, `test_latency_report.py` passing 112 tests, focused DB-audit CLI tests passing 5 tests, and full discovery passing 458 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

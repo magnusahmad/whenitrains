@@ -2082,6 +2082,17 @@ def _readiness_db_audit_report_content_valid(text: str) -> bool:
         if count < 0:
             return False
         counts[key] = count
+    smoke_latest_pairs = {
+        "live_network_smoke_records": "live_network_smoke_latest",
+        "live_auth_smoke_records": "live_auth_smoke_latest",
+        "live_scheduler_smoke_records": "live_scheduler_smoke_latest",
+    }
+    for count_key, latest_key in smoke_latest_pairs.items():
+        latest = values[latest_key]
+        if counts[count_key] <= 0 and latest != "missing":
+            return False
+        if counts[count_key] > 0 and latest == "missing":
+            return False
     missing_evidence = values.get("missing_evidence")
     if status == "evidence_present":
         return missing_evidence is None and all(
