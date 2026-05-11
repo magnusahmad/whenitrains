@@ -1910,6 +1910,12 @@ def _readiness_db_audit_report_content_valid(text: str) -> bool:
         "live_clob_drift_scan_records",
         "live_settlement_validation_records",
     ]
+    required_evidence_keys = [
+        key
+        for key in required_count_keys
+        if key not in {"hko_raw_snapshots", "orderbook_snapshots"}
+    ]
+    counts: dict[str, int] = {}
     for key in required_count_keys:
         value = values.get(key)
         if value is None:
@@ -1920,13 +1926,16 @@ def _readiness_db_audit_report_content_valid(text: str) -> bool:
             return False
         if count < 0:
             return False
+        counts[key] = count
     missing_evidence = values.get("missing_evidence")
     if status == "evidence_present":
-        return missing_evidence is None
+        return missing_evidence is None and all(
+            counts[key] > 0 for key in required_evidence_keys
+        )
     if not missing_evidence:
         return False
     observed_missing = missing_evidence.split(",")
-    allowed_missing = {key for key in required_count_keys if key != "hko_raw_snapshots"}
+    allowed_missing = set(required_evidence_keys)
     return all(key in allowed_missing for key in observed_missing)
 
 
