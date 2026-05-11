@@ -716,6 +716,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 full venv discovery verification: `PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passed with 448 tests. Python 3.14 emitted existing unclosed-SQLite `ResourceWarning`s from broader dashboard/experiment/hourly/paper tests outside the low-latency roadmap subset, but the suite exited `0`.
 
+2026-05-11 readiness audit venv discovery refresh: updated `docs/low-latency-readiness-audit.md` so the latest verification section records both the 368-test roadmap subset and the broader 448-test venv discovery pass with its warning scope.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

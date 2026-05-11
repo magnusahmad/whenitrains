@@ -130,7 +130,7 @@ PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.t
 git diff --check
 ```
 
-All passed. The combined roadmap verification ran 368 tests under tracemalloc after switching generated live readiness commands to `.venv/bin/python`, and `git diff --check` passed.
+All passed. The combined roadmap verification ran 368 tests under tracemalloc after switching generated live readiness commands to `.venv/bin/python`, and `git diff --check` passed. The broader venv discovery command, `PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests`, also passed with 448 tests; Python 3.14 emitted existing unclosed-SQLite `ResourceWarning`s from broader dashboard/experiment/hourly/paper tests outside this roadmap subset.
 
 ## Next Steps
 
