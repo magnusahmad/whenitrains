@@ -581,7 +581,11 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertIn("python3 -m http.server 8765 --bind 0.0.0.0", text)
         self.assertIn("curl -L http://192.168.1.49:8765/", text)
         self.assertIn("0b. confirm live config env is loaded before smoke commands", text)
-        self.assertIn(command_prefix + "live-env-exports", text)
+        self.assertIn(
+            f'eval "$({command_prefix}live-env-exports --env-file .env)"',
+            text,
+        )
+        self.assertIn(command_prefix + "live-env-exports --env-file .env", text)
         self.assertIn("required env: WHENITRAINS_TRADING_MODE=live", text)
         self.assertIn("POLYMARKET_API_SECRET", text)
         self.assertIn("1. live-network-smoke --live --require-connected", text)

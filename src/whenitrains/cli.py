@@ -2680,7 +2680,8 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         "python3 -m http.server 8765 --bind 0.0.0.0",
         "curl -L http://192.168.1.49:8765/",
         "0b. confirm live config env is loaded before smoke commands",
-        command("live-env-exports"),
+        f'eval "$({command("live-env-exports", "--env-file", ".env")})"',
+        command("live-env-exports", "--env-file", ".env"),
         (
             "required env: WHENITRAINS_TRADING_MODE=live "
             "POLYMARKET_SIGNATURE_TYPE POLYMARKET_FUNDER_ADDRESS "
