@@ -130,7 +130,7 @@ PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.t
 git diff --check
 ```
 
-All passed. The combined roadmap verification ran 367 tests under tracemalloc after the compact fast-event latency log detail update, and `git diff --check` passed.
+All passed. The combined roadmap verification ran 368 tests under tracemalloc after separating v2 live order create/sign from explicit FAK posting, and `git diff --check` passed.
 
 ## Next Steps
 
