@@ -350,6 +350,36 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("sha256 live-scheduler.log=", manifest)
             self.assertIn(str(output_dir / "live-scheduler.log"), stdout.getvalue())
 
+    def test_low_latency_archive_evidence_records_live_log_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            output_dir = Path(tmp) / "evidence"
+            output_dir.mkdir()
+            (output_dir / "live-scheduler.log").write_text(
+                _archive_report_fixture_content("live-scheduler.log")
+            )
+            db = connect(db_path)
+            migrate(db)
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-archive-evidence",
+                        "--output-dir",
+                        str(output_dir),
+                        "--live-log-url",
+                        "http://192.168.1.50:8765/",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            manifest = (output_dir / "manifest.txt").read_text()
+            self.assertIn("live_log_url=http://192.168.1.50:8765/", manifest)
+
     def test_low_latency_archive_evidence_require_evidence_returns_missing_status_after_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

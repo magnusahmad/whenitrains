@@ -212,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     archive_evidence.add_argument("--hko-endpoint-contains", default="latestReadings")
     archive_evidence.add_argument("--hko-limit", type=int, default=200)
     archive_evidence.add_argument("--require-evidence", action="store_true")
+    archive_evidence.add_argument("--live-log-url")
     verify_evidence = sub.add_parser("low-latency-verify-evidence-archive")
     verify_evidence.add_argument("--input-dir", required=True)
     accuracy = sub.add_parser("research-forecast-accuracy")
@@ -400,6 +401,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_dir=output_dir,
                 hko_endpoint_contains=args.hko_endpoint_contains,
                 hko_limit=args.hko_limit,
+                live_log_url=args.live_log_url,
             )
             print(f"archived low latency evidence to {output_dir}")
             for path in report_paths:
@@ -1697,6 +1699,7 @@ def _archive_low_latency_evidence(
     output_dir: Path,
     hko_endpoint_contains: str | None,
     hko_limit: int,
+    live_log_url: str | None,
 ) -> tuple[list[Path], dict[str, object]]:
     output_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
@@ -1706,8 +1709,10 @@ def _archive_low_latency_evidence(
         f"db_path={db_path}",
         f"hko_endpoint_contains={hko_endpoint_contains or ''}",
         f"hko_limit={hko_limit}",
-        "files:",
     ]
+    if live_log_url:
+        manifest_lines.append(f"live_log_url={_normalize_live_log_url(live_log_url)}")
+    manifest_lines.append("files:")
     for start_stage, end_stage in LOW_LATENCY_READINESS_LATENCY_PAIRS:
         summary = latency_duration_summary(db, start_stage, end_stage)
         path = output_dir / f"latency_{start_stage}_to_{end_stage}.txt"
@@ -2680,7 +2685,7 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
     def command(*parts: object) -> str:
         return " ".join(shlex.quote(str(part)) for part in [*base, *parts])
 
-    live_log_url = args.live_log_url.rstrip("/") + "/"
+    live_log_url = _normalize_live_log_url(args.live_log_url)
     live_log_download_url = live_log_url.rstrip("/") + "/<log-file-name>"
 
     buy_parts: list[object] = [
@@ -2773,6 +2778,8 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
             "--output-dir",
             "data/low-latency-evidence/<run-id>",
             "--require-evidence",
+            "--live-log-url",
+            live_log_url,
         ),
         command(
             "low-latency-verify-evidence-archive",
@@ -2781,6 +2788,10 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         ),
     ]
     return "\n".join(lines)
+
+
+def _normalize_live_log_url(url: str) -> str:
+    return url.rstrip("/") + "/"
 
 
 def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:

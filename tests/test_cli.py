@@ -659,7 +659,8 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertIn(
             command_prefix
             + "low-latency-archive-evidence --output-dir "
-            "'data/low-latency-evidence/<run-id>' --require-evidence",
+            "'data/low-latency-evidence/<run-id>' --require-evidence "
+            "--live-log-url http://192.168.1.49:8765/",
             text,
         )
         self.assertIn(
@@ -699,6 +700,12 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertIn(
             "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
             "http://192.168.1.50:8765/<log-file-name>",
+            text,
+        )
+        self.assertIn(
+            "low-latency-archive-evidence --output-dir "
+            "'data/low-latency-evidence/<run-id>' --require-evidence "
+            "--live-log-url http://192.168.1.50:8765/",
             text,
         )
         self.assertNotIn("http://192.168.1.49:8765/<log-file-name>", text)
