@@ -1014,6 +1014,12 @@ def main(argv: list[str] | None = None) -> int:
                     completed_monotonic=drift_scan_completed,
                 )
                 drift_count = len(drifts)
+                print(
+                    "live CLOB drift scan "
+                    f"phase=startup drift_count={drift_count} "
+                    f"duration_seconds={drift_scan_completed - drift_scan_started:.4f}",
+                    flush=True,
+                )
                 health = evaluate_live_startup_health(
                     market_websocket_connected=not args.no_websockets,
                     user_websocket_connected=not args.no_websockets,

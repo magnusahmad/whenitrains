@@ -294,6 +294,7 @@ class CliDiscoveryTests(unittest.TestCase):
                 "allowance_ok=True signer_present=True funder_present=True",
                 stdout.getvalue(),
             )
+            self.assertIn("live CLOB drift scan phase=startup drift_count=0", stdout.getvalue())
             self.assertIn(
                 "live websocket runtime started all_running=True client_count=2",
                 stdout.getvalue(),

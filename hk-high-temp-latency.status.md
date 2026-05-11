@@ -736,6 +736,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live scheduler preflight log detail pass: `live-scheduler --live` startup now logs a non-sensitive successful preflight summary with reason, balance, allowance status, and signer/funder presence before starting the scheduler loop. This makes archived scheduler logs distinguish a completed preflight from merely starting the preflight call. Verified red/green with `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py' -k test_live_scheduler_starts_websocket_runtime_and_passes_book_cache_to_ticks`, then `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py'` passing 33 tests.
 
+2026-05-11 live scheduler drift-scan log detail pass: `live-scheduler --live` startup now logs `live CLOB drift scan phase=startup drift_count=<n> duration_seconds=<s>` after recording the startup local-vs-CLOB drift scan. This makes archived logs corroborate the DB risk-event and latency-stage drift evidence. Verified red/green with `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py' -k test_live_scheduler_starts_websocket_runtime_and_passes_book_cache_to_ticks`, then `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py'` passing 33 tests.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
