@@ -712,6 +712,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 README/useful-command venv pass: updated README command examples and the remaining `useful-commands.md` test/install/CLOB credential helper snippets to use `.venv/bin/python` so normal setup, tests, and live credential recovery all run in the dependency-managed environment.
 
+2026-05-11 README venv setup pass: added explicit README setup commands for creating `.venv` and installing the package before the README's `.venv/bin/python` command examples.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

@@ -14,6 +14,13 @@ See [docs/hk-high-temp-latency-spec.md](docs/hk-high-temp-latency-spec.md) for t
 
 ## Local Testing
 
+Create the repo venv and install dependencies:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+```
+
 Run tests:
 
 ```bash
