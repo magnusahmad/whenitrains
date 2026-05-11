@@ -776,6 +776,10 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live readiness env-prerequisite checklist pass: updated `live-readiness-checklist` so it explicitly runs `eval "$(PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-env-exports --env-file .env)"`, validates `live-env-exports --env-file .env`, and lists the required live config environment variables before network/auth/scheduler smoke commands. This matches the current live blocker: `live-env-exports` exits `2` in this checkout because `.env` is absent, and no-trade smoke commands fail and record evidence because the shell is missing live config. Verified with `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_cli.py -k live_readiness_checklist`.
 
+2026-05-11 DB-audit smoke-latest status pass: `low-latency-readiness-db-audit` now prints `live_network_smoke_latest`, `live_auth_smoke_latest`, and `live_scheduler_smoke_latest` as `missing`, `ok`, or `failed`, so failed no-trade smoke attempts are visible directly in the read-only DB audit artifact instead of only in the readiness report. The current production DB audit reports one smoke record for each smoke type and all three latest statuses as `failed`. Verified focused DB-audit tests and archive/report validation after adding old-schema tolerance for legacy `risk_events` tables without `event_type`.
+
+2026-05-11 post-DB-audit-smoke-latest full verification: `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passed with 457 tests.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

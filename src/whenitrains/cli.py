@@ -2062,6 +2062,14 @@ def _readiness_db_audit_report_content_valid(text: str) -> bool:
         for key in required_count_keys
         if key not in {"hko_raw_snapshots", "orderbook_snapshots"}
     ]
+    required_status_keys = [
+        "live_network_smoke_latest",
+        "live_auth_smoke_latest",
+        "live_scheduler_smoke_latest",
+    ]
+    for key in required_status_keys:
+        if values.get(key) not in {"missing", "ok", "failed"}:
+            return False
     counts: dict[str, int] = {}
     for key in required_count_keys:
         value = values.get(key)
@@ -2892,6 +2900,23 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
                 "event_type = 'live_settlement_validation_ok'",
             ),
         }
+        smoke_statuses = {
+            "live_network_smoke_latest": _read_only_latest_risk_status(
+                db,
+                ok_event_type="live_network_smoke_ok",
+                failed_event_type="live_network_smoke_failed",
+            ),
+            "live_auth_smoke_latest": _read_only_latest_risk_status(
+                db,
+                ok_event_type="live_auth_smoke_ok",
+                failed_event_type="live_auth_smoke_failed",
+            ),
+            "live_scheduler_smoke_latest": _read_only_latest_risk_status(
+                db,
+                ok_event_type="live_scheduler_smoke_ok",
+                failed_event_type="live_scheduler_smoke_failed",
+            ),
+        }
     finally:
         db.close()
     required_evidence_keys = [
@@ -2926,6 +2951,7 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
         "low latency readiness db audit",
         f"db_path={db_path}",
         *[f"{key}={value}" for key, value in counts.items()],
+        *[f"{key}={value}" for key, value in smoke_statuses.items()],
         *(
             [f"missing_evidence={','.join(missing_evidence_keys)}"]
             if missing_evidence_keys
@@ -2934,6 +2960,32 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
         f"readiness_db_audit={'evidence_present' if ok else 'missing_evidence'}",
     ]
     return ok, "\n".join(lines)
+
+
+def _read_only_latest_risk_status(
+    db: sqlite3.Connection,
+    *,
+    ok_event_type: str,
+    failed_event_type: str,
+) -> str:
+    if not _read_only_table_exists(db, "risk_events"):
+        return "missing"
+    try:
+        row = db.execute(
+            """
+            select event_type
+            from risk_events
+            where event_type in (?, ?)
+            order by id desc
+            limit 1
+            """,
+            (ok_event_type, failed_event_type),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return "missing"
+    if row is None:
+        return "missing"
+    return "ok" if row["event_type"] == ok_event_type else "failed"
 
 
 def _read_only_count(db: sqlite3.Connection, table: str) -> int:
