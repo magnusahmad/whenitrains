@@ -2047,6 +2047,8 @@ def _hko_source_timing_report_content_valid(text: str) -> bool:
         return False
     if row_count <= 0:
         return False
+    if not _hko_timed_response_rows_valid(lines):
+        return False
     if not _hko_response_percentiles_valid(lines):
         return False
     offset_prefix = "public_availability_fetch_offsets_seconds="
@@ -2055,6 +2057,19 @@ def _hko_source_timing_report_content_valid(text: str) -> bool:
             continue
         offset_value = line[len(offset_prefix) :].strip()
         return _hko_public_offset_buckets_valid(offset_value)
+    return False
+
+
+def _hko_timed_response_rows_valid(lines: list[str]) -> bool:
+    prefix = "timed_response_rows="
+    for line in lines:
+        if not line.startswith(prefix):
+            continue
+        try:
+            count = int(line[len(prefix) :])
+        except ValueError:
+            return False
+        return count > 0
     return False
 
 
@@ -3119,6 +3134,7 @@ def _hko_source_timing_report(
 
     lines = [
         f"hko source timing rows={len(ordered)}",
+        f"timed_response_rows={len(response_ms)}",
         (
             "response_ms "
             f"p50={_fmt_ms(_nearest_rank(response_ms, 50))} "
