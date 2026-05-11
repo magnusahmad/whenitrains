@@ -1930,10 +1930,7 @@ def _live_scheduler_log_content_valid(text: str) -> bool:
     return (
         "live-scheduler started" in text
         and "live-scheduler actions=" in text
-        and (
-            "live scheduler smoke ok " in text
-            or "live scheduler smoke failed " in text
-        )
+        and "live scheduler smoke ok " in text
     )
 
 
