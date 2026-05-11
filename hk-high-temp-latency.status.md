@@ -666,6 +666,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 drift-scan latency evidence pass: live scheduler startup and reconcile-watchdog CLOB drift scans now record `live_clob_drift_scan_started -> live_clob_drift_scan_completed` latency stages. Readiness reports, readiness gates, evidence archives, archive verification, DB audit, and the live readiness checklist now include that pair so the roadmap's local-vs-CLOB drift p50/p95/p99 requirement has a concrete artifact. Verified `PYTHONPATH=src python3 -m unittest tests.test_cli tests.test_latency_report` passing 138 tests, the full 366-test roadmap suite under tracemalloc, and a read-only `data/whenitrains.sqlite3` DB audit that still exits `2` with zero production evidence including `latency_live_clob_drift_scan_pairs=0`.
 
+2026-05-11 drift archive smoke: generated `/private/tmp/whenitrains-low-latency-drift-archive-smoke` with `low-latency-archive-evidence --require-evidence`. The command exited `2` after writing the full expanded file set, including submit-to-ack, submit-to-match, submit-to-fill, submit-to-reject, and live CLOB drift-scan latency reports. `low-latency-verify-evidence-archive` rejected the bundle as expected because the production-like DB still has zero latency/readiness samples and missing live gates, including `live_clob_drift_scan_latency_observed`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
