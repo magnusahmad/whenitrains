@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from .backtest import dumps_result_json, render_backtest_result, run_backtest_day
 from .alerting import alert_sink_from_env
@@ -1851,6 +1851,7 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
         )
     unique_manifest_keys = [
         *required_metadata_keys,
+        "live_log_url",
         "all_gates_passed",
         "missing_gates",
     ]
@@ -2528,6 +2529,11 @@ def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
         else:
             if parsed_limit <= 0:
                 invalid.append("hko_limit")
+    live_log_url = _manifest_value(manifest, "live_log_url")
+    if live_log_url is not None:
+        parsed = urlparse(live_log_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            invalid.append("live_log_url")
     return invalid
 
 
@@ -2617,6 +2623,7 @@ def _malformed_manifest_file_lines(manifest: str) -> list[str]:
         "db_path",
         "hko_endpoint_contains",
         "hko_limit",
+        "live_log_url",
         "all_gates_passed",
         "missing_gates",
     }

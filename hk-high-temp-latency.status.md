@@ -790,6 +790,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live-log archive provenance pass: `low-latency-archive-evidence` now accepts `--live-log-url` and records normalized `live_log_url=...` metadata in `manifest.txt`, and `live-readiness-checklist` passes its configured log endpoint through to the generated archive command. Verified red/green with focused archive provenance and checklist tests, `test_cli.py` passing 37 tests, `test_latency_report.py` passing 113 tests, and full discovery passing 461 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
 
+2026-05-11 live-log manifest verifier pass: tightened `low-latency-verify-evidence-archive` so optional `live_log_url` manifest metadata must be a valid HTTP(S) URL and cannot appear more than once. Verified red/green with focused verifier tests, `test_latency_report.py` passing 115 tests, focused checklist tests passing 3 tests, and full discovery passing 463 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
