@@ -662,6 +662,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 low-latency scheduler wake pass: `LowLatencyEventQueue` now notifies waiters when a new unique event is enqueued, and the scheduler waits through the queue when present instead of always sleeping for the full scheduler interval. This keeps live execution on the scheduler thread while allowing background AWS actual events to wake the next drain promptly. Verified with `PYTHONPATH=src python3 -m unittest tests.test_low_latency tests.test_scheduler` passing 45 tests and the full roadmap suite passing 366 tests under tracemalloc.
 
+2026-05-11 queue wake regression hardening: tightened the low-latency queue test so it verifies `wait_for_event_or_stop` wakes when an event is enqueued after the wait begins, not only when the queue is already non-empty. Reverified `PYTHONPATH=src python3 -m unittest tests.test_low_latency tests.test_scheduler` and the full 366-test roadmap suite under tracemalloc.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

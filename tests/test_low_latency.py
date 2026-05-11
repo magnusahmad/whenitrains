@@ -1,6 +1,7 @@
 import json
 import tempfile
 import threading
+import time
 import unittest
 from datetime import date, datetime
 from pathlib import Path
@@ -182,14 +183,21 @@ class LowLatencyReadinessTests(unittest.TestCase):
         queue = LowLatencyEventQueue()
         stop_event = threading.Event()
 
-        queue.put(
-            _alpha_event(
-                kind="aws_actual_transition",
-                event_key="aws_actual_transition:max:2026-05-04:1:25.6->2:26.1",
+        def producer():
+            time.sleep(0.02)
+            queue.put(
+                _alpha_event(
+                    kind="aws_actual_transition",
+                    event_key="aws_actual_transition:max:2026-05-04:1:25.6->2:26.1",
+                )
             )
-        )
 
+        thread = threading.Thread(target=producer)
+        started = time.monotonic()
+        thread.start()
         self.assertTrue(queue.wait_for_event_or_stop(1.0, stop_event))
+        thread.join(timeout=1.0)
+        self.assertLess(time.monotonic() - started, 0.5)
         self.assertFalse(queue.empty())
 
     def test_fast_worker_dispatches_forecast_sample_events_to_forecast_handler(self):
