@@ -19,7 +19,7 @@ All examples below use the module entrypoint so they work without installing the
 package script:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" <command>
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" <command>
 ```
 
 ## Safety Rules
@@ -31,32 +31,32 @@ Create a SQLite online backup before migrations, state-clearing, storage changes
 or live scheduler startup checks:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db
 ```
 
 Keep more or fewer backups:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db --keep 10
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db --keep 10
 ```
 
 Write backups somewhere else:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db --backup-dir /private/tmp/whenitrains-backups
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db --backup-dir /private/tmp/whenitrains-backups
 ```
 
 Use `reset-paper --yes` for paper-trading cleanup. It backs up first by default
 and clears only paper orders, positions, decisions, and signals:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 reset-paper --yes
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 reset-paper --yes
 ```
 
 Use `--no-backup` only on disposable `/private/tmp/*.sqlite3` databases:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-smoke.sqlite3 reset-paper --yes --no-backup
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db /private/tmp/whenitrains-smoke.sqlite3 reset-paper --yes --no-backup
 ```
 
 ## Environment
@@ -83,7 +83,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 Show all CLI commands:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --help
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --help
 ```
 
 ## Database Setup And Data Fetching
@@ -91,46 +91,46 @@ PYTHONPATH=src python3 -m whenitrains.cli --help
 Initialize or migrate a DB:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" init-db
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" init-db
 ```
 
 Fetch HKO observations and forecasts:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" fetch-hko
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" fetch-hko
 ```
 
 Discover a HK temperature market for a date:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" discover-market 2026-05-09
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" discover-market 2026-05-09
 ```
 
 Fetch orderbooks for known outcomes:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" fetch-orderbooks
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" fetch-orderbooks
 ```
 
 One-shot bootstrap against the production-like DB:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 init-db
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 fetch-hko
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 discover-market 2026-05-09
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 fetch-orderbooks
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 init-db
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 fetch-hko
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 discover-market 2026-05-09
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 fetch-orderbooks
 ```
 
 Sample the OCF station forecast source every 10 minutes for 24 hours:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" sample-ocf --interval-minutes 10 --hours 24
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" sample-ocf --interval-minutes 10 --hours 24
 ```
 
 Fast one-shot OCF sampler smoke:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-smoke.sqlite3 sample-ocf --interval-minutes 0 --ticks 1
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db /private/tmp/whenitrains-smoke.sqlite3 sample-ocf --interval-minutes 0 --ticks 1
 ```
 
 ## Paper Trading
@@ -138,56 +138,56 @@ PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-smoke.sq
 Check whether an entry is fillable from current asks:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" calc-entry '25°C' YES 100
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" calc-entry '25°C' NO 100
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" calc-entry '25°C' YES 100
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" calc-entry '25°C' NO 100
 ```
 
 Manually paper-buy:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" paper-buy '25°C' YES 100
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" paper-buy '25°C' YES 100
 ```
 
 Check exit conditions:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" check-exit '25°C' YES --take-profit 0.20 --max-hold-minutes 10
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" check-exit '25°C' YES --take-profit 0.20 --max-hold-minutes 10
 ```
 
 Manually paper-sell:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" paper-sell '25°C' YES
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" paper-sell '25°C' YES
 ```
 
 Run one autonomous paper tick with fresh data:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" paper-tick
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" paper-tick
 ```
 
 Run one autonomous paper tick using already-stored data:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" paper-tick --no-fetch
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" paper-tick --no-fetch
 ```
 
 Run a simple fixed-interval paper loop:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" paper-loop --interval 15 --ticks 4
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" paper-loop --interval 15 --ticks 4
 ```
 
 Run the production-style polling-window paper scheduler:
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=src python3 -u -m whenitrains.cli --db data/whenitrains.sqlite3 paper-scheduler
+PYTHONUNBUFFERED=1 PYTHONPATH=src .venv/bin/python -u -m whenitrains.cli --db data/whenitrains.sqlite3 paper-scheduler
 ```
 
 Run a bounded verbose scheduler smoke:
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=src python3 -u -m whenitrains.cli --db /private/tmp/whenitrains-smoke.sqlite3 paper-scheduler --ticks 1 --sleep 0 --verbose --no-startup-backup
+PYTHONUNBUFFERED=1 PYTHONPATH=src .venv/bin/python -u -m whenitrains.cli --db /private/tmp/whenitrains-smoke.sqlite3 paper-scheduler --ticks 1 --sleep 0 --verbose --no-startup-backup
 ```
 
 ## Dashboard
@@ -195,13 +195,13 @@ PYTHONUNBUFFERED=1 PYTHONPATH=src python3 -u -m whenitrains.cli --db /private/tm
 Print the terminal dashboard:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db "$DB" dashboard
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db "$DB" dashboard
 ```
 
 Run the browser dashboard:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 dashboard-serve --host 127.0.0.1 --port 8765
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 dashboard-serve --host 127.0.0.1 --port 8765
 ```
 
 Open these routes:
@@ -223,7 +223,7 @@ http://127.0.0.1:8765/api/historicals
 If port `8765` is busy, use another port:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 dashboard-serve --port 8766
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 dashboard-serve --port 8766
 ```
 
 ## Backtests And Research
@@ -231,43 +231,43 @@ PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 dashboar
 Replay a historical day into a scratch replay DB:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backtest-day 2026-05-06
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 backtest-day 2026-05-06
 ```
 
 Data-driven replay with denser orderbook ticks:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backtest-day 2026-05-06 --tick-source data --include-orderbook-ticks
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 backtest-day 2026-05-06 --tick-source data --include-orderbook-ticks
 ```
 
 Bounded JSON smoke:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backtest-day 2026-05-06 --max-ticks 50 --json
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 backtest-day 2026-05-06 --max-ticks 50 --json
 ```
 
 Run isolated experimental strategy replay without mutating paper tables:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 experiment-backtest-day 2026-05-06
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 experiment-backtest-day 2026-05-06
 ```
 
 Forecast accuracy report:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli research-forecast-accuracy --months 12
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli research-forecast-accuracy --months 12
 ```
 
 Hourly accuracy report from the local DB:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 research-hourly-accuracy
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 research-hourly-accuracy
 ```
 
 Write a report to a file:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli research-forecast-accuracy --start 2025-05-01 --end 2026-05-01 --output /private/tmp/forecast-accuracy.txt
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli research-forecast-accuracy --start 2025-05-01 --end 2026-05-01 --output /private/tmp/forecast-accuracy.txt
 ```
 
 ## Live Trading Setup
@@ -292,7 +292,7 @@ Optional defaults:
 Store the bot hot key in macOS Keychain:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli live-store-hot-key
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli live-store-hot-key
 ```
 
 Verify that the default Keychain item exists without printing the key:
@@ -329,13 +329,13 @@ The repo does not currently discover or derive the funder address automatically.
 Load live env vars from local `.env` into the current shell:
 
 ```bash
-eval "$(PYTHONPATH=src python3 -m whenitrains.cli live-env-exports --env-file .env)"
+eval "$(PYTHONPATH=src .venv/bin/python -m whenitrains.cli live-env-exports --env-file .env)"
 ```
 
 Validate that `.env` contains every required value without exporting it:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli live-env-exports --env-file .env
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli live-env-exports --env-file .env
 ```
 
 Check exactly which required live vars are currently exported:
@@ -445,21 +445,21 @@ PY
 After updating `.env`, reload and run read-only checks:
 
 ```bash
-eval "$(PYTHONPATH=src python3 -m whenitrains.cli live-env-exports --env-file .env)"
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-preflight --live
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-auth-smoke --live
+eval "$(PYTHONPATH=src .venv/bin/python -m whenitrains.cli live-env-exports --env-file .env)"
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-preflight --live
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-auth-smoke --live
 ```
 
 Read-only authenticated preflight:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-preflight --live
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-preflight --live
 ```
 
 Read-only auth smoke:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-auth-smoke --live
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-auth-smoke --live
 ```
 
 ## Live Order Management
@@ -468,63 +468,63 @@ Manual live buys are capped by config at `5 USD` and require both `--live` and
 `--yes-i-understand`:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-buy '25°C' YES 5 --live --yes-i-understand
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-buy '25°C' YES 5 --live --yes-i-understand
 ```
 
 Disambiguate by target date and market kind when labels overlap:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-buy '25°C' YES 5 --date 2026-05-09 --market-kind highest --live --yes-i-understand
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-buy '24°C' YES 5 --date 2026-05-09 --market-kind lowest --live --yes-i-understand
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-buy '25°C' YES 5 --date 2026-05-09 --market-kind highest --live --yes-i-understand
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-buy '24°C' YES 5 --date 2026-05-09 --market-kind lowest --live --yes-i-understand
 ```
 
 Manual live sell:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-sell '25°C' YES --date 2026-05-09 --market-kind highest --live --yes-i-understand
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-sell '25°C' YES --date 2026-05-09 --market-kind highest --live --yes-i-understand
 ```
 
 Reconcile submitted live orders and rebuild local live positions from filled
 orders:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-reconcile --live
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-reconcile --live
 ```
 
 Cancel one live order:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-cancel-order ORDER_ID --live --yes-i-understand
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-cancel-order ORDER_ID --live --yes-i-understand
 ```
 
 Cancel all open live orders:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-cancel-all --live --yes-i-understand
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-cancel-all --live --yes-i-understand
 ```
 
 Block new live entries:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --block-new-entries
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --block-new-entries
 ```
 
 Allow new live entries again:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --allow-new-entries
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --allow-new-entries
 ```
 
 Enable kill-switch exit behavior:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --exit-on-kill-switch
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --exit-on-kill-switch
 ```
 
 Disable kill-switch exit behavior:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --no-exit-on-kill-switch
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --no-exit-on-kill-switch
 ```
 
 Emergency file behavior: `data/KILL_SWITCH` blocks new entries on the next live
@@ -544,25 +544,25 @@ rm data/KILL_SWITCH
 Run one live tick:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-tick --live
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-tick --live
 ```
 
 Run one live tick using already-stored data:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-tick --live --no-fetch
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-tick --live --no-fetch
 ```
 
 Run the guarded live scheduler:
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=src python3 -u -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live
+PYTHONUNBUFFERED=1 PYTHONPATH=src .venv/bin/python -u -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live
 ```
 
 Bounded live scheduler trial:
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=src python3 -u -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live --ticks 1 --verbose
+PYTHONUNBUFFERED=1 PYTHONPATH=src .venv/bin/python -u -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live --ticks 1 --verbose
 ```
 
 ## Live Scheduler With LAN Logs
@@ -583,11 +583,11 @@ output into the published directory.
 
 ```bash
 cd /Users/magnus/Documents/Projects/whenitrains
-eval "$(PYTHONPATH=src python3 -m whenitrains.cli live-env-exports --env-file .env)"
+eval "$(PYTHONPATH=src .venv/bin/python -m whenitrains.cli live-env-exports --env-file .env)"
 
 LOG="$HOME/whenitrains-live-logs/live-scheduler-$(date -u +%Y%m%d-%H%M%S).log"
 
-PYTHONUNBUFFERED=1 PYTHONPATH=src python3 -u -m whenitrains.cli \
+PYTHONUNBUFFERED=1 PYTHONPATH=src .venv/bin/python -u -m whenitrains.cli \
   --db data/whenitrains.sqlite3 \
   live-scheduler --live --verbose 2>&1 | tee -a "$LOG"
 ```

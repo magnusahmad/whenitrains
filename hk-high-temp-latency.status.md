@@ -700,6 +700,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live readiness checklist venv smoke: ran the read-only `live-readiness-checklist` command for the 2026-05-11 highest-temperature YES 30C smoke and confirmed every generated evidence command uses `PYTHONPATH=src .venv/bin/python -m whenitrains.cli`.
 
+2026-05-11 live docs venv command pass: updated `docs/live-trading.md` and `useful-commands.md` command examples to use the repo venv module entrypoint so operator docs do not conflict with the low-latency live runbook or the installed CLOB SDK environment.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

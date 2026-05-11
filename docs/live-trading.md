@@ -151,7 +151,7 @@ The Keychain service/account values are labels chosen by this application. They 
 To load the required live env vars from a non-committed local env file into the current shell:
 
 ```bash
-eval "$(PYTHONPATH=src python3 -m whenitrains.cli live-env-exports --env-file .env)"
+eval "$(PYTHONPATH=src .venv/bin/python -m whenitrains.cli live-env-exports --env-file .env)"
 ```
 
 The command prints only the required live exports, shell-quotes values, and fails closed if any required value is missing. Keep `.env` local-only; it is ignored by git.
@@ -161,7 +161,7 @@ The command prints only the required live exports, shell-quotes values, and fail
 Live mode should require both a CLI flag and env gate:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live
 ```
 
 If `--live` is present but `WHENITRAINS_TRADING_MODE` is not `live`, abort.
@@ -296,7 +296,7 @@ The current live settings are `block_new_entries` and `cancel_open_orders_and_ex
 Every schema change against the production-like DB requires a backup first:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db
 ```
 
 ## 7. Safety Controls
