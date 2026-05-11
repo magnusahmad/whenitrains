@@ -915,6 +915,14 @@ def main(argv: list[str] | None = None) -> int:
                     require_entry_capacity=False,
                 )
                 if not preflight.ok:
+                    if args.ticks is not None:
+                        _record_live_scheduler_smoke(
+                            db,
+                            ok=False,
+                            ticks=args.ticks,
+                            websockets_enabled=not args.no_websockets,
+                            error=f"preflight failed: {preflight.reason}",
+                        )
                     print(f"live preflight failed: {preflight.reason}")
                     return 2
                 kill_switch_exit = enforce_live_kill_switch_exits(
@@ -1050,6 +1058,14 @@ def main(argv: list[str] | None = None) -> int:
                         flush=True,
                     )
             except LiveTradingError as exc:
+                if args.ticks is not None:
+                    _record_live_scheduler_smoke(
+                        db,
+                        ok=False,
+                        ticks=args.ticks,
+                        websockets_enabled=not args.no_websockets,
+                        error=str(exc),
+                    )
                 print(f"live scheduler failed: {exc}")
                 return 2
             try:

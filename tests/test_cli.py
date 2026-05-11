@@ -324,6 +324,52 @@ class CliDiscoveryTests(unittest.TestCase):
             finally:
                 db.close()
 
+    def test_live_scheduler_records_config_failure_for_capped_smoke(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            stdout = StringIO()
+            with (
+                patch(
+                    "whenitrains.cli.load_live_config",
+                    side_effect=LiveTradingError("missing live config: API"),
+                ),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-scheduler",
+                        "--live",
+                        "--ticks",
+                        "1",
+                        "--no-startup-backup",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "live scheduler failed: missing live config: API",
+                stdout.getvalue(),
+            )
+            db = connect(db_path)
+            try:
+                event = db.execute(
+                    """
+                    select event_type, severity, details_json
+                    from risk_events
+                    order by id desc
+                    limit 1
+                    """
+                ).fetchone()
+                self.assertEqual(event["event_type"], "live_scheduler_smoke_failed")
+                self.assertEqual(event["severity"], "critical")
+                self.assertIn('"ticks": 1', event["details_json"])
+                self.assertIn('"websockets_enabled": true', event["details_json"])
+                self.assertIn('"error": "missing live config: API"', event["details_json"])
+            finally:
+                db.close()
+
     def test_live_network_smoke_starts_and_stops_websocket_runtime_without_trading(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

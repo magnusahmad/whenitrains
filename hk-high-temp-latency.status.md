@@ -770,6 +770,10 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-live-auth-smoke-failure full verification: `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passed with 456 tests.
 
+2026-05-11 live scheduler smoke startup-failure audit pass: tightened capped `live-scheduler --live --ticks N` so config/preflight startup failures record `live_scheduler_smoke_failed` instead of only printing the error. Reran `PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live --ticks 1 --no-startup-backup`; it exited `2` for missing live config and recorded a critical `live_scheduler_smoke_failed` event with `ticks=1`, `websockets_enabled=true`, and the missing-config error. Readiness now reports auth, network, and scheduler smoke gates with `latest=failed`. Verified focused scheduler CLI tests with `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_cli.py -k live_scheduler` passing 8 tests.
+
+2026-05-11 post-live-scheduler-smoke-startup-failure full verification: `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passed with 457 tests.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
