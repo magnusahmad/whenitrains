@@ -654,6 +654,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 runbook read-only audit update: updated `docs/low-latency-live-runbook.md` so the return-to-normal checklist explicitly runs `low-latency-readiness-db-audit` before final readiness/archive commands and requires nonzero evidence counts across latency traces, timed HKO raw snapshots, WebSocket orderbook snapshots, orderbook-age decisions, live orders, live user events, and risk-event smoke records.
 
+2026-05-11 readiness test cleanup pass: scheduler, operational-readiness, and live-user-stream tests now register SQLite connections for cleanup, removing the unclosed-connection `ResourceWarning`s seen in the full roadmap suite. Verified with `PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_scheduler tests.test_operational_readiness tests.test_live_user_stream` passing 44 tests and the full roadmap suite passing 364 tests under tracemalloc without the prior SQLite handle warnings.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

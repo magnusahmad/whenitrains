@@ -13,6 +13,11 @@ from whenitrains.storage import connect, live_setting_enabled, migrate
 
 
 class OperationalReadinessTests(unittest.TestCase):
+    def connect_db(self, path: Path):
+        db = connect(path)
+        self.addCleanup(db.close)
+        return db
+
     def test_live_scheduler_lock_rejects_second_process_for_same_db(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "whenitrains.sqlite3"
@@ -74,7 +79,7 @@ class OperationalReadinessTests(unittest.TestCase):
 
     def test_health_failure_freezes_entries_and_records_risk_event(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             health = evaluate_live_startup_health(
                 market_websocket_connected=False,
@@ -106,7 +111,7 @@ class OperationalReadinessTests(unittest.TestCase):
 
     def test_healthy_startup_health_does_not_freeze_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             health = evaluate_live_startup_health(
                 market_websocket_connected=True,

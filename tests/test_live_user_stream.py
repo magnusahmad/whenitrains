@@ -7,9 +7,14 @@ from whenitrains.storage import connect, get_live_position, migrate, store_live_
 
 
 class LiveUserStreamTests(unittest.TestCase):
+    def connect_db(self, path: Path):
+        db = connect(path)
+        self.addCleanup(db.close)
+        return db
+
     def test_order_lifecycle_events_are_stored_independently_and_update_status(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             store_live_order(
                 db,
@@ -62,7 +67,7 @@ class LiveUserStreamTests(unittest.TestCase):
             "FAILED": "failed",
         }
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             for status, local in expected.items():
                 store_live_order(
@@ -95,7 +100,7 @@ class LiveUserStreamTests(unittest.TestCase):
 
     def test_matched_trade_event_applies_buy_delta_once(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             store_live_order(
                 db,
@@ -133,11 +138,11 @@ class LiveUserStreamTests(unittest.TestCase):
 
     def test_submitted_order_converges_from_later_user_trade_after_restart(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             db.close()
 
-            restarted = connect(Path(tmp) / "test.db")
+            restarted = self.connect_db(Path(tmp) / "test.db")
             store_live_order(
                 restarted,
                 outcome_id="yes25",

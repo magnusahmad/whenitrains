@@ -26,6 +26,11 @@ from whenitrains.storage import connect, migrate
 
 
 class SchedulerTests(unittest.TestCase):
+    def connect_db(self, path: Path):
+        db = connect(path)
+        self.addCleanup(db.close)
+        return db
+
     def test_regular_forecast_window_is_every_ten_minutes_for_ten_seconds(self):
         before = datetime(2026, 5, 4, 0, 9, 59, tzinfo=HKT)
         start = datetime(2026, 5, 4, 0, 10, 0, tzinfo=HKT)
@@ -343,7 +348,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_prints_startup_note(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             output = StringIO()
             with redirect_stdout(output):
@@ -359,7 +364,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_uses_custom_output_label(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             output = StringIO()
             with redirect_stdout(output):
@@ -380,7 +385,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_skips_trading_on_startup_warmup_tick(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             calls = []
             output = StringIO()
@@ -413,7 +418,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_prints_loud_trade_log_for_live_fills(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             output = StringIO()
             now = datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT)
@@ -441,7 +446,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_alerts_on_trade_fills(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             now = datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT)
             alert_sink = MemoryAlertSink()
@@ -472,7 +477,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_does_not_warm_up_until_startup_fetches_succeed(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             calls = []
             output = StringIO()
@@ -501,7 +506,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_runs_reconcile_watchdog_before_decisions(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             calls = []
             output = StringIO()
@@ -536,7 +541,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_skips_decisions_when_due_orderbook_refresh_fails_after_warmup(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             calls = []
             output = StringIO()
@@ -575,7 +580,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_alerts_on_source_freshness_breach_after_warmup(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             times = iter(
                 [
@@ -616,7 +621,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_startup_warmup_fetches_actual_when_background_poller_is_enabled(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             calls = []
             actual_fetches = []
@@ -643,7 +648,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_drains_fast_event_queue_before_watchdog_tick(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             queue = LowLatencyEventQueue()
             queue.put(
@@ -692,7 +697,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_uses_default_fast_event_dispatch_without_custom_handler(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             queue = LowLatencyEventQueue()
             queue.put(
@@ -746,7 +751,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_stops_when_stop_event_is_set(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             stop_event = threading.Event()
             output = StringIO()
@@ -772,7 +777,7 @@ HKO,27.3,28.5,24.0
 
     def test_scheduler_logs_fetch_error_and_keeps_running(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             output = StringIO()
             now = datetime(2026, 5, 4, 10, 9, 0, tzinfo=HKT)
@@ -795,7 +800,7 @@ HKO,27.3,28.5,24.0
 
     def test_quiet_scheduler_logs_current_temperature_fetch_error(self):
         with tempfile.TemporaryDirectory() as tmp:
-            db = connect(Path(tmp) / "test.db")
+            db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             output = StringIO()
             now = datetime(2026, 5, 4, 10, 5, 0, tzinfo=HKT)
