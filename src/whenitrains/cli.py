@@ -5,6 +5,7 @@ import getpass
 import hashlib
 import json
 import os
+import shutil
 import shlex
 import sqlite3
 import time
@@ -212,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     archive_evidence.add_argument("--hko-endpoint-contains", default="latestReadings")
     archive_evidence.add_argument("--hko-limit", type=int, default=200)
     archive_evidence.add_argument("--require-evidence", action="store_true")
+    archive_evidence.add_argument("--live-log-file")
     archive_evidence.add_argument("--live-log-url")
     verify_evidence = sub.add_parser("low-latency-verify-evidence-archive")
     verify_evidence.add_argument("--input-dir", required=True)
@@ -400,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_dir=output_dir,
                 hko_endpoint_contains=args.hko_endpoint_contains,
                 hko_limit=args.hko_limit,
+                live_log_file=Path(args.live_log_file) if args.live_log_file else None,
                 live_log_url=args.live_log_url,
             )
             print(f"archived low latency evidence to {output_dir}")
@@ -1698,9 +1701,13 @@ def _archive_low_latency_evidence(
     output_dir: Path,
     hko_endpoint_contains: str | None,
     hko_limit: int,
+    live_log_file: Path | None,
     live_log_url: str | None,
 ) -> tuple[list[Path], dict[str, object]]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    scheduler_log_path = output_dir / "live-scheduler.log"
+    if live_log_file is not None:
+        shutil.copyfile(live_log_file, scheduler_log_path)
     written: list[Path] = []
     manifest_lines = [
         "low latency evidence archive",
@@ -1741,7 +1748,6 @@ def _archive_low_latency_evidence(
     readiness_path.write_text(readiness_report + "\n")
     written.append(readiness_path)
     manifest_lines.append(f"- {readiness_path.name}")
-    scheduler_log_path = output_dir / "live-scheduler.log"
     if scheduler_log_path.is_file():
         written.append(scheduler_log_path)
         manifest_lines.append(f"- {scheduler_log_path.name}")
@@ -2818,6 +2824,8 @@ def _archive_evidence_command_parts(live_log_url: str | None) -> list[object]:
         "--output-dir",
         "data/low-latency-evidence/<run-id>",
         "--require-evidence",
+        "--live-log-file",
+        "<path-to-live-scheduler.log>",
     ]
     if live_log_url:
         parts.extend(["--live-log-url", live_log_url])

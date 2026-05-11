@@ -350,6 +350,38 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("sha256 live-scheduler.log=", manifest)
             self.assertIn(str(output_dir / "live-scheduler.log"), stdout.getvalue())
 
+    def test_low_latency_archive_evidence_copies_scheduler_log_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            output_dir = Path(tmp) / "evidence"
+            source_log = Path(tmp) / "scheduler-copy.log"
+            source_log.write_text(_archive_report_fixture_content("live-scheduler.log"))
+            db = connect(db_path)
+            migrate(db)
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-archive-evidence",
+                        "--output-dir",
+                        str(output_dir),
+                        "--live-log-file",
+                        str(source_log),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            copied_log = output_dir / "live-scheduler.log"
+            self.assertEqual(copied_log.read_text(), source_log.read_text())
+            manifest = (output_dir / "manifest.txt").read_text()
+            self.assertIn("- live-scheduler.log", manifest)
+            self.assertIn("sha256 live-scheduler.log=", manifest)
+            self.assertIn(str(copied_log), stdout.getvalue())
+
     def test_low_latency_archive_evidence_records_live_log_url(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

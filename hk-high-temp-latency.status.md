@@ -798,6 +798,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 non-LAN checklist default pass: changed `live-readiness-checklist` so `--live-log-url` is optional with no placeholder default. Without a reachable URL it now emits explicit copy instructions for `live-scheduler.log` and omits `--live-log-url` from the generated archive command; with a URL it still emits curl download commands and records URL provenance. Verified red/green with focused checklist tests, `test_cli.py` passing 37 tests, `test_latency_report.py` passing 115 tests, and full discovery passing 463 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
 
+2026-05-11 live-log file archive pass: added `--live-log-file` to `low-latency-archive-evidence`, copying the specified scheduler log into the evidence directory as `live-scheduler.log` before manifest/checksum generation. `live-readiness-checklist` now includes that option in the generated archive command for both copied-log and reachable-URL workflows. Verified red/green with focused archive-copy and checklist tests, `test_cli.py` passing 37 tests, `test_latency_report.py` passing 116 tests, and full discovery passing 464 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
