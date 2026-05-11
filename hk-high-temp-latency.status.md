@@ -816,6 +816,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 reachable-log checklist wording pass: tightened the `--live-log-url` checklist heading to say the scheduler logs must be published on a reachable live host. Verified with focused checklist tests, a URL-mode manual checklist render, and `test_cli.py` passing 37 tests.
 
+2026-05-11 M3 concurrency re-audit: rechecked `ExecutionScheduler`, runner integration, candidate planner tests, and the readiness audit against the roadmap's independent-candidate concurrency requirement. `ExecutionScheduler` still has direct coverage for independent actions running concurrently and conflicts serializing in input order, and `CandidatePlanner` covers actual-cross fan-out into distinct candidate keys/conflict keys. Runner integration still uses `max_workers=1` for SQLite-bound local execution, so the remaining gap is live evidence that independent CLOB candidate actions can progress concurrently without unsafe SQLite connection sharing. Verified with discovery runs for `test_execution_scheduler.py` and `test_candidate_planner.py` passing 2 tests each.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
