@@ -4,7 +4,7 @@ Last updated: 2026-05-11 HKT
 
 ## Scope
 
-This handoff is for completing the remaining low-latency readiness exit criteria from a live machine or another runner that can access the live SQLite DB, CLOB credentials, and scheduler logs. This development workstation is no longer on the same LAN as the live machine, so it should not be used to fetch `192.168.1.x:8765` scheduler logs.
+This handoff is for completing the remaining low-latency readiness exit criteria from a live machine or another runner that can access the live SQLite DB, CLOB credentials, and scheduler logs. LAN log access from a development workstation is opportunistic only: use `--live-log-url` when the endpoint is reachable, otherwise copy the capped scheduler log into the evidence archive with `--live-log-file`.
 
 ## Required Live Inputs
 
@@ -54,4 +54,4 @@ The final archive verifier must exit `0`. The archive must include:
 
 ## Current Blocker
 
-On this development machine, the current production-like DB still fails readiness because the live/account evidence rows and latency samples are absent. The next meaningful progress must come from running the checklist in the live environment and copying back the resulting evidence archive.
+On this development machine, the current production-like DB still fails readiness because the live/account evidence rows and latency samples are absent. A reachable scheduler-log URL helps archive the current log, but it does not replace the required live network/auth/manual-money/scheduler/settlement evidence rows. The next meaningful progress must come from running the checklist in the live environment and archiving the resulting evidence bundle.

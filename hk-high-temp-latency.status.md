@@ -842,6 +842,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 roadmap handoff cross-reference: updated `docs/low-latency-readiness-roadmap.md` to point its final production-completion note at `docs/low-latency-live-evidence-handoff.md`, so the roadmap, audit, and runbook all converge on the same non-LAN evidence workflow.
 
+2026-05-11 restored-LAN live log archive smoke: user confirmed this workstation is back on the same LAN. `http://192.168.1.49:8765/` is reachable again, while `192.168.1.23:8765` still times out. Re-downloaded `live-scheduler-20260511-071055.log` to `/private/tmp/whenitrains-live-scheduler-latest.log`; it now has 75,970 lines and shows scheduler startup plus repeated decision loops with `buys=0/0 sells=0/0`. It still lacks live network/auth smoke, manual live-money, settlement, readiness report, successful capped-scheduler smoke, and structured concurrency markers. Reran `low-latency-archive-evidence --output-dir /private/tmp/whenitrains-current-lan-evidence --live-log-file /private/tmp/whenitrains-live-scheduler-latest.log --live-log-url http://192.168.1.49:8765/ --require-evidence`; it copied the log and wrote the archive, then exited `2` with the expected missing live evidence gates. `low-latency-verify-evidence-archive --input-dir /private/tmp/whenitrains-current-lan-evidence` also exited `2`, rejecting zero-sample latency reports, missing DB/HKO/live/account evidence, non-passing readiness gates, and the scheduler log without successful capped-smoke/concurrency evidence.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
@@ -1368,7 +1370,7 @@ Interpretation:
 
 Paper-mode milestones 1-5 are complete as local building blocks, one-shot CLI commands, an autonomous local paper loop, and a polling-window scheduler. Remaining work is now the live-trading validation layer and production evidence:
 
-- Capture live logs on the live machine, copy them by a secure channel, or use a reachable log URL passed to `live-readiness-checklist --live-log-url ...`; this development machine is no longer expected to reach the live LAN endpoint.
+- Capture live logs on the live machine, copy them by a secure channel, or use a reachable log URL passed to `live-readiness-checklist --live-log-url ...`; the `.49` LAN endpoint is currently reachable from this workstation, but the latest log still lacks passing readiness markers.
 - Run real-auth CLOB smoke with installed dependency and credentials.
 - Run explicit manual real-money buy/sell smoke before any scheduler use.
 - Run capped live scheduler smoke and archive `live_scheduler_smoke_ok` evidence.
