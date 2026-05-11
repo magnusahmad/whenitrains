@@ -16,7 +16,7 @@ Local implementation is substantially complete and covered by targeted automated
 - Production p50/p95/p99 evidence for DB-commit-to-decision, decision-to-submit, submit-to-fill/reject, and local-vs-CLOB drift.
 - Real-account kill-switch and settlement validation against actual CLOB/onchain state.
 
-The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT after the archive incomplete-manifest verifier fix. The sandboxed request timed out after 8 seconds; the approved LAN retry failed with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 1 ms: Couldn't connect to server`.
+The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT after the readiness test cleanup. Both the sandboxed request and the approved LAN retry timed out after 8 seconds.
 
 `low-latency-readiness-db-audit` inspected `data/whenitrains.sqlite3` read-only on 2026-05-11 HKT and found historical HKO and orderbook data, but no production readiness evidence yet: zero required latency-stage pairs, zero timed HKO `raw_snapshots` rows with `fetch_started_at_utc` and `response_elapsed_ms`, zero WebSocket orderbook snapshots, zero paper decisions carrying `orderbook_state_age_seconds`, zero manual live buy/sell orders, zero reconciled or settlement live orders, zero live user events or applied user trades, and zero live network/auth/scheduler/kill-switch/drift/settlement-validation risk-event records.
 
