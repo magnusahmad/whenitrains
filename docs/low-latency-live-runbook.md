@@ -13,10 +13,10 @@ This runbook covers the low-latency live scheduler path for HK temperature marke
 3. Generate the concrete live evidence command list for the target market before running any live-money command:
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-readiness-checklist --label <label> --side <YES-or-NO> --size-usd <minimum-size> --date <YYYY-MM-DD> --market-kind <highest-or-lowest> --scheduler-ticks 3 --live-log-url http://<live-host>:8765/
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-readiness-checklist --label <label> --side <YES-or-NO> --size-usd <minimum-size> --date <YYYY-MM-DD> --market-kind <highest-or-lowest> --scheduler-ticks 3
 ```
 
-Archive this output with the scheduler logs. It is read-only and does not touch the database. The generated archive command records `live_log_url` in `manifest.txt` when `--live-log-url` is supplied.
+Archive this output with the scheduler logs. It is read-only and does not touch the database. Add `--live-log-url http://<live-host>:8765/` only when the evidence runner can reach the live log server; otherwise the generated checklist tells the operator to copy `live-scheduler.log` into the evidence directory. The generated archive command records `live_log_url` in `manifest.txt` when `--live-log-url` is supplied.
 The checklist includes the real-account kill-switch verification sequence, a capped-scheduler log archive reminder for independent-candidate concurrency evidence, and a settlement-validation reminder for the first resolved live market.
 
 4. Start or verify the log publisher before running live evidence commands.

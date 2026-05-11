@@ -579,7 +579,12 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertIn("mkdir -p ~/whenitrains-live-logs", text)
         self.assertIn("cd ~/whenitrains-live-logs", text)
         self.assertIn("python3 -m http.server 8765 --bind 0.0.0.0", text)
-        self.assertIn("curl -L http://LIVE_LOG_HOST:8765/", text)
+        self.assertIn(
+            "copy the capped scheduler log to "
+            "'data/low-latency-evidence/<run-id>/live-scheduler.log'",
+            text,
+        )
+        self.assertNotIn("curl -L http://LIVE_LOG_HOST:8765/", text)
         self.assertIn("0b. confirm live config env is loaded before smoke commands", text)
         self.assertIn(
             f'eval "$({command_prefix}live-env-exports --env-file .env)"',
@@ -609,8 +614,8 @@ class CliDiscoveryTests(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
-            "http://LIVE_LOG_HOST:8765/<log-file-name>",
+            "cp '<path-to-live-scheduler.log>' "
+            "'data/low-latency-evidence/<run-id>/live-scheduler.log'",
             text,
         )
         self.assertIn("verify persistent kill-switch against the real account", text)
@@ -659,10 +664,10 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertIn(
             command_prefix
             + "low-latency-archive-evidence --output-dir "
-            "'data/low-latency-evidence/<run-id>' --require-evidence "
-            "--live-log-url http://LIVE_LOG_HOST:8765/",
+            "'data/low-latency-evidence/<run-id>' --require-evidence",
             text,
         )
+        self.assertNotIn("--live-log-url http://LIVE_LOG_HOST:8765/", text)
         self.assertIn(
             command_prefix
             + "low-latency-verify-evidence-archive --input-dir "
@@ -697,6 +702,7 @@ class CliDiscoveryTests(unittest.TestCase):
         text = stdout.getvalue()
         self.assertEqual(exit_code, 0)
         self.assertIn("curl -L http://192.168.1.50:8765/", text)
+        self.assertNotIn("copy the capped scheduler log", text)
         self.assertIn(
             "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
             "http://192.168.1.50:8765/<log-file-name>",

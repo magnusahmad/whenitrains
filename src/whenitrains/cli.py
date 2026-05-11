@@ -274,7 +274,6 @@ def main(argv: list[str] | None = None) -> int:
     live_readiness_checklist.add_argument("--scheduler-ticks", type=int, default=3)
     live_readiness_checklist.add_argument(
         "--live-log-url",
-        default="http://LIVE_LOG_HOST:8765/",
         help="Base URL for the live scheduler log server.",
     )
     live_buy = sub.add_parser("live-buy")
@@ -2692,8 +2691,14 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
     def command(*parts: object) -> str:
         return " ".join(shlex.quote(str(part)) for part in [*base, *parts])
 
-    live_log_url = _normalize_live_log_url(args.live_log_url)
-    live_log_download_url = live_log_url.rstrip("/") + "/<log-file-name>"
+    live_log_url = (
+        _normalize_live_log_url(args.live_log_url)
+        if args.live_log_url
+        else None
+    )
+    live_log_download_url = (
+        live_log_url.rstrip("/") + "/<log-file-name>" if live_log_url else None
+    )
 
     buy_parts: list[object] = [
         "live-buy",
@@ -2717,7 +2722,6 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         "mkdir -p ~/whenitrains-live-logs",
         "cd ~/whenitrains-live-logs",
         "python3 -m http.server 8765 --bind 0.0.0.0",
-        f"curl -L {live_log_url}",
         "0b. confirm live config env is loaded before smoke commands",
         f'eval "$({command("live-env-exports", "--env-file", ".env")})"',
         command("live-env-exports", "--env-file", ".env"),
@@ -2751,8 +2755,6 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         command("live-scheduler", "--live", "--ticks", args.scheduler_ticks, "--verbose"),
         "archive capped scheduler logs showing independent candidate concurrency or no independent candidate opportunity",
         "log must include live scheduler concurrency evidence and live scheduler smoke ok",
-        "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
-        f"{live_log_download_url}",
         "10. validate live settlement against CLOB/onchain truth after a resolved market",
         command("live-reconcile", "--live"),
         command(
@@ -2781,12 +2783,7 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         command("low-latency-readiness-db-audit"),
         command("low-latency-readiness-report", "--require-evidence"),
         command(
-            "low-latency-archive-evidence",
-            "--output-dir",
-            "data/low-latency-evidence/<run-id>",
-            "--require-evidence",
-            "--live-log-url",
-            live_log_url,
+            *_archive_evidence_command_parts(live_log_url),
         ),
         command(
             "low-latency-verify-evidence-archive",
@@ -2794,7 +2791,37 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
             "data/low-latency-evidence/<run-id>",
         ),
     ]
+    env_index = lines.index("0b. confirm live config env is loaded before smoke commands")
+    if live_log_url:
+        lines.insert(env_index, f"curl -L {live_log_url}")
+    else:
+        lines[env_index:env_index] = [
+            "copy the capped scheduler log to 'data/low-latency-evidence/<run-id>/live-scheduler.log'",
+            "cp '<path-to-live-scheduler.log>' 'data/low-latency-evidence/<run-id>/live-scheduler.log'",
+        ]
+    smoke_log_index = (
+        lines.index("log must include live scheduler concurrency evidence and live scheduler smoke ok")
+        + 1
+    )
+    if live_log_download_url:
+        lines.insert(
+            smoke_log_index,
+            "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
+            f"{live_log_download_url}",
+        )
     return "\n".join(lines)
+
+
+def _archive_evidence_command_parts(live_log_url: str | None) -> list[object]:
+    parts: list[object] = [
+        "low-latency-archive-evidence",
+        "--output-dir",
+        "data/low-latency-evidence/<run-id>",
+        "--require-evidence",
+    ]
+    if live_log_url:
+        parts.extend(["--live-log-url", live_log_url])
+    return parts
 
 
 def _normalize_live_log_url(url: str) -> str:

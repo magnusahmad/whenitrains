@@ -796,6 +796,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 non-LAN evidence-path update: user confirmed this workstation is no longer on the same LAN as the live machine, so future live-log capture should not retry `192.168.1.49` from here. Updated the checklist default away from the stale `.49` address and revised the runbook, roadmap, and audit so evidence capture is expected to run on the live machine, copy `live-scheduler.log` by another secure channel, or use an explicitly reachable `--live-log-url`. Verified focused checklist tests passing 3 tests, `test_latency_report.py` passing 115 tests, and full discovery passing 463 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
 
+2026-05-11 non-LAN checklist default pass: changed `live-readiness-checklist` so `--live-log-url` is optional with no placeholder default. Without a reachable URL it now emits explicit copy instructions for `live-scheduler.log` and omits `--live-log-url` from the generated archive command; with a URL it still emits curl download commands and records URL provenance. Verified red/green with focused checklist tests, `test_cli.py` passing 37 tests, `test_latency_report.py` passing 115 tests, and full discovery passing 463 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
