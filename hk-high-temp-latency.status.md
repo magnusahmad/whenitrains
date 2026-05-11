@@ -708,6 +708,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 readiness audit latest-verification venv refresh: updated `docs/low-latency-readiness-audit.md` so its latest verification section references the current post-venv-command full roadmap suite.
 
+2026-05-11 venv-invoked live readiness checklist smoke: reran the read-only checklist through the exact runbook entrypoint, `PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-readiness-checklist --label 30 --side YES --date 2026-05-11 --market-kind highest --size-usd 5 --scheduler-ticks 3`. It exited `0` and printed venv-based evidence commands for network/auth/manual buy/sell/reconcile/kill-switch/scheduler/settlement/latency/archive steps.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
