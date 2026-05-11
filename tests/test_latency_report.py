@@ -378,6 +378,7 @@ class LatencyReportTests(unittest.TestCase):
             copied_log = output_dir / "live-scheduler.log"
             self.assertEqual(copied_log.read_text(), source_log.read_text())
             manifest = (output_dir / "manifest.txt").read_text()
+            self.assertIn(f"live_log_file={source_log}", manifest)
             self.assertIn("- live-scheduler.log", manifest)
             self.assertIn("sha256 live-scheduler.log=", manifest)
             self.assertIn(str(copied_log), stdout.getvalue())
@@ -803,6 +804,31 @@ class LatencyReportTests(unittest.TestCase):
                 stdout.getvalue(),
             )
 
+    def test_low_latency_verify_evidence_archive_fails_blank_live_log_file_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                manifest.replace("hko_limit=200", "hko_limit=200\nlive_log_file=")
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive manifest metadata invalid: live_log_file",
+                stdout.getvalue(),
+            )
+
     def test_low_latency_verify_evidence_archive_fails_naive_created_at_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "evidence"
@@ -915,6 +941,36 @@ class LatencyReportTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn(
                 "evidence archive duplicate manifest key: live_log_url",
+                stdout.getvalue(),
+            )
+
+    def test_low_latency_verify_evidence_archive_fails_duplicate_live_log_file_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                manifest.replace(
+                    "hko_limit=200",
+                    "hko_limit=200\n"
+                    "live_log_file=/tmp/live-scheduler-a.log\n"
+                    "live_log_file=/tmp/live-scheduler-b.log",
+                )
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive duplicate manifest key: live_log_file",
                 stdout.getvalue(),
             )
 

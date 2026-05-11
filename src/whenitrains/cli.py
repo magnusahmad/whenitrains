@@ -1720,6 +1720,8 @@ def _archive_low_latency_evidence(
         f"hko_endpoint_contains={hko_endpoint_contains or ''}",
         f"hko_limit={hko_limit}",
     ]
+    if live_log_file:
+        manifest_lines.append(f"live_log_file={live_log_file}")
     if live_log_url:
         manifest_lines.append(f"live_log_url={_normalize_live_log_url(live_log_url)}")
     manifest_lines.append("files:")
@@ -1860,6 +1862,7 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
         )
     unique_manifest_keys = [
         *required_metadata_keys,
+        "live_log_file",
         "live_log_url",
         "all_gates_passed",
         "missing_gates",
@@ -2543,6 +2546,9 @@ def _invalid_archive_manifest_metadata(manifest: str) -> list[str]:
         parsed = urlparse(live_log_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             invalid.append("live_log_url")
+    live_log_file = _manifest_value(manifest, "live_log_file")
+    if live_log_file is not None and not live_log_file.strip():
+        invalid.append("live_log_file")
     return invalid
 
 
@@ -2632,6 +2638,7 @@ def _malformed_manifest_file_lines(manifest: str) -> list[str]:
         "db_path",
         "hko_endpoint_contains",
         "hko_limit",
+        "live_log_file",
         "live_log_url",
         "all_gates_passed",
         "missing_gates",

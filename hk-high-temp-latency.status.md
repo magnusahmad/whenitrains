@@ -802,6 +802,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live-log file archive failure pass: `low-latency-archive-evidence --live-log-file ...` now exits `2` with a clear `cannot copy live scheduler log` message when the supplied log path is missing or unreadable, instead of throwing a traceback or writing a partial manifest. Verified red/green with focused missing-log archive test, `test_latency_report.py` passing 117 tests, focused checklist tests passing 3 tests, and full discovery passing 465 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
 
+2026-05-11 live-log file provenance verifier pass: copied-log evidence archives now record `live_log_file=<path>` in `manifest.txt`, and `low-latency-verify-evidence-archive` rejects blank or duplicate `live_log_file` metadata. Verified red/green with focused manifest provenance tests, `test_latency_report.py` passing 119 tests, focused checklist tests passing 3 tests, and full discovery passing 467 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
