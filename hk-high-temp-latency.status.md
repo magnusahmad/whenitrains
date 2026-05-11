@@ -830,6 +830,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 M6 operational readiness re-audit: rechecked DB-specific scheduler lock, startup-health fail-closed reasons, health failure entry freeze and critical risk events, alert sinks/webhooks, stale submitted-order freeze, persistent kill-switch exits and verification evidence, live readiness checklist generation, live scheduler startup/reconcile watchdog behavior, evidence archive writing, archive verification, kill-switch readiness gates, and runbook coverage. Verified `test_operational_readiness.py` passing 6 tests, `test_alerting.py` passing 5 tests, live stale-submitted filter passing 1 test, live kill-switch filters passing 2 tests, checklist filter passing 3 tests, CLI live-kill-switch filter passing 1 test, CLI live-scheduler filters passing 8 tests, archive verifier filters in `test_latency_report.py` passing 82 tests, and kill-switch readiness filters passing 3 tests. The remaining M6 exit criteria are real live-auth, minimum-size manual buy/sell, capped live scheduler, real-account kill-switch verification, settlement validation, and final passing evidence archive.
 
+2026-05-11 current-head full verification: after the M0-M6 re-audit documentation refresh, reran `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests`; full discovery passed 467 tests on the current `low-latency` head.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
