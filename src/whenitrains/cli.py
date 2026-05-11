@@ -625,6 +625,16 @@ def main(argv: list[str] | None = None) -> int:
                     required_balance_usd=Settings.live_scheduler_order_cap_usd,
                 )
             except LiveTradingError as exc:
+                _record_live_auth_smoke(
+                    db,
+                    ok=False,
+                    signer_address=None,
+                    funder_address=None,
+                    required_balance_usd=Settings.live_scheduler_order_cap_usd,
+                    balance_usd=None,
+                    allowance_ok=False,
+                    reason=str(exc),
+                )
                 print(f"live auth smoke failed: {exc}")
                 return 2
             _record_live_auth_smoke(

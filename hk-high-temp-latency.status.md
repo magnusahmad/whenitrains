@@ -766,6 +766,10 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live network smoke attempt: ran no-trade `PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-network-smoke --live --seconds 10 --require-connected`. It exited `2` before connecting because this shell lacks `WHENITRAINS_TRADING_MODE`, `POLYMARKET_SIGNATURE_TYPE`, `POLYMARKET_FUNDER_ADDRESS`, `POLYMARKET_API_KEY`, `POLYMARKET_API_SECRET`, and `POLYMARKET_API_PASSPHRASE`. The command recorded `live_network_smoke_failed` with severity `critical`, zero clients, `required_clients=2`, and the missing-config error; the readiness gate now reports `gate live_network_smoke_ok=missing count=0 latest=failed`.
 
+2026-05-11 live auth smoke failure audit pass: tightened `live-auth-smoke --live` so config/preflight `LiveTradingError` failures record `live_auth_smoke_failed` evidence instead of only printing the error. Reran the no-trade auth smoke against `data/whenitrains.sqlite3`; it exited `2` for the same missing live config variables and now recorded a critical `live_auth_smoke_failed` event with signer/funder/balance absent, `allowance_ok=false`, and the missing-config reason. Readiness now reports `gate live_auth_smoke_ok=missing count=0 latest=failed` and `gate live_network_smoke_ok=missing count=0 latest=failed`. Verified with `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_cli.py` passing 34 tests.
+
+2026-05-11 post-live-auth-smoke-failure full verification: `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passed with 456 tests.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

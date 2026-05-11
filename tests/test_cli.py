@@ -24,6 +24,7 @@ from whenitrains.hko import (
     OCF_STATION_URL,
     RHRREAD_URL,
 )
+from whenitrains.live import LiveTradingError
 from whenitrains.markets import parse_outcome_label
 from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
 from whenitrains.storage import (
@@ -458,6 +459,43 @@ class CliDiscoveryTests(unittest.TestCase):
                 self.assertEqual(event["severity"], "info")
                 self.assertIn('"signer_address": "0xsigner"', event["details_json"])
                 self.assertIn('"required_balance_usd":', event["details_json"])
+            finally:
+                db.close()
+
+    def test_live_auth_smoke_records_config_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            stdout = StringIO()
+            with (
+                patch(
+                    "whenitrains.cli.load_live_config",
+                    side_effect=LiveTradingError("missing live config: API"),
+                ),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    ["--db", str(db_path), "live-auth-smoke", "--live"]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "live auth smoke failed: missing live config: API",
+                stdout.getvalue(),
+            )
+            db = connect(db_path)
+            try:
+                event = db.execute(
+                    """
+                    select event_type, severity, details_json
+                    from risk_events
+                    order by id desc
+                    limit 1
+                    """
+                ).fetchone()
+                self.assertEqual(event["event_type"], "live_auth_smoke_failed")
+                self.assertEqual(event["severity"], "critical")
+                self.assertIn('"reason": "missing live config: API"', event["details_json"])
+                self.assertIn('"allowance_ok": false', event["details_json"])
             finally:
                 db.close()
 
