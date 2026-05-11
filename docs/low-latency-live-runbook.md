@@ -146,5 +146,5 @@ The webhook receives JSON with `title`, `severity`, `details`, and formatted `te
 - Record the validation with `live-settlement-validate --live --order-id <live-settlement-order-id> --reference <CLOB/onchain-reference>`.
 - Run `low-latency-readiness-db-audit` read-only before final readiness/archive commands; it should report nonzero evidence counts for latency traces, timed HKO raw snapshots, WebSocket orderbook snapshots, orderbook-age decisions, live orders, live user events, and risk-event smoke records.
 - `low-latency-readiness-report --require-evidence` has exited `0` and been archived with scheduler logs after any capped live readiness run.
-- Archive report artifacts with `low-latency-archive-evidence --output-dir data/low-latency-evidence/<run-id> --require-evidence`.
+- Archive report artifacts with `low-latency-archive-evidence --output-dir data/low-latency-evidence/<run-id> --require-evidence`; the archive includes the read-only DB audit output alongside latency, HKO source timing, and readiness reports.
 - Verify archived artifacts with `low-latency-verify-evidence-archive --input-dir data/low-latency-evidence/<run-id>`.

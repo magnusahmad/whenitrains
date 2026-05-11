@@ -1627,6 +1627,11 @@ def _archive_low_latency_evidence(
         path.write_text(_render_latency_summary(summary) + "\n")
         written.append(path)
         manifest_lines.append(f"- {path.name}")
+    _db_audit_ok, db_audit_report = _render_low_latency_readiness_db_audit(db_path)
+    db_audit_path = output_dir / "readiness_db_audit.txt"
+    db_audit_path.write_text(db_audit_report + "\n")
+    written.append(db_audit_path)
+    manifest_lines.append(f"- {db_audit_path.name}")
     hko_report = _hko_source_timing_report(
         db,
         endpoint_contains=hko_endpoint_contains,
@@ -1665,6 +1670,7 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
         "latency_order_submitted_to_fill_confirmed.txt",
         "latency_order_submitted_to_order_rejected.txt",
         "latency_db_committed_to_decision_completed.txt",
+        "readiness_db_audit.txt",
         "hko_source_timing_report.txt",
         "readiness_report.txt",
     ]
@@ -1844,10 +1850,76 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
         )
     if name == "hko_source_timing_report.txt":
         return _hko_source_timing_report_content_valid(text)
+    if name == "readiness_db_audit.txt":
+        return _readiness_db_audit_report_content_valid(text)
     if name.startswith("latency_") and name.endswith(".txt"):
         pair = name[len("latency_") : -len(".txt")].replace("_to_", " -> ")
         return _latency_report_content_valid(pair, text)
     return False
+
+
+def _readiness_db_audit_report_content_valid(text: str) -> bool:
+    lines = text.splitlines()
+    if not lines or lines[0] != "low latency readiness db audit":
+        return False
+    values: dict[str, str] = {}
+    for line in lines[1:]:
+        if "=" not in line:
+            return False
+        key, value = line.split("=", 1)
+        if key in values:
+            return False
+        values[key] = value
+    if "db_path" not in values:
+        return False
+    status = values.get("readiness_db_audit")
+    if status not in {"evidence_present", "missing_evidence"}:
+        return False
+    required_count_keys = [
+        "latency_trace_events",
+        "latency_db_commit_to_decision_started_pairs",
+        "latency_db_commit_to_decision_completed_pairs",
+        "latency_decision_to_submit_pairs",
+        "latency_submit_to_ack_pairs",
+        "latency_submit_to_match_pairs",
+        "latency_submit_to_fill_pairs",
+        "hko_raw_snapshots",
+        "hko_timed_raw_snapshots",
+        "orderbook_snapshots",
+        "websocket_orderbook_snapshots",
+        "paper_decisions_with_orderbook_age",
+        "live_orders",
+        "manual_live_buy_orders",
+        "manual_live_sell_orders",
+        "live_reconciled_orders",
+        "live_settlement_orders",
+        "live_user_events",
+        "live_user_trade_applied_events",
+        "live_network_smoke_records",
+        "live_auth_smoke_records",
+        "live_scheduler_smoke_records",
+        "live_kill_switch_verification_records",
+        "live_clob_drift_scan_records",
+        "live_settlement_validation_records",
+    ]
+    for key in required_count_keys:
+        value = values.get(key)
+        if value is None:
+            return False
+        try:
+            count = int(value)
+        except ValueError:
+            return False
+        if count < 0:
+            return False
+    missing_evidence = values.get("missing_evidence")
+    if status == "evidence_present":
+        return missing_evidence is None
+    if not missing_evidence:
+        return False
+    observed_missing = missing_evidence.split(",")
+    allowed_missing = {key for key in required_count_keys if key != "hko_raw_snapshots"}
+    return all(key in allowed_missing for key in observed_missing)
 
 
 def _latency_report_content_valid(pair: str, text: str) -> bool:

@@ -30,6 +30,7 @@ ARCHIVE_REPORT_FILES = [
     "latency_order_submitted_to_fill_confirmed.txt",
     "latency_order_submitted_to_order_rejected.txt",
     "latency_db_committed_to_decision_completed.txt",
+    "readiness_db_audit.txt",
     "hko_source_timing_report.txt",
     "readiness_report.txt",
 ]
@@ -73,6 +74,37 @@ def _archive_report_fixture_content(name: str) -> str:
             "hko source timing rows=1\n"
             "response_ms p50=10.000ms p95=10.000ms p99=10.000ms\n"
             "public_availability_fetch_offsets_seconds=0.0:1\n"
+        )
+    if name == "readiness_db_audit.txt":
+        return (
+            "low latency readiness db audit\n"
+            "db_path=/private/tmp/test.sqlite3\n"
+            "latency_trace_events=1\n"
+            "latency_db_commit_to_decision_started_pairs=1\n"
+            "latency_db_commit_to_decision_completed_pairs=1\n"
+            "latency_decision_to_submit_pairs=1\n"
+            "latency_submit_to_ack_pairs=1\n"
+            "latency_submit_to_match_pairs=1\n"
+            "latency_submit_to_fill_pairs=1\n"
+            "hko_raw_snapshots=1\n"
+            "hko_timed_raw_snapshots=1\n"
+            "orderbook_snapshots=1\n"
+            "websocket_orderbook_snapshots=1\n"
+            "paper_decisions_with_orderbook_age=1\n"
+            "live_orders=3\n"
+            "manual_live_buy_orders=1\n"
+            "manual_live_sell_orders=1\n"
+            "live_reconciled_orders=3\n"
+            "live_settlement_orders=1\n"
+            "live_user_events=1\n"
+            "live_user_trade_applied_events=1\n"
+            "live_network_smoke_records=1\n"
+            "live_auth_smoke_records=1\n"
+            "live_scheduler_smoke_records=1\n"
+            "live_kill_switch_verification_records=1\n"
+            "live_clob_drift_scan_records=1\n"
+            "live_settlement_validation_records=1\n"
+            "readiness_db_audit=evidence_present\n"
         )
     if name == "readiness_report.txt":
         gate_names = [
@@ -252,8 +284,13 @@ class LatencyReportTests(unittest.TestCase):
             manifest = (output_dir / "manifest.txt").read_text()
             self.assertIn("db_path=", manifest)
             self.assertIn("readiness_report.txt", manifest)
+            self.assertIn("readiness_db_audit.txt", manifest)
             self.assertIn("latency_db_committed_to_decision_started.txt", manifest)
+            self.assertIn("sha256 readiness_db_audit.txt=", manifest)
             self.assertIn("sha256 latency_db_committed_to_decision_started.txt=", manifest)
+            db_audit = (output_dir / "readiness_db_audit.txt").read_text()
+            self.assertIn("low latency readiness db audit", db_audit)
+            self.assertIn("missing_evidence=", db_audit)
             readiness = (output_dir / "readiness_report.txt").read_text()
             self.assertIn("low latency readiness report", readiness)
             latency = (output_dir / "latency_db_committed_to_decision_started.txt").read_text()
