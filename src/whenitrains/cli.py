@@ -1201,6 +1201,12 @@ def main(argv: list[str] | None = None) -> int:
                             ticks=args.ticks,
                             websockets_enabled=not args.no_websockets,
                         )
+                        print(
+                            "live scheduler smoke ok "
+                            f"ticks={args.ticks} "
+                            f"websockets_enabled={not args.no_websockets}",
+                            flush=True,
+                        )
                 except Exception as exc:
                     if args.ticks is not None:
                         _record_live_scheduler_smoke(
@@ -1209,6 +1215,13 @@ def main(argv: list[str] | None = None) -> int:
                             ticks=args.ticks,
                             websockets_enabled=not args.no_websockets,
                             error=f"{type(exc).__name__}: {exc}",
+                        )
+                        print(
+                            "live scheduler smoke failed "
+                            f"ticks={args.ticks} "
+                            f"websockets_enabled={not args.no_websockets} "
+                            f"error={type(exc).__name__}: {exc}",
+                            flush=True,
                         )
                     raise
                 finally:

@@ -299,6 +299,10 @@ class CliDiscoveryTests(unittest.TestCase):
                 "live websocket runtime started all_running=True client_count=2",
                 stdout.getvalue(),
             )
+            self.assertIn(
+                "live scheduler smoke ok ticks=0 websockets_enabled=True",
+                stdout.getvalue(),
+            )
             self.assertEqual(live_tick.call_count, 2)
             for call in live_tick.call_args_list:
                 self.assertIs(call.kwargs["book_cache"], book_cache)
