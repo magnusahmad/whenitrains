@@ -4,7 +4,7 @@ Last updated: 2026-05-11 HKT
 
 ## Scope
 
-This runbook covers the low-latency live scheduler path for HK temperature markets. It assumes the scheduler is running against `data/whenitrains.sqlite3` and that live trading is explicitly enabled with `--live`.
+This runbook covers the low-latency live scheduler path for HK temperature markets. It assumes the scheduler is running against `data/whenitrains.sqlite3` and that live trading is explicitly enabled with `--live`. For the current non-LAN evidence workflow, also use `docs/low-latency-live-evidence-handoff.md`.
 
 ## Start
 

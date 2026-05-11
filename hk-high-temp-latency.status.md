@@ -836,6 +836,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 current-head off-LAN archive smoke: reran `low-latency-archive-evidence --output-dir /private/tmp/whenitrains-current-head-evidence --live-log-file /private/tmp/whenitrains-live-scheduler-latest.log --require-evidence` against `data/whenitrains.sqlite3`. The command copied the scheduler log into the archive, wrote all expected reports and `manifest.txt`, and exited `2` with the expected missing readiness gates. `low-latency-verify-evidence-archive --input-dir /private/tmp/whenitrains-current-head-evidence` also exited `2`, rejecting zero-sample latency reports, missing DB/HKO/live evidence, non-passing readiness gates, and the old scheduler log without capped-smoke/concurrency markers.
 
+2026-05-11 live evidence handoff doc: added `docs/low-latency-live-evidence-handoff.md`, a concise non-LAN operator handoff for completing the remaining readiness evidence on the live machine. It records the live inputs, generated checklist command, copied-log archive command, final verifier command, and exact passing evidence categories required before the roadmap can be considered complete.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
