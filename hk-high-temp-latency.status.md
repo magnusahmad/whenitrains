@@ -668,6 +668,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 drift archive smoke: generated `/private/tmp/whenitrains-low-latency-drift-archive-smoke` with `low-latency-archive-evidence --require-evidence`. The command exited `2` after writing the full expanded file set, including submit-to-ack, submit-to-match, submit-to-fill, submit-to-reject, and live CLOB drift-scan latency reports. `low-latency-verify-evidence-archive` rejected the bundle as expected because the production-like DB still has zero latency/readiness samples and missing live gates, including `live_clob_drift_scan_latency_observed`.
 
+2026-05-11 post-drift-archive live log endpoint retry: sandboxed and approved LAN `curl -L --max-time 8 http://192.168.1.23:8765/` both timed out after 8 seconds. Live/account evidence capture remains blocked on endpoint availability.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
