@@ -832,6 +832,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 current-head full verification: after the M0-M6 re-audit documentation refresh, reran `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests`; full discovery passed 467 tests on the current `low-latency` head.
 
+2026-05-11 current-head evidence audit boundary: reran `low-latency-readiness-db-audit` and `low-latency-readiness-report --require-evidence` read-only against `data/whenitrains.sqlite3` on the current head. Both still exit `2`: all required latency-stage pairs are `0`, timed HKO raw snapshots are `0`, WebSocket orderbook snapshots are `0`, paper decisions with orderbook age are `0`, live orders/user events/reconcile/settlement/drift/kill-switch/settlement-validation evidence are `0`, and the latest network/auth/scheduler smoke records are failed. Only the non-evidence money-state/kill-switch-clear gates and the historical public-availability clustering gate pass. Roadmap completion is therefore blocked on production live/account evidence capture.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
