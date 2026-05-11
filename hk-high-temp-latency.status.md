@@ -784,6 +784,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 DB-audit smoke-latest consistency verifier pass: tightened `low-latency-verify-evidence-archive` so read-only DB audit artifacts cannot claim positive live smoke record counts while reporting the corresponding latest status as `missing`, or report zero smoke records with a non-missing latest status. Verified red/green with the focused inconsistent DB-audit archive test, `test_latency_report.py` passing 112 tests, focused DB-audit CLI tests passing 5 tests, and full discovery passing 458 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
 
+2026-05-11 latest `.49` live log access retry: retried `curl -L --max-time 8 http://192.168.1.49:8765/` from the sandbox and again with approved LAN access. Both attempts timed out after 8 seconds with no response, so the previously reachable `.49` live-log endpoint is not currently usable for evidence capture from this machine.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
