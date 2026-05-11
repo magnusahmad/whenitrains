@@ -460,6 +460,10 @@ class CliDiscoveryTests(unittest.TestCase):
             "live-scheduler --live --ticks 3 --verbose",
             text,
         )
+        self.assertIn(
+            "archive capped scheduler logs showing independent candidate concurrency",
+            text,
+        )
         self.assertIn("verify persistent kill-switch against the real account", text)
         self.assertIn(
             "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "

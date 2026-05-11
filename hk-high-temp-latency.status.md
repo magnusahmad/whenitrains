@@ -672,6 +672,10 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 M3 concurrency audit note: rechecked runner integration for the roadmap's independent-candidate concurrency requirement. `ExecutionScheduler` itself has unit coverage for concurrent independent candidates and deterministic serialization of conflicts, and runner hot paths build `PlannedCandidateAction` objects through the candidate bridge. Actual runner execution remains `max_workers=1` in local code because the active SQLite connection is not thread-shareable; live-account proof of safe independent CLOB candidate concurrency remains a production evidence gap.
 
+2026-05-11 live concurrency evidence checklist pass: updated `live-readiness-checklist` and `docs/low-latency-live-runbook.md` so capped live scheduler smoke requires archived scheduler logs showing either independent candidate actions progressing concurrently or that no independent-candidate opportunity occurred. This makes the M3 concurrency proof gap explicit in the operator evidence path.
+
+2026-05-11 live concurrency evidence checklist verification: red/green checked `tests.test_cli.CliDiscoveryTests.test_live_readiness_checklist_prints_ordered_evidence_commands`, then verified `PYTHONPATH=src python3 -m unittest tests.test_cli` passing 32 tests and `git diff --check` passing.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

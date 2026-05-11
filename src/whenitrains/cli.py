@@ -2548,6 +2548,7 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         command("live-kill-switch"),
         "9. capped live scheduler smoke with explicit approval",
         command("live-scheduler", "--live", "--ticks", args.scheduler_ticks, "--verbose"),
+        "archive capped scheduler logs showing independent candidate concurrency or no independent candidate opportunity",
         "10. validate live settlement against CLOB/onchain truth after a resolved market",
         command("live-reconcile", "--live"),
         command(

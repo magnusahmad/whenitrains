@@ -17,7 +17,7 @@ PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-rea
 ```
 
 Archive this output with the scheduler logs. It is read-only and does not touch the database.
-The checklist includes the real-account kill-switch verification sequence and a settlement-validation reminder for the first resolved live market.
+The checklist includes the real-account kill-switch verification sequence, a capped-scheduler log archive reminder for independent-candidate concurrency evidence, and a settlement-validation reminder for the first resolved live market.
 
 4. Run a no-trade live network smoke to confirm both scheduler-owned WebSocket workers can start:
 
@@ -144,6 +144,7 @@ The webhook receives JSON with `title`, `severity`, `details`, and formatted `te
 - The dashboard live positions, recent live orders, and CLOB state agree.
 - At least one resolved-market live settlement row has been validated against CLOB/onchain state and archived.
 - Record the validation with `live-settlement-validate --live --order-id <live-settlement-order-id> --reference <CLOB/onchain-reference>`.
+- Archive capped live scheduler logs showing either independent candidate actions progressing concurrently or that no independent-candidate opportunity occurred during the smoke.
 - Run `low-latency-readiness-db-audit` read-only before final readiness/archive commands; it should report nonzero evidence counts for latency traces, timed HKO raw snapshots, WebSocket orderbook snapshots, orderbook-age decisions, live orders, live user events, and risk-event smoke records.
 - `low-latency-readiness-report --require-evidence` has exited `0` and been archived with scheduler logs after any capped live readiness run.
 - Archive report artifacts with `low-latency-archive-evidence --output-dir data/low-latency-evidence/<run-id> --require-evidence`; the archive includes the read-only DB audit output alongside latency, HKO source timing, and readiness reports.
