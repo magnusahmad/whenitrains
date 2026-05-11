@@ -541,6 +541,12 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("low latency readiness db audit", text)
             self.assertIn(f"db_path={db_path}", text)
             self.assertIn("latency_trace_events=0", text)
+            self.assertIn("latency_db_commit_to_decision_started_pairs=0", text)
+            self.assertIn("latency_db_commit_to_decision_completed_pairs=0", text)
+            self.assertIn("latency_decision_to_submit_pairs=0", text)
+            self.assertIn("latency_submit_to_ack_pairs=0", text)
+            self.assertIn("latency_submit_to_match_pairs=0", text)
+            self.assertIn("latency_submit_to_fill_pairs=0", text)
             self.assertIn("hko_timed_raw_snapshots=0", text)
             self.assertIn("websocket_orderbook_snapshots=0", text)
             self.assertIn("live_orders=0", text)
@@ -585,7 +591,10 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("hko_timed_raw_snapshots=0", text)
             self.assertIn("websocket_orderbook_snapshots=0", text)
             self.assertIn("paper_decisions_with_orderbook_age=0", text)
+            self.assertIn("latency_db_commit_to_decision_started_pairs=0", text)
             self.assertIn("manual_live_buy_orders=0", text)
+            self.assertIn("live_settlement_orders=0", text)
+            self.assertIn("live_user_trade_applied_events=0", text)
             self.assertIn("live_network_smoke_records=0", text)
             self.assertIn("readiness_db_audit=missing_evidence", text)
 
@@ -599,6 +608,48 @@ class CliDiscoveryTests(unittest.TestCase):
                 "event-1",
                 "db_committed",
                 1.0,
+                event_type="aws_actual_transition",
+            )
+            record_latency_stage(
+                db,
+                "event-1",
+                "decision_started",
+                1.1,
+                event_type="aws_actual_transition",
+            )
+            record_latency_stage(
+                db,
+                "event-1",
+                "decision_completed",
+                1.2,
+                event_type="aws_actual_transition",
+            )
+            record_latency_stage(
+                db,
+                "event-1",
+                "order_submitted",
+                1.3,
+                event_type="aws_actual_transition",
+            )
+            record_latency_stage(
+                db,
+                "event-1",
+                "clob_ack",
+                1.4,
+                event_type="aws_actual_transition",
+            )
+            record_latency_stage(
+                db,
+                "event-1",
+                "fill_matched",
+                1.5,
+                event_type="aws_actual_transition",
+            )
+            record_latency_stage(
+                db,
+                "event-1",
+                "fill_confirmed",
+                1.6,
                 event_type="aws_actual_transition",
             )
             store_raw_snapshot(
@@ -671,6 +722,21 @@ class CliDiscoveryTests(unittest.TestCase):
                 fill_size_usd=5.0,
                 fill_shares=10.0,
             )
+            settlement_order_id = store_live_order(
+                db,
+                outcome_id="yes25",
+                side="SETTLEMENT",
+                action="SELL",
+                status="filled",
+                event_type="market_resolution",
+                event_key="market_resolution:yes25",
+                clob_order_id="clob-settlement-1",
+                raw_reconcile={"id": "clob-settlement-1", "status": "filled"},
+                fill_price=1.0,
+                fill_size_usd=10.0,
+                fill_shares=10.0,
+                reason="resolved market settlement",
+            )
             db.execute(
                 """
                 insert into live_user_events
@@ -727,7 +793,7 @@ class CliDiscoveryTests(unittest.TestCase):
                 db,
                 "live_settlement_validation_ok",
                 "info",
-                {"live_order_id": 99, "reference": "clob-reference"},
+                {"live_order_id": settlement_order_id, "reference": "clob-reference"},
             )
             db.close()
             stdout = StringIO()
@@ -743,15 +809,23 @@ class CliDiscoveryTests(unittest.TestCase):
 
             text = stdout.getvalue()
             self.assertEqual(exit_code, 0)
-            self.assertIn("latency_trace_events=1", text)
+            self.assertIn("latency_trace_events=7", text)
+            self.assertIn("latency_db_commit_to_decision_started_pairs=1", text)
+            self.assertIn("latency_db_commit_to_decision_completed_pairs=1", text)
+            self.assertIn("latency_decision_to_submit_pairs=1", text)
+            self.assertIn("latency_submit_to_ack_pairs=1", text)
+            self.assertIn("latency_submit_to_match_pairs=1", text)
+            self.assertIn("latency_submit_to_fill_pairs=1", text)
             self.assertIn("hko_timed_raw_snapshots=1", text)
             self.assertIn("websocket_orderbook_snapshots=1", text)
             self.assertIn("paper_decisions_with_orderbook_age=1", text)
-            self.assertIn("live_orders=2", text)
+            self.assertIn("live_orders=3", text)
             self.assertIn("manual_live_buy_orders=1", text)
             self.assertIn("manual_live_sell_orders=1", text)
-            self.assertIn("live_reconciled_orders=2", text)
+            self.assertIn("live_settlement_orders=1", text)
+            self.assertIn("live_reconciled_orders=3", text)
             self.assertIn("live_user_events=1", text)
+            self.assertIn("live_user_trade_applied_events=1", text)
             self.assertIn("live_network_smoke_records=1", text)
             self.assertIn("live_auth_smoke_records=1", text)
             self.assertIn("live_scheduler_smoke_records=1", text)

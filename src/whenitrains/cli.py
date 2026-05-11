@@ -2493,6 +2493,24 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
         db.row_factory = sqlite3.Row
         counts = {
             "latency_trace_events": _read_only_count(db, "latency_trace_events"),
+            "latency_db_commit_to_decision_started_pairs": _read_only_latency_pair_count(
+                db, "db_committed", "decision_started"
+            ),
+            "latency_db_commit_to_decision_completed_pairs": _read_only_latency_pair_count(
+                db, "db_committed", "decision_completed"
+            ),
+            "latency_decision_to_submit_pairs": _read_only_latency_pair_count(
+                db, "decision_started", "order_submitted"
+            ),
+            "latency_submit_to_ack_pairs": _read_only_latency_pair_count(
+                db, "order_submitted", "clob_ack"
+            ),
+            "latency_submit_to_match_pairs": _read_only_latency_pair_count(
+                db, "order_submitted", "fill_matched"
+            ),
+            "latency_submit_to_fill_pairs": _read_only_latency_pair_count(
+                db, "order_submitted", "fill_confirmed"
+            ),
             "hko_raw_snapshots": _read_only_count(db, "raw_snapshots"),
             "hko_timed_raw_snapshots": _read_only_count_where(
                 db,
@@ -2538,7 +2556,30 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
                     "and length(trim(coalesce(raw_reconcile_json, ''))) > 0"
                 ),
             ),
+            "live_settlement_orders": _read_only_count_where(
+                db,
+                "live_orders",
+                (
+                    "status = 'filled' "
+                    "and (side = 'SETTLEMENT' or event_type = 'market_resolution' "
+                    "or reason = 'resolved market settlement') "
+                    "and (coalesce(fill_size_usd, 0) > 0 or coalesce(fill_shares, 0) > 0)"
+                ),
+            ),
             "live_user_events": _read_only_count(db, "live_user_events"),
+            "live_user_trade_applied_events": _read_only_count_where(
+                db,
+                "live_user_events",
+                (
+                    "event_type = 'trade' "
+                    "and applied_position_delta = 1 "
+                    "and length(trim(coalesce(clob_order_id, ''))) > 0 "
+                    "and length(trim(coalesce(outcome_id, ''))) > 0 "
+                    "and status in ('MATCHED', 'MINED', 'CONFIRMED') "
+                    "and coalesce(price, 0) > 0 "
+                    "and coalesce(size, 0) > 0"
+                ),
+            ),
             "live_network_smoke_records": _read_only_count_where(
                 db,
                 "risk_events",
@@ -2574,6 +2615,12 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
         db.close()
     required_evidence_keys = [
         "latency_trace_events",
+        "latency_db_commit_to_decision_started_pairs",
+        "latency_db_commit_to_decision_completed_pairs",
+        "latency_decision_to_submit_pairs",
+        "latency_submit_to_ack_pairs",
+        "latency_submit_to_match_pairs",
+        "latency_submit_to_fill_pairs",
         "hko_timed_raw_snapshots",
         "websocket_orderbook_snapshots",
         "paper_decisions_with_orderbook_age",
@@ -2581,7 +2628,9 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
         "manual_live_buy_orders",
         "manual_live_sell_orders",
         "live_reconciled_orders",
+        "live_settlement_orders",
         "live_user_events",
+        "live_user_trade_applied_events",
         "live_network_smoke_records",
         "live_auth_smoke_records",
         "live_scheduler_smoke_records",
@@ -2610,6 +2659,29 @@ def _read_only_count_where(db: sqlite3.Connection, table: str, where_sql: str) -
         return 0
     try:
         return int(db.execute(f"select count(*) from {table} where {where_sql}").fetchone()[0])
+    except sqlite3.OperationalError:
+        return 0
+
+
+def _read_only_latency_pair_count(
+    db: sqlite3.Connection, start_stage: str, end_stage: str
+) -> int:
+    if not _read_only_table_exists(db, "latency_trace_events"):
+        return 0
+    try:
+        return int(
+            db.execute(
+                """
+                select count(distinct starts.event_key)
+                from latency_trace_events starts
+                join latency_trace_events ends
+                  on ends.event_key = starts.event_key
+                where starts.stage = ?
+                  and ends.stage = ?
+                """,
+                (start_stage, end_stage),
+            ).fetchone()[0]
+        )
     except sqlite3.OperationalError:
         return 0
 
