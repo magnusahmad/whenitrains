@@ -760,6 +760,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 scheduler log operator-instruction pass: tightened `live-readiness-checklist` and `docs/low-latency-live-runbook.md` so the capped scheduler log download step explicitly says the archived log must include both `live scheduler concurrency evidence ...` and `live scheduler smoke ok ...`. Verified with `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_cli.py -k live_readiness_checklist`.
 
+2026-05-11 latest `.49` live log evidence refresh: reran `curl -L --max-time 8 http://192.168.1.49:8765/`; the endpoint is still reachable and the newest listed file is still `live-scheduler-20260511-071055.log`. Re-downloaded it to `/private/tmp/whenitrains-live-scheduler-latest.log`; it now has 14,949 lines and shows scheduler startup plus repeated decision loops with `buys=0/0 sells=0/0`, but `rg` found no `live scheduler concurrency evidence`, `live scheduler smoke ok/failed`, live network/auth smoke, manual live-money, settlement, or readiness report markers. Live/account evidence capture remains incomplete.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
