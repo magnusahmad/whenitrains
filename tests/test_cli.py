@@ -447,17 +447,20 @@ class CliDiscoveryTests(unittest.TestCase):
 
         text = stdout.getvalue()
         self.assertEqual(exit_code, 0)
+        command_prefix = (
+            "PYTHONPATH=src .venv/bin/python -m whenitrains.cli "
+            "--db data/whenitrains.sqlite3 "
+        )
         self.assertIn("1. live-network-smoke --live --require-connected", text)
         self.assertIn("archive live-reconcile output as REST/recent-trades validation evidence", text)
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "live-buy 30 YES 5.00 --date 2026-05-11 --market-kind highest "
+            command_prefix
+            + "live-buy 30 YES 5.00 --date 2026-05-11 --market-kind highest "
             "--live --yes-i-understand",
             text,
         )
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "live-scheduler --live --ticks 3 --verbose",
+            command_prefix + "live-scheduler --live --ticks 3 --verbose",
             text,
         )
         self.assertIn(
@@ -466,65 +469,56 @@ class CliDiscoveryTests(unittest.TestCase):
         )
         self.assertIn("verify persistent kill-switch against the real account", text)
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "live-kill-switch --block-new-entries",
+            command_prefix + "live-kill-switch --block-new-entries",
             text,
         )
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "live-kill-switch --allow-new-entries",
+            command_prefix + "live-kill-switch --allow-new-entries",
             text,
         )
         self.assertIn("validate live settlement against CLOB/onchain truth", text)
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "low-latency-readiness-report --require-evidence",
+            command_prefix + "low-latency-readiness-report --require-evidence",
             text,
         )
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "hko-source-timing-report",
+            command_prefix + "hko-source-timing-report",
             text,
         )
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "low-latency-readiness-db-audit",
+            command_prefix + "low-latency-readiness-db-audit",
             text,
         )
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "latency-report db_committed decision_completed",
+            command_prefix + "latency-report db_committed decision_completed",
             text,
         )
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "latency-report order_submitted order_rejected",
+            command_prefix + "latency-report order_submitted order_rejected",
             text,
         )
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "latency-report order_submitted clob_ack",
+            command_prefix + "latency-report order_submitted clob_ack",
             text,
         )
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "latency-report order_submitted fill_matched",
+            command_prefix + "latency-report order_submitted fill_matched",
             text,
         )
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "latency-report live_clob_drift_scan_started live_clob_drift_scan_completed",
+            command_prefix
+            + "latency-report live_clob_drift_scan_started live_clob_drift_scan_completed",
             text,
         )
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "low-latency-archive-evidence --output-dir "
+            command_prefix
+            + "low-latency-archive-evidence --output-dir "
             "'data/low-latency-evidence/<run-id>' --require-evidence",
             text,
         )
         self.assertIn(
-            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
-            "low-latency-verify-evidence-archive --input-dir "
+            command_prefix
+            + "low-latency-verify-evidence-archive --input-dir "
             "'data/low-latency-evidence/<run-id>'",
             text,
         )

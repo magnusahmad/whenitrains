@@ -696,6 +696,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 venv live SDK verification: reran live tests with the repo venv that has `py_clob_client_v2` installed. Direct module-name unittest invocation failed under Python 3.14 because `tests` is not an importable package there, then `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_live.py'` passed 43 tests.
 
+2026-05-11 live readiness venv command pass: tightened `live-readiness-checklist` and `docs/low-latency-live-runbook.md` so live evidence commands use `PYTHONPATH=src .venv/bin/python -m whenitrains.cli`, ensuring real-auth smoke and live scheduler commands run in the environment where `py_clob_client_v2` is installed. Verified red/green with `tests.test_cli.CliDiscoveryTests.test_live_readiness_checklist_prints_ordered_evidence_commands`, then ran `PYTHONPATH=src python3 -m unittest tests.test_cli` passing 32 tests and `git diff --check` passing.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

@@ -13,7 +13,7 @@ This runbook covers the low-latency live scheduler path for HK temperature marke
 3. Generate the concrete live evidence command list for the target market before running any live-money command:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-readiness-checklist --label <label> --side <YES-or-NO> --size-usd <minimum-size> --date <YYYY-MM-DD> --market-kind <highest-or-lowest> --scheduler-ticks 3
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-readiness-checklist --label <label> --side <YES-or-NO> --size-usd <minimum-size> --date <YYYY-MM-DD> --market-kind <highest-or-lowest> --scheduler-ticks 3
 ```
 
 Archive this output with the scheduler logs. It is read-only and does not touch the database.
@@ -22,7 +22,7 @@ The checklist includes the real-account kill-switch verification sequence, a cap
 4. Run a no-trade live network smoke to confirm both scheduler-owned WebSocket workers can start:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-network-smoke --live --seconds 10 --require-connected
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-network-smoke --live --seconds 10 --require-connected
 ```
 
 Expected output includes `live network smoke websocket_all_running=True`, at least two reported clients, per-client `connected_once=True` lines, and `live network smoke connected_once_all=True`; the command exits `0` only when runtime liveness, market/user client count, and connection evidence pass. This command starts and stops the market/user WebSocket runtime but does not run trading decisions.
@@ -30,7 +30,7 @@ Expected output includes `live network smoke websocket_all_running=True`, at lea
 5. Run a no-trade live auth smoke to confirm CLOB credentials, signer/funder addresses, balance, and allowance:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-auth-smoke --live
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-auth-smoke --live
 ```
 
 Expected output includes `auth ok=True`, `required_balance_usd=...`, `allowance_ok=True`, signer/funder addresses, and exits `0`. This command performs preflight checks only and does not place orders.
@@ -38,13 +38,13 @@ Expected output includes `auth ok=True`, `required_balance_usd=...`, `allowance_
 6. Confirm there is no emergency entry block unless intentional:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch
 ```
 
 7. Start the live scheduler:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live --verbose
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live --verbose
 ```
 
 Expected startup behavior:
@@ -70,13 +70,13 @@ After stopping, inspect recent live orders and risk events from the dashboard or
 To block new live entries while still allowing exit/reconcile workflows:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --block-new-entries
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --block-new-entries
 ```
 
 To allow entries again after the issue is understood:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --allow-new-entries
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --allow-new-entries
 ```
 
 ## Cancel All Open CLOB Orders
@@ -84,7 +84,7 @@ PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kil
 Use this when submitted order state is ambiguous or when shutting down under market stress:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-cancel-all --live --yes-i-understand
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-cancel-all --live --yes-i-understand
 ```
 
 Then run reconciliation.
@@ -94,7 +94,7 @@ Then run reconciliation.
 Use reconciliation after cancel-all, restart, WebSocket reconnect, or any suspected state drift:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-reconcile --live
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-reconcile --live
 ```
 
 Expected behavior:
@@ -110,7 +110,7 @@ Expected behavior:
 2. Disable new entries:
 
 ```bash
-PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --block-new-entries
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch --block-new-entries
 ```
 
 3. Cancel all open CLOB orders if submitted state is ambiguous.

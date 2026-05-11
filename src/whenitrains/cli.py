@@ -2497,7 +2497,7 @@ def _manifest_value(manifest: str, key: str) -> str | None:
 def _render_live_readiness_checklist(args, db_path: Path) -> str:
     base = [
         "PYTHONPATH=src",
-        "python3",
+        ".venv/bin/python",
         "-m",
         "whenitrains.cli",
         "--db",
