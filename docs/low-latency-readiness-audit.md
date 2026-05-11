@@ -16,9 +16,9 @@ Local implementation is substantially complete and covered by targeted automated
 - Production p50/p95/p99 evidence for DB-commit-to-decision, decision-to-submit, submit-to-fill/reject, and local-vs-CLOB drift.
 - Real-account kill-switch and settlement validation against actual CLOB/onchain state.
 
-The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT after the drift-archive smoke check. Both the sandboxed request and the approved LAN retry timed out after 8 seconds.
+The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT after the live concurrency checklist update. The sandboxed request timed out after 8 seconds, and the approved LAN retry failed immediately with connection refused.
 
-`low-latency-readiness-db-audit` inspected `data/whenitrains.sqlite3` read-only on 2026-05-11 HKT and was rechecked after adding drift-scan latency evidence. It found historical HKO and orderbook data, but no production readiness evidence yet: zero required latency-stage pairs, zero timed HKO `raw_snapshots` rows with `fetch_started_at_utc` and `response_elapsed_ms`, zero WebSocket orderbook snapshots, zero paper decisions carrying `orderbook_state_age_seconds`, zero manual live buy/sell orders, zero reconciled or settlement live orders, zero live user events or applied user trades, and zero live network/auth/scheduler/kill-switch/drift/settlement-validation risk-event records.
+`low-latency-readiness-db-audit` inspected `data/whenitrains.sqlite3` read-only on 2026-05-11 HKT and was rechecked after the roadmap endpoint status refresh. It found 22,372 historical HKO raw snapshots and 637,810 orderbook snapshots, but no production readiness evidence yet: zero required latency-stage pairs, zero timed HKO `raw_snapshots` rows with `fetch_started_at_utc` and `response_elapsed_ms`, zero WebSocket orderbook snapshots, zero paper decisions carrying `orderbook_state_age_seconds`, zero manual live buy/sell orders, zero reconciled or settlement live orders, zero live user events or applied user trades, and zero live network/auth/scheduler/kill-switch/drift/settlement-validation risk-event records.
 
 ## Prompt-To-Artifact Checklist
 
@@ -128,7 +128,7 @@ PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.t
 git diff --check
 ```
 
-All passed. The combined roadmap verification ran 366 tests under tracemalloc after adding live CLOB drift-scan latency evidence and archive coverage, and the prior unclosed-connection warnings are no longer present.
+All passed. The combined roadmap verification ran 367 tests under tracemalloc after the compact fast-event latency log detail update, and `git diff --check` passed.
 
 ## Next Steps
 
