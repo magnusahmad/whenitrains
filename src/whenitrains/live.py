@@ -331,7 +331,7 @@ class PolymarketClobClient:
         except ImportError as exc:
             raise LiveTradingError("py-clob-client-v2 order types unavailable") from exc
         options = self._order_options(token_id)
-        response = self._client.create_and_post_order(
+        signed = self._client.create_order(
             order_args=OrderArgs(
                 token_id=token_id,
                 price=price,
@@ -342,9 +342,8 @@ class PolymarketClobClient:
                 tick_size=options.tick_size,
                 neg_risk=options.neg_risk,
             ),
-            order_type=OrderType.FAK,
         )
-        return dict(response)
+        return dict(self._client.post_order(signed, OrderType.FAK))
 
     def _post_v2_market_buy(self, token_id: str, price: float, size_usd: float) -> dict:
         try:
@@ -360,7 +359,7 @@ class PolymarketClobClient:
         amount = _floor_decimal(size_usd, "0.01")
         if amount <= 0:
             raise LiveTradingError("buy amount rounds below one cent")
-        response = self._client.create_and_post_market_order(
+        signed = self._client.create_market_order(
             order_args=MarketOrderArgs(
                 token_id=token_id,
                 amount=amount,
@@ -372,9 +371,8 @@ class PolymarketClobClient:
                 tick_size=options.tick_size,
                 neg_risk=options.neg_risk,
             ),
-            order_type=OrderType.FAK,
         )
-        return dict(response)
+        return dict(self._client.post_order(signed, OrderType.FAK))
 
     def _order_options(self, token_id: str) -> SimpleNamespace:
         tick_size = self._get_tick_size(token_id)

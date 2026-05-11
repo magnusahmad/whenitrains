@@ -129,10 +129,32 @@ class MarketMetadataClient:
 
 
 class V2MarketBuyClient(MarketMetadataClient):
-    def create_and_post_market_order(self, order_args, options, order_type):
+    def create_market_order(self, order_args, options):
         self.order_args = order_args
         self.order_options = options
+        return {"signed": "market-order"}
+
+    def post_order(self, signed, order_type):
+        self.signed_order = signed
         self.order_type = order_type
+        return {"orderID": "order-1", "status": "matched"}
+
+
+class V2SplitOrderClient(MarketMetadataClient):
+    def __init__(self):
+        self.created_orders = []
+        self.posted_orders = []
+
+    def create_market_order(self, order_args, options):
+        self.created_orders.append(("market", order_args, options))
+        return {"signed": "market-order"}
+
+    def create_order(self, order_args, options):
+        self.created_orders.append(("limit", order_args, options))
+        return {"signed": "limit-order"}
+
+    def post_order(self, signed, order_type):
+        self.posted_orders.append((signed, order_type))
         return {"orderID": "order-1", "status": "matched"}
 
 
@@ -580,6 +602,38 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(client._client.order_args.order_type, "FAK")
         self.assertEqual(client._client.order_options.tick_size, "0.001")
         self.assertTrue(client._client.order_options.neg_risk)
+
+    def test_v2_orders_use_split_create_and_post_path(self):
+        fake_module = types.SimpleNamespace(
+            MarketOrderArgs=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            OrderArgs=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            PartialCreateOrderOptions=lambda **kwargs: types.SimpleNamespace(**kwargs),
+            OrderType=types.SimpleNamespace(FAK="FAK"),
+            Side=types.SimpleNamespace(BUY="BUY", SELL="SELL"),
+        )
+        client = PolymarketClobClient.__new__(PolymarketClobClient)
+        client._client = V2SplitOrderClient()
+        client._signature_type = 3
+
+        with patch.dict("sys.modules", {"py_clob_client_v2": fake_module}):
+            buy_response = client._post_v2_market_buy("yes-token", 0.47, 5.009)
+            sell_response = client._post_v2_order("yes-token", 0.46, 10.0, "SELL")
+
+        self.assertEqual(buy_response["orderID"], "order-1")
+        self.assertEqual(sell_response["orderID"], "order-1")
+        self.assertEqual(
+            [kind for kind, _args, _options in client._client.created_orders],
+            ["market", "limit"],
+        )
+        self.assertEqual(
+            client._client.posted_orders,
+            [({"signed": "market-order"}, "FAK"), ({"signed": "limit-order"}, "FAK")],
+        )
+        market_args = client._client.created_orders[0][1]
+        limit_args = client._client.created_orders[1][1]
+        self.assertEqual(market_args.order_type, "FAK")
+        self.assertEqual(limit_args.side, "SELL")
+        self.assertEqual(limit_args.size, 10.0)
 
     def test_floor_decimal_avoids_float_rounding_up(self):
         self.assertEqual(_floor_decimal(5.009, "0.01"), 5.0)
