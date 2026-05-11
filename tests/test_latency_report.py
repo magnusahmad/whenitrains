@@ -912,6 +912,52 @@ class LatencyReportTests(unittest.TestCase):
                 stdout.getvalue(),
             )
 
+    def test_low_latency_verify_evidence_archive_fails_db_audit_missing_list_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            path = output_dir / "readiness_db_audit.txt"
+            text = path.read_text()
+            path.write_text(
+                text.replace("latency_trace_events=1", "latency_trace_events=0")
+                .replace(
+                    "latency_submit_to_fill_pairs=1",
+                    "latency_submit_to_fill_pairs=0",
+                )
+                .replace(
+                    "readiness_db_audit=evidence_present\n",
+                    (
+                        "missing_evidence=latency_trace_events\n"
+                        "readiness_db_audit=missing_evidence\n"
+                    ),
+                )
+            )
+            manifest_lines = (output_dir / "manifest.txt").read_text().splitlines()
+            updated_manifest = []
+            for line in manifest_lines:
+                if line.startswith("sha256 readiness_db_audit.txt="):
+                    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                    updated_manifest.append(f"sha256 readiness_db_audit.txt={digest}")
+                else:
+                    updated_manifest.append(line)
+            (output_dir / "manifest.txt").write_text("\n".join(updated_manifest) + "\n")
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                "evidence archive file malformed: readiness_db_audit.txt",
+                stdout.getvalue(),
+            )
+
     def test_low_latency_verify_evidence_archive_fails_malformed_missing_gates(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp) / "evidence"

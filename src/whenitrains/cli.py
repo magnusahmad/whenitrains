@@ -1935,8 +1935,8 @@ def _readiness_db_audit_report_content_valid(text: str) -> bool:
     if not missing_evidence:
         return False
     observed_missing = missing_evidence.split(",")
-    allowed_missing = set(required_evidence_keys)
-    return all(key in allowed_missing for key in observed_missing)
+    expected_missing = [key for key in required_evidence_keys if counts[key] <= 0]
+    return observed_missing == expected_missing
 
 
 def _readiness_db_audit_status(text: str) -> str | None:
