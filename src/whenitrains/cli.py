@@ -2511,20 +2511,63 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
                 "details_json like '%orderbook_state_age_seconds%'",
             ),
             "live_orders": _read_only_count(db, "live_orders"),
+            "manual_live_buy_orders": _read_only_count_where(
+                db,
+                "live_orders",
+                (
+                    "event_type = 'manual_live' and action = 'BUY' "
+                    "and status = 'filled' "
+                    "and (coalesce(fill_size_usd, 0) > 0 or coalesce(fill_shares, 0) > 0)"
+                ),
+            ),
+            "manual_live_sell_orders": _read_only_count_where(
+                db,
+                "live_orders",
+                (
+                    "event_type = 'manual_live' and action = 'SELL' "
+                    "and status = 'filled' "
+                    "and (coalesce(fill_size_usd, 0) > 0 or coalesce(fill_shares, 0) > 0)"
+                ),
+            ),
+            "live_reconciled_orders": _read_only_count_where(
+                db,
+                "live_orders",
+                (
+                    "reconciled_at_utc is not null "
+                    "and length(trim(coalesce(clob_order_id, ''))) > 0 "
+                    "and length(trim(coalesce(raw_reconcile_json, ''))) > 0"
+                ),
+            ),
             "live_user_events": _read_only_count(db, "live_user_events"),
-            "risk_event_smoke_records": _read_only_count_where(
+            "live_network_smoke_records": _read_only_count_where(
                 db,
                 "risk_events",
-                (
-                    "event_type in ("
-                    "'live_network_smoke_ok', 'live_network_smoke_failed', "
-                    "'live_auth_smoke_ok', 'live_auth_smoke_failed', "
-                    "'live_scheduler_smoke_ok', 'live_scheduler_smoke_failed', "
-                    "'live_kill_switch_allowed', 'live_kill_switch_blocked', "
-                    "'live_clob_drift_scan_clear', 'live_clob_drift_scan_drift', "
-                    "'live_settlement_validation_ok'"
-                    ")"
-                ),
+                "event_type in ('live_network_smoke_ok', 'live_network_smoke_failed')",
+            ),
+            "live_auth_smoke_records": _read_only_count_where(
+                db,
+                "risk_events",
+                "event_type in ('live_auth_smoke_ok', 'live_auth_smoke_failed')",
+            ),
+            "live_scheduler_smoke_records": _read_only_count_where(
+                db,
+                "risk_events",
+                "event_type in ('live_scheduler_smoke_ok', 'live_scheduler_smoke_failed')",
+            ),
+            "live_kill_switch_verification_records": _read_only_count_where(
+                db,
+                "risk_events",
+                "event_type in ('live_kill_switch_allowed', 'live_kill_switch_blocked')",
+            ),
+            "live_clob_drift_scan_records": _read_only_count_where(
+                db,
+                "risk_events",
+                "event_type in ('live_clob_drift_scan_clear', 'live_clob_drift_scan_drift')",
+            ),
+            "live_settlement_validation_records": _read_only_count_where(
+                db,
+                "risk_events",
+                "event_type = 'live_settlement_validation_ok'",
             ),
         }
     finally:
@@ -2535,8 +2578,16 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
         "websocket_orderbook_snapshots",
         "paper_decisions_with_orderbook_age",
         "live_orders",
+        "manual_live_buy_orders",
+        "manual_live_sell_orders",
+        "live_reconciled_orders",
         "live_user_events",
-        "risk_event_smoke_records",
+        "live_network_smoke_records",
+        "live_auth_smoke_records",
+        "live_scheduler_smoke_records",
+        "live_kill_switch_verification_records",
+        "live_clob_drift_scan_records",
+        "live_settlement_validation_records",
     ]
     ok = all(counts[key] > 0 for key in required_evidence_keys)
     lines = [

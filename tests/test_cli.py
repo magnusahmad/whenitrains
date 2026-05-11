@@ -543,6 +543,15 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("hko_timed_raw_snapshots=0", text)
             self.assertIn("websocket_orderbook_snapshots=0", text)
             self.assertIn("live_orders=0", text)
+            self.assertIn("manual_live_buy_orders=0", text)
+            self.assertIn("manual_live_sell_orders=0", text)
+            self.assertIn("live_reconciled_orders=0", text)
+            self.assertIn("live_network_smoke_records=0", text)
+            self.assertIn("live_auth_smoke_records=0", text)
+            self.assertIn("live_scheduler_smoke_records=0", text)
+            self.assertIn("live_kill_switch_verification_records=0", text)
+            self.assertIn("live_clob_drift_scan_records=0", text)
+            self.assertIn("live_settlement_validation_records=0", text)
             self.assertIn("readiness_db_audit=missing_evidence", text)
 
     def test_low_latency_readiness_db_audit_passes_when_evidence_counts_exist(self):
@@ -607,9 +616,25 @@ class CliDiscoveryTests(unittest.TestCase):
                 status="filled",
                 event_type="manual_live",
                 event_key="manual_live_buy:yes25",
+                clob_order_id="clob-buy-1",
+                raw_reconcile={"id": "clob-buy-1", "status": "filled"},
                 fill_price=0.45,
                 fill_size_usd=5.0,
                 fill_shares=11.1,
+            )
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="YES",
+                action="SELL",
+                status="filled",
+                event_type="manual_live",
+                event_key="manual_live_sell:yes25",
+                clob_order_id="clob-sell-1",
+                raw_reconcile={"id": "clob-sell-1", "status": "filled"},
+                fill_price=0.50,
+                fill_size_usd=5.0,
+                fill_shares=10.0,
             )
             db.execute(
                 """
@@ -639,6 +664,36 @@ class CliDiscoveryTests(unittest.TestCase):
                 "info",
                 {"all_running": True, "connected_once_all": True},
             )
+            store_risk_event(
+                db,
+                "live_auth_smoke_ok",
+                "info",
+                {"signer_address": "0xsigner", "allowance_ok": True},
+            )
+            store_risk_event(
+                db,
+                "live_scheduler_smoke_ok",
+                "info",
+                {"ticks": 3, "websockets_enabled": True},
+            )
+            store_risk_event(
+                db,
+                "live_kill_switch_allowed",
+                "info",
+                {"block_new_entries": False, "exit_on_kill_switch": False},
+            )
+            store_risk_event(
+                db,
+                "live_clob_drift_scan_clear",
+                "info",
+                {"drift_count": 0},
+            )
+            store_risk_event(
+                db,
+                "live_settlement_validation_ok",
+                "info",
+                {"live_order_id": 99, "reference": "clob-reference"},
+            )
             db.close()
             stdout = StringIO()
 
@@ -657,9 +712,17 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("hko_timed_raw_snapshots=1", text)
             self.assertIn("websocket_orderbook_snapshots=1", text)
             self.assertIn("paper_decisions_with_orderbook_age=1", text)
-            self.assertIn("live_orders=1", text)
+            self.assertIn("live_orders=2", text)
+            self.assertIn("manual_live_buy_orders=1", text)
+            self.assertIn("manual_live_sell_orders=1", text)
+            self.assertIn("live_reconciled_orders=2", text)
             self.assertIn("live_user_events=1", text)
-            self.assertIn("risk_event_smoke_records=1", text)
+            self.assertIn("live_network_smoke_records=1", text)
+            self.assertIn("live_auth_smoke_records=1", text)
+            self.assertIn("live_scheduler_smoke_records=1", text)
+            self.assertIn("live_kill_switch_verification_records=1", text)
+            self.assertIn("live_clob_drift_scan_records=1", text)
+            self.assertIn("live_settlement_validation_records=1", text)
             self.assertIn("readiness_db_audit=evidence_present", text)
 
     def test_live_kill_switch_records_block_and_allow_verification(self):
