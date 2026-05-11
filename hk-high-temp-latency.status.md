@@ -680,6 +680,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 compact latency event detail pass: tightened `compact_latency_event_line` so scheduler-drained fast-event logs include forecast raw max/min changes and market status transitions in addition to actual transition details. Verified red/green with focused `tests.test_low_latency.LowLatencyReadinessTests` formatter tests, then ran `PYTHONPATH=src python3 -m unittest tests.test_low_latency tests.test_scheduler` passing 46 tests and `git diff --check` passing.
 
+2026-05-11 roadmap endpoint status refresh: updated `docs/low-latency-readiness-roadmap.md` so the current live-log endpoint blocker matches the latest retry result: sandbox timeout and approved LAN connection refused.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
