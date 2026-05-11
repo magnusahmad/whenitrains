@@ -65,10 +65,11 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - Active ladder metadata precomputes token sides, book metadata, held positions, and remaining budgets.
 - Actual-cross, actual low-cross, forecast-change, forecast-value, forecast-exit, and open-position exit paths use narrow handlers and planned candidate actions.
 - `ExecutionScheduler` preserves deterministic ordering for conflicting token/position/risk keys.
+- Runner hot paths route candidates through the execution-scheduler bridge, but execute in SQLite-safe single-worker mode locally because the active SQLite connection is not thread-shareable.
 - Fake-clock live benchmark verifies decision-to-submit under 100 ms excluding network.
 - Evidence: `src/whenitrains/ladder_metadata.py`, `src/whenitrains/candidate_planner.py`, `src/whenitrains/execution_scheduler.py`, `src/whenitrains/runner.py`.
 - Tests: `tests.test_ladder_metadata`, `tests.test_candidate_planner`, `tests.test_execution_scheduler`, `tests.test_runner`, focused live benchmark.
-- Missing: production CPU/database timing evidence on live hardware.
+- Missing: production CPU/database timing evidence on live hardware and live-account proof that independent CLOB candidates can progress concurrently without unsafe SQLite connection sharing.
 
 ### M4: User WebSocket Reconciliation
 

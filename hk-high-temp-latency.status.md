@@ -670,6 +670,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-drift-archive live log endpoint retry: sandboxed and approved LAN `curl -L --max-time 8 http://192.168.1.23:8765/` both timed out after 8 seconds. Live/account evidence capture remains blocked on endpoint availability.
 
+2026-05-11 M3 concurrency audit note: rechecked runner integration for the roadmap's independent-candidate concurrency requirement. `ExecutionScheduler` itself has unit coverage for concurrent independent candidates and deterministic serialization of conflicts, and runner hot paths build `PlannedCandidateAction` objects through the candidate bridge. Actual runner execution remains `max_workers=1` in local code because the active SQLite connection is not thread-shareable; live-account proof of safe independent CLOB candidate concurrency remains a production evidence gap.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
