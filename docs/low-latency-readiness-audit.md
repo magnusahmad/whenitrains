@@ -140,4 +140,4 @@ All passed. The combined roadmap verification ran 368 tests under tracemalloc af
 3. Run `live-auth-smoke --live` with credentials on the live machine.
 4. With explicit approval, run minimum-size manual live buy/sell and kill-switch verification.
 5. Run capped live scheduler, archive logs showing independent candidate concurrency or no independent-candidate opportunity, and collect `latency-report` p50/p95/p99 evidence from the production DB.
-6. Download `live-scheduler.log` into the evidence directory before the archive command, then run `low-latency-archive-evidence --output-dir data/low-latency-evidence/<run-id> --require-evidence` on the production DB and verify it with `low-latency-verify-evidence-archive --input-dir data/low-latency-evidence/<run-id>`.
+6. Provide the capped scheduler log to the archive command with `--live-log-file <path-to-live-scheduler.log>`, run `low-latency-archive-evidence --output-dir data/low-latency-evidence/<run-id> --live-log-file <path-to-live-scheduler.log> --require-evidence` on the production DB, and verify it with `low-latency-verify-evidence-archive --input-dir data/low-latency-evidence/<run-id>`.

@@ -165,13 +165,13 @@ The webhook receives JSON with `title`, `severity`, `details`, and formatted `te
 - At least one resolved-market live settlement row has been validated against CLOB/onchain state and archived.
 - Record the validation with `live-settlement-validate --live --order-id <live-settlement-order-id> --reference <CLOB/onchain-reference>`.
 - Archive capped live scheduler logs showing either independent candidate actions progressing concurrently or that no independent-candidate opportunity occurred during the smoke. The log must include both `live scheduler concurrency evidence ...` and `live scheduler smoke ok ...`; the final archive verifier rejects failed-smoke logs and logs without structured concurrency/no-opportunity evidence.
-- Download the capped scheduler log into the evidence directory:
+- Provide the capped scheduler log to the archive command as an explicit copied-log input:
 
 ```bash
-curl -L -o data/low-latency-evidence/<run-id>/live-scheduler.log http://<live-host>:8765/<log-file-name>
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 low-latency-archive-evidence --output-dir data/low-latency-evidence/<run-id> --live-log-file <path-to-live-scheduler.log> --require-evidence
 ```
 
 - Run `low-latency-readiness-db-audit` read-only before final readiness/archive commands; it should report nonzero evidence counts for latency traces, timed HKO raw snapshots, WebSocket orderbook snapshots, orderbook-age decisions, live orders, live user events, and risk-event smoke records.
 - `low-latency-readiness-report --require-evidence` has exited `0` and been archived with scheduler logs after any capped live readiness run.
-- Archive report artifacts with `low-latency-archive-evidence --output-dir data/low-latency-evidence/<run-id> --require-evidence`; the archive includes the read-only DB audit output alongside latency, HKO source timing, and readiness reports.
+- Archive report artifacts with `low-latency-archive-evidence --output-dir data/low-latency-evidence/<run-id> --live-log-file <path-to-live-scheduler.log> --require-evidence`; the archive copies the provided scheduler log to `live-scheduler.log` and includes the read-only DB audit output alongside latency, HKO source timing, and readiness reports.
 - Verify archived artifacts with `low-latency-verify-evidence-archive --input-dir data/low-latency-evidence/<run-id>`.
