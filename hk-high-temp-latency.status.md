@@ -838,6 +838,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live evidence handoff doc: added `docs/low-latency-live-evidence-handoff.md`, a concise non-LAN operator handoff for completing the remaining readiness evidence on the live machine. It records the live inputs, generated checklist command, copied-log archive command, final verifier command, and exact passing evidence categories required before the roadmap can be considered complete.
 
+2026-05-11 audit handoff cross-reference: updated `docs/low-latency-readiness-audit.md` next steps to point operators to `docs/low-latency-live-evidence-handoff.md` as the first live-machine evidence procedure.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

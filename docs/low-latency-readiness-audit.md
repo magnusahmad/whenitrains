@@ -147,7 +147,7 @@ The refreshed audit does not change completion status: all remaining missing ite
 
 ## Next Steps
 
-1. Run evidence capture on the live machine, copy logs by a secure channel, or provide a reachable log URL via `live-readiness-checklist --live-log-url ...`.
+1. Follow `docs/low-latency-live-evidence-handoff.md` on the live machine, copy logs by a secure channel, or provide a reachable log URL via `live-readiness-checklist --live-log-url ...`.
 2. Run `live-network-smoke --live --require-connected` and capture the logs.
 3. Run `live-auth-smoke --live` with credentials on the live machine.
 4. With explicit approval, run minimum-size manual live buy/sell and kill-switch verification.
