@@ -820,6 +820,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 M0 latency instrumentation re-audit: rechecked roadmap-named timing surfaces against code and tests. HKO fetch timing is stored on raw snapshots as fetch/header/payload/elapsed fields; `latency_trace_events` records DB commit, event detected, decision start/complete, submitted-order CLOB lifecycle, and reject stages; paper decisions can carry `orderbook_state_age_seconds`; readiness/archive commands report and gate the required p50/p95/p99 pairs. Verified focused suites with `test_low_latency.py` passing 11 tests, `test_latency_report.py` passing 119 tests, `test_hko.py` passing 10 tests, and `test_storage.py` passing 13 tests. Production evidence is still absent from `data/whenitrains.sqlite3`.
 
+2026-05-11 M2 WebSocket book-cache re-audit: rechecked subscription payloads, active YES/NO token discovery, market-channel message application for `book`, `price_change`, `best_bid_ask`, and `last_trade_price`, append-only WebSocket snapshot metadata, reconnect seeding, stale-cache rejection, and market WebSocket client status/error handling. Verified `test_orderbook_cache.py` passing 8 tests, `test_market_websocket.py` passing 4 tests, and `test_recorded_fixtures.py` passing 1 test. The remaining M2 exit criteria are real Polymarket market/user WebSocket smoke and observed live orderbook age at submission.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
