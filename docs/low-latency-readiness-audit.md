@@ -18,6 +18,8 @@ Local implementation is substantially complete and covered by targeted automated
 
 The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT after the archive incomplete-manifest verifier fix. The sandboxed request timed out after 8 seconds; the approved LAN retry failed with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 1 ms: Couldn't connect to server`.
 
+A read-only inspection of `data/whenitrains.sqlite3` on 2026-05-11 HKT found historical HKO and orderbook data, but no production readiness evidence yet: zero `latency_trace_events`, zero timed HKO `raw_snapshots` rows with `fetch_started_at_utc` and `response_elapsed_ms`, zero paper decisions carrying `orderbook_state_age_seconds`, and no live orders, live user events, or risk-event smoke records.
+
 ## Prompt-To-Artifact Checklist
 
 ### M0: Latency Instrumentation First
