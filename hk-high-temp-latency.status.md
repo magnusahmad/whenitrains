@@ -688,6 +688,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 readiness audit status refresh: updated `docs/low-latency-readiness-audit.md` so its endpoint blocker, read-only production DB audit counts, and latest verification section match the current command evidence instead of the earlier drift-scan checkpoint.
 
+2026-05-11 SDK split-order audit: checked the local live CLOB client path for the roadmap's FAK/FOK and pre-built/pre-signed order items. FAK is implemented as the default live order type; no strategy currently selects optional FOK. Local `python3` cannot import `py_clob_client_v2`, so the audit now records the separate create/sign/post path as deferred until the live SDK surface can be verified.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

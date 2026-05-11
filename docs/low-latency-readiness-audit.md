@@ -65,6 +65,8 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - Active ladder metadata precomputes token sides, book metadata, held positions, and remaining budgets.
 - Actual-cross, actual low-cross, forecast-change, forecast-value, forecast-exit, and open-position exit paths use narrow handlers and planned candidate actions.
 - `ExecutionScheduler` preserves deterministic ordering for conflicting token/position/risk keys.
+- Live orders use FAK by default through the CLOB client wrapper, matching the roadmap's immediate-liquidity default; FOK remains optional and is not currently selected for any strategy.
+- The pre-built/pre-signed order path remains deferred: the local environment cannot import `py_clob_client_v2` for SDK surface verification, and the current v2 live path uses SDK `create_and_post_*` calls rather than a separately verified short-lived create/sign/post split.
 - Runner hot paths route candidates through the execution-scheduler bridge, but execute in SQLite-safe single-worker mode locally because the active SQLite connection is not thread-shareable.
 - Fake-clock live benchmark verifies decision-to-submit under 100 ms excluding network.
 - Evidence: `src/whenitrains/ladder_metadata.py`, `src/whenitrains/candidate_planner.py`, `src/whenitrains/execution_scheduler.py`, `src/whenitrains/runner.py`.
