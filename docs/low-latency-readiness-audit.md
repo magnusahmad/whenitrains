@@ -39,7 +39,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - HKO actual ingestion enqueues `aws_actual_transition` events after commit.
 - OCF forecast sample storage enqueues `forecast_sample_changed` events after commit.
 - Polymarket market status updates enqueue `market_resolution_changed` events after commit.
-- Scheduler loops share and drain a low-latency queue before watchdog decisions.
+- Scheduler loops share and drain a low-latency queue before watchdog decisions, and scheduler sleep is interruptible by new low-latency queue arrivals.
 - `FastDecisionWorker` blocks on the queue with a separate SQLite connection.
 - Source events route to narrow handlers and candidate execution preserves event/candidate idempotency.
 - Evidence: `src/whenitrains/low_latency.py`, `src/whenitrains/scheduler.py`, `src/whenitrains/cli.py`, `src/whenitrains/runner.py`.
@@ -127,7 +127,7 @@ PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.t
 git diff --check
 ```
 
-All passed. The combined roadmap verification ran 364 tests under tracemalloc after closing test SQLite handles, and the prior unclosed-connection warnings are no longer present.
+All passed. The combined roadmap verification ran 366 tests under tracemalloc after adding interruptible scheduler sleep for low-latency queue arrivals, and the prior unclosed-connection warnings are no longer present.
 
 ## Next Steps
 

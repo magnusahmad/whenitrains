@@ -178,6 +178,20 @@ class LowLatencyReadinessTests(unittest.TestCase):
         self.assertIn("commit_to_detect_ms=125.0", line)
         self.assertIn("transition=max", line)
 
+    def test_low_latency_queue_wait_wakes_when_event_arrives(self):
+        queue = LowLatencyEventQueue()
+        stop_event = threading.Event()
+
+        queue.put(
+            _alpha_event(
+                kind="aws_actual_transition",
+                event_key="aws_actual_transition:max:2026-05-04:1:25.6->2:26.1",
+            )
+        )
+
+        self.assertTrue(queue.wait_for_event_or_stop(1.0, stop_event))
+        self.assertFalse(queue.empty())
+
     def test_fast_worker_dispatches_forecast_sample_events_to_forecast_handler(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

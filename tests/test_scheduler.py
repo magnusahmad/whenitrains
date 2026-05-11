@@ -749,6 +749,42 @@ HKO,27.3,28.5,24.0
             self.assertEqual(calls, [])
             self.assertIsNone(fast.call_args.kwargs["decision_handler"])
 
+    def test_scheduler_sleep_wakes_on_low_latency_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = self.connect_db(Path(tmp) / "test.db")
+            migrate(db)
+            now = datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT)
+
+            class WakeQueue:
+                def __init__(self):
+                    self.wait_calls = []
+
+                def empty(self):
+                    return True
+
+                def wait_for_event_or_stop(self, timeout, stop_event):
+                    self.wait_calls.append(timeout)
+                    stop_event.set()
+                    return False
+
+            queue = WakeQueue()
+
+            with redirect_stdout(StringIO()):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: "",
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=lambda target: None,
+                    low_latency_event_queue=queue,
+                    max_ticks=2,
+                    now_fn=lambda: now,
+                    quiet=True,
+                    base_sleep_seconds=5,
+                )
+
+            self.assertEqual(queue.wait_calls, [5])
+
     def test_scheduler_stops_when_stop_event_is_set(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = self.connect_db(Path(tmp) / "test.db")

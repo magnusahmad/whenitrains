@@ -11,7 +11,7 @@ Make `whenitrains` fast enough to beat passive bots that react to the same HKO a
 The local roadmap implementation is substantially complete. See `docs/low-latency-readiness-audit.md` for the prompt-to-artifact checklist and latest verification evidence.
 
 - HKO and Polymarket storage commits can enqueue narrow low-latency events for AWS actual transitions, OCF forecast-sample changes, and market-resolution status changes.
-- Paper scheduler starts a blocking `FastDecisionWorker`; live scheduler drains the shared fast-event queue before watchdog ticks while keeping live-client ownership inside the scheduler thread.
+- Paper scheduler starts a blocking `FastDecisionWorker`; live scheduler drains the shared fast-event queue before watchdog ticks, and scheduler sleep is interrupted by new queue arrivals while live-client ownership stays inside the scheduler thread.
 - Live execution can use a scheduler-owned Polymarket WebSocket orderbook cache and fails closed when a configured cache is stale or missing.
 - Market and user WebSocket clients, live runtime ownership, authenticated user-event storage/application, pending-order reconciliation, sellable-balance drift repair/freeze, and resolved-market local settlement are implemented with fixture and scheduler tests.
 - Candidate planning, ladder metadata, and execution scheduling are wired into actual-cross, lowest-temperature actual-cross, forecast-change, forecast-value, forecast-exit, and open-position exit paths.

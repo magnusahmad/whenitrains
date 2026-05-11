@@ -410,7 +410,13 @@ def run_scheduled_paper_loop(
                 not scheduler_stop.is_set()
                 and (max_ticks is None or tick < max_ticks)
             ):
-                scheduler_stop.wait(base_sleep_seconds)
+                if low_latency_event_queue is not None:
+                    low_latency_event_queue.wait_for_event_or_stop(
+                        base_sleep_seconds,
+                        scheduler_stop,
+                    )
+                else:
+                    scheduler_stop.wait(base_sleep_seconds)
     except KeyboardInterrupt:
         scheduler_stop.set()
         print(f"{output_label} stopping", flush=True)

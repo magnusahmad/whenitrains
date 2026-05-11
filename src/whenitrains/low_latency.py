@@ -41,13 +41,16 @@ class LowLatencyEventQueue:
     def __init__(self) -> None:
         self._queue: queue.Queue[AlphaEvent] = queue.Queue()
         self._seen_keys: set[str] = set()
+        self._condition = threading.Condition()
 
     def put(self, event: AlphaEvent) -> bool:
-        if event.event_key in self._seen_keys:
-            return False
-        self._seen_keys.add(event.event_key)
-        self._queue.put(event)
-        return True
+        with self._condition:
+            if event.event_key in self._seen_keys:
+                return False
+            self._seen_keys.add(event.event_key)
+            self._queue.put(event)
+            self._condition.notify_all()
+            return True
 
     def get_nowait(self) -> AlphaEvent:
         return self._queue.get_nowait()
@@ -57,6 +60,24 @@ class LowLatencyEventQueue:
 
     def empty(self) -> bool:
         return self._queue.empty()
+
+    def wait_for_event_or_stop(
+        self,
+        timeout: float,
+        stop_event: threading.Event,
+        *,
+        monotonic_fn: Callable[[], float] = time.monotonic,
+    ) -> bool:
+        if not self.empty():
+            return True
+        deadline = monotonic_fn() + max(0.0, timeout)
+        with self._condition:
+            while self.empty() and not stop_event.is_set():
+                remaining = deadline - monotonic_fn()
+                if remaining <= 0:
+                    break
+                self._condition.wait(timeout=min(remaining, 0.1))
+            return not self.empty()
 
 
 class FastDecisionWorker:
