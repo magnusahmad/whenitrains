@@ -634,6 +634,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-readiness-db-audit verification: `PYTHONPATH=src python3 -m unittest tests.test_cli` passed with 30 tests, and `PYTHONTRACEMALLOC=5 PYTHONPATH=src python3 -m unittest tests.test_runner tests.test_live tests.test_cli tests.test_low_latency tests.test_storage tests.test_markets tests.test_orderbook_cache tests.test_recorded_fixtures tests.test_latency_report tests.test_scheduler tests.test_operational_readiness tests.test_alerting tests.test_live_user_stream tests.test_user_websocket tests.test_execution_scheduler tests.test_candidate_planner tests.test_ladder_metadata` passed with 359 tests.
 
+2026-05-11 runbook read-only audit update: updated `docs/low-latency-live-runbook.md` so the return-to-normal checklist explicitly runs `low-latency-readiness-db-audit` before final readiness/archive commands and requires nonzero evidence counts across latency traces, timed HKO raw snapshots, WebSocket orderbook snapshots, orderbook-age decisions, live orders, live user events, and risk-event smoke records.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

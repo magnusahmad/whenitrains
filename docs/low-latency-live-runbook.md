@@ -144,6 +144,7 @@ The webhook receives JSON with `title`, `severity`, `details`, and formatted `te
 - The dashboard live positions, recent live orders, and CLOB state agree.
 - At least one resolved-market live settlement row has been validated against CLOB/onchain state and archived.
 - Record the validation with `live-settlement-validate --live --order-id <live-settlement-order-id> --reference <CLOB/onchain-reference>`.
+- Run `low-latency-readiness-db-audit` read-only before final readiness/archive commands; it should report nonzero evidence counts for latency traces, timed HKO raw snapshots, WebSocket orderbook snapshots, orderbook-age decisions, live orders, live user events, and risk-event smoke records.
 - `low-latency-readiness-report --require-evidence` has exited `0` and been archived with scheduler logs after any capped live readiness run.
 - Archive report artifacts with `low-latency-archive-evidence --output-dir data/low-latency-evidence/<run-id> --require-evidence`.
 - Verify archived artifacts with `low-latency-verify-evidence-archive --input-dir data/low-latency-evidence/<run-id>`.
