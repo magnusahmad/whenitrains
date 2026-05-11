@@ -19,7 +19,7 @@ PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3
 Archive this output with the scheduler logs. It is read-only and does not touch the database. The generated archive command records `live_log_url` in `manifest.txt` when `--live-log-url` is supplied.
 The checklist includes the real-account kill-switch verification sequence, a capped-scheduler log archive reminder for independent-candidate concurrency evidence, and a settlement-validation reminder for the first resolved live market.
 
-4. Start or verify the LAN log publisher before running live evidence commands.
+4. Start or verify the log publisher before running live evidence commands.
 
 On the live machine:
 
@@ -29,15 +29,15 @@ cd ~/whenitrains-live-logs
 python3 -m http.server 8765 --bind 0.0.0.0
 ```
 
-From this workstation:
+From a machine that can reach the live host:
 
 ```bash
-curl -L http://192.168.1.49:8765/
+curl -L http://<live-host>:8765/
 ```
 
-If the live machine is on a different LAN address, pass that address as `--live-log-url` when generating the checklist so the probe and archive download commands match the actual endpoint.
+If this workstation is not on the same LAN as the live machine, run the checklist on the live machine or copy the scheduler log into the evidence directory by another secure channel. When a reachable HTTP endpoint exists, pass it as `--live-log-url` so the probe, archive download command, and `manifest.txt` provenance match the actual source.
 
-The readiness evidence run is not complete unless scheduler logs can be listed, downloaded, and archived from this endpoint.
+The readiness evidence run is not complete unless scheduler logs can be collected, archived as `live-scheduler.log`, and verified with the final evidence bundle.
 
 5. Run a no-trade live network smoke to confirm both scheduler-owned WebSocket workers can start:
 

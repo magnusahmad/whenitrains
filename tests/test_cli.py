@@ -579,7 +579,7 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertIn("mkdir -p ~/whenitrains-live-logs", text)
         self.assertIn("cd ~/whenitrains-live-logs", text)
         self.assertIn("python3 -m http.server 8765 --bind 0.0.0.0", text)
-        self.assertIn("curl -L http://192.168.1.49:8765/", text)
+        self.assertIn("curl -L http://LIVE_LOG_HOST:8765/", text)
         self.assertIn("0b. confirm live config env is loaded before smoke commands", text)
         self.assertIn(
             f'eval "$({command_prefix}live-env-exports --env-file .env)"',
@@ -610,7 +610,7 @@ class CliDiscoveryTests(unittest.TestCase):
         )
         self.assertIn(
             "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
-            "http://192.168.1.49:8765/<log-file-name>",
+            "http://LIVE_LOG_HOST:8765/<log-file-name>",
             text,
         )
         self.assertIn("verify persistent kill-switch against the real account", text)
@@ -660,7 +660,7 @@ class CliDiscoveryTests(unittest.TestCase):
             command_prefix
             + "low-latency-archive-evidence --output-dir "
             "'data/low-latency-evidence/<run-id>' --require-evidence "
-            "--live-log-url http://192.168.1.49:8765/",
+            "--live-log-url http://LIVE_LOG_HOST:8765/",
             text,
         )
         self.assertIn(

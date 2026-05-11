@@ -16,7 +16,7 @@ Local implementation is substantially complete and covered by targeted automated
 - Production p50/p95/p99 evidence for DB-commit-to-decision, decision-to-submit, submit-to-fill/reject, and local-vs-CLOB drift.
 - Real-account kill-switch and settlement validation against actual CLOB/onchain state.
 
-The live log endpoint at `http://192.168.1.49:8765/` was tried on 2026-05-11 HKT after the earlier `.23` endpoint failures. It was reachable earlier, listed scheduler logs, and the latest log `live-scheduler-20260511-071055.log` was re-downloaded for review after it grew to 14,949 lines. The latest sandboxed and approved LAN retries now time out after 8 seconds, so evidence capture is blocked again until a live-log endpoint is reachable. The last downloaded log shows live scheduler startup and repeated decision loops with `buys=0/0 sells=0/0`, but it does not contain the missing live network smoke, auth smoke, manual live-money, settlement, readiness report, successful capped-smoke, or structured scheduler concurrency evidence.
+The live log endpoint at `http://192.168.1.49:8765/` was tried on 2026-05-11 HKT after the earlier `.23` endpoint failures. It was reachable earlier, listed scheduler logs, and the latest log `live-scheduler-20260511-071055.log` was re-downloaded for review after it grew to 14,949 lines. This workstation is no longer on the same LAN as the live machine, so direct LAN log capture is not expected to work; future evidence capture must run on the live machine, copy logs by another secure channel, or use a reachable URL passed through `--live-log-url`. The last downloaded log shows live scheduler startup and repeated decision loops with `buys=0/0 sells=0/0`, but it does not contain the missing live network smoke, auth smoke, manual live-money, settlement, readiness report, successful capped-smoke, or structured scheduler concurrency evidence.
 
 `low-latency-readiness-db-audit` inspected `data/whenitrains.sqlite3` read-only on 2026-05-11 HKT after the no-trade smoke attempts. It found 22,372 historical HKO raw snapshots, 637,810 orderbook snapshots, and one recorded network/auth/scheduler smoke attempt each, but those smoke attempts are failed missing-config evidence rather than passing readiness evidence. Required production evidence is still absent: zero required latency-stage pairs, zero timed HKO `raw_snapshots` rows with `fetch_started_at_utc` and `response_elapsed_ms`, zero usable WebSocket orderbook snapshots with bid/ask/mid and non-empty depth, zero paper decisions carrying `orderbook_state_age_seconds`, zero manual live buy/sell orders, zero reconciled or settlement live orders, zero live user events or applied user trades, and zero kill-switch/drift/settlement-validation risk-event records.
 
@@ -135,7 +135,7 @@ All passed. The combined roadmap verification ran 368 tests under tracemalloc af
 
 ## Next Steps
 
-1. Restore a reachable live log endpoint and pass it to `live-readiness-checklist --live-log-url ...` for evidence capture.
+1. Run evidence capture on the live machine, copy logs by a secure channel, or provide a reachable log URL via `live-readiness-checklist --live-log-url ...`.
 2. Run `live-network-smoke --live --require-connected` and capture the logs.
 3. Run `live-auth-smoke --live` with credentials on the live machine.
 4. With explicit approval, run minimum-size manual live buy/sell and kill-switch verification.

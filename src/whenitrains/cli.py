@@ -274,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     live_readiness_checklist.add_argument("--scheduler-ticks", type=int, default=3)
     live_readiness_checklist.add_argument(
         "--live-log-url",
-        default="http://192.168.1.49:8765/",
+        default="http://LIVE_LOG_HOST:8765/",
         help="Base URL for the live scheduler log server.",
     )
     live_buy = sub.add_parser("live-buy")

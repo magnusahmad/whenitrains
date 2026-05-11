@@ -792,6 +792,10 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live-log manifest verifier pass: tightened `low-latency-verify-evidence-archive` so optional `live_log_url` manifest metadata must be a valid HTTP(S) URL and cannot appear more than once. Verified red/green with focused verifier tests, `test_latency_report.py` passing 115 tests, focused checklist tests passing 3 tests, and full discovery passing 463 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
 
+2026-05-11 post-live-log-manifest-verifier endpoint retry: retried `curl -L --max-time 8 http://192.168.1.49:8765/` from the sandbox and again with approved LAN access. Both attempts timed out after 8 seconds with no response.
+
+2026-05-11 non-LAN evidence-path update: user confirmed this workstation is no longer on the same LAN as the live machine, so future live-log capture should not retry `192.168.1.49` from here. Updated the checklist default away from the stale `.49` address and revised the runbook, roadmap, and audit so evidence capture is expected to run on the live machine, copy `live-scheduler.log` by another secure channel, or use an explicitly reachable `--live-log-url`. Verified focused checklist tests passing 3 tests, `test_latency_report.py` passing 115 tests, and full discovery passing 463 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

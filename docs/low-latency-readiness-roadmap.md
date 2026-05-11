@@ -26,7 +26,7 @@ Remaining readiness gaps require live-environment evidence rather than more loca
 - Real-account kill-switch and settlement validation.
 - Production p50/p95/p99 evidence for DB commit to decision, decision to submit, submit to fill/reject, and local-vs-CLOB drift.
 
-The live-log endpoint moved to `http://192.168.1.49:8765/` and was reachable earlier on 2026-05-11 HKT, but the latest sandboxed and approved LAN retries timed out after 8 seconds. The last downloaded log, `live-scheduler-20260511-071055.log`, shows live scheduler startup and repeated decision loops with no buys or sells, but the remaining live network smoke, auth smoke, manual-money, settlement, and production readiness report evidence is still not captured. `live-readiness-checklist --live-log-url ...` now allows the operator to generate evidence commands for whichever LAN endpoint is currently serving the logs.
+The live-log endpoint moved to `http://192.168.1.49:8765/` and was reachable earlier on 2026-05-11 HKT, but this workstation is no longer on the same LAN as the live machine. The last downloaded log, `live-scheduler-20260511-071055.log`, shows live scheduler startup and repeated decision loops with no buys or sells, but the remaining live network smoke, auth smoke, manual-money, settlement, and production readiness report evidence is still not captured. `live-readiness-checklist --live-log-url ...` now allows the operator to generate evidence commands for a reachable log endpoint, while non-LAN runs must collect `live-scheduler.log` on the live machine or copy it into the evidence directory by another secure channel.
 
 ## Research Findings
 
