@@ -382,6 +382,14 @@ class LatencyReportTests(unittest.TestCase):
                 "evidence archive file malformed: readiness_report.txt",
                 stdout.getvalue(),
             )
+            self.assertNotIn(
+                "evidence archive manifest entry malformed: all_gates_passed=False",
+                stdout.getvalue(),
+            )
+            self.assertNotIn(
+                "evidence archive manifest entry malformed: missing_gates=",
+                stdout.getvalue(),
+            )
 
     def test_low_latency_verify_evidence_archive_fails_missing_manifest_header(self):
         with tempfile.TemporaryDirectory() as tmp:

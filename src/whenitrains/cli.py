@@ -2318,6 +2318,14 @@ def _manifest_file_list(manifest: str) -> list[str]:
 def _malformed_manifest_file_lines(manifest: str) -> list[str]:
     malformed: list[str] = []
     in_files_section = False
+    file_section_metadata_keys = {
+        "created_at_utc",
+        "db_path",
+        "hko_endpoint_contains",
+        "hko_limit",
+        "all_gates_passed",
+        "missing_gates",
+    }
     for line in manifest.splitlines():
         if line == "files:":
             in_files_section = True
@@ -2327,6 +2335,10 @@ def _malformed_manifest_file_lines(manifest: str) -> list[str]:
             continue
         if not in_files_section or not line.strip():
             continue
+        if "=" in line:
+            key = line.split("=", 1)[0]
+            if key in file_section_metadata_keys:
+                continue
         if not line.startswith("- ") or not line[2:].strip():
             malformed.append(line)
     return malformed
