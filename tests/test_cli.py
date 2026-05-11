@@ -513,6 +513,10 @@ class CliDiscoveryTests(unittest.TestCase):
             text,
         )
         self.assertIn(
+            "log must include live scheduler concurrency evidence and live scheduler smoke ok",
+            text,
+        )
+        self.assertIn(
             "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
             "http://192.168.1.49:8765/<log-file-name>",
             text,

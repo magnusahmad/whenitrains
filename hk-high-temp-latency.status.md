@@ -758,6 +758,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-scheduler-concurrency-evidence full verification: `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passed with 455 tests.
 
+2026-05-11 scheduler log operator-instruction pass: tightened `live-readiness-checklist` and `docs/low-latency-live-runbook.md` so the capped scheduler log download step explicitly says the archived log must include both `live scheduler concurrency evidence ...` and `live scheduler smoke ok ...`. Verified with `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_cli.py -k live_readiness_checklist`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

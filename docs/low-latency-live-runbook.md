@@ -162,7 +162,7 @@ The webhook receives JSON with `title`, `severity`, `details`, and formatted `te
 - The dashboard live positions, recent live orders, and CLOB state agree.
 - At least one resolved-market live settlement row has been validated against CLOB/onchain state and archived.
 - Record the validation with `live-settlement-validate --live --order-id <live-settlement-order-id> --reference <CLOB/onchain-reference>`.
-- Archive capped live scheduler logs showing either independent candidate actions progressing concurrently or that no independent-candidate opportunity occurred during the smoke.
+- Archive capped live scheduler logs showing either independent candidate actions progressing concurrently or that no independent-candidate opportunity occurred during the smoke. The log must include both `live scheduler concurrency evidence ...` and `live scheduler smoke ok ...`; the final archive verifier rejects failed-smoke logs and logs without structured concurrency/no-opportunity evidence.
 - Download the capped scheduler log into the evidence directory:
 
 ```bash
