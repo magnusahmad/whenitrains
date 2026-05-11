@@ -762,6 +762,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 latest `.49` live log evidence refresh: reran `curl -L --max-time 8 http://192.168.1.49:8765/`; the endpoint is still reachable and the newest listed file is still `live-scheduler-20260511-071055.log`. Re-downloaded it to `/private/tmp/whenitrains-live-scheduler-latest.log`; it now has 14,949 lines and shows scheduler startup plus repeated decision loops with `buys=0/0 sells=0/0`, but `rg` found no `live scheduler concurrency evidence`, `live scheduler smoke ok/failed`, live network/auth smoke, manual live-money, settlement, or readiness report markers. Live/account evidence capture remains incomplete.
 
+2026-05-11 current production readiness gate snapshot: reran read-only `low-latency-readiness-db-audit` and `low-latency-readiness-report --require-evidence` against `data/whenitrains.sqlite3`; both exited `2`. The DB audit still shows 22,372 HKO raw snapshots and 637,810 orderbook snapshots, but zero latency trace rows, zero timed HKO rows, zero usable WebSocket orderbook snapshots, zero orderbook-age decisions, zero live orders/user events, and zero live smoke/auth/scheduler/kill-switch/drift/settlement-validation evidence records. The readiness report still has all production latency pairs at count zero, `timed_response_rows=0`, and all live/account gates missing except the expected clear money/kill-switch state and HKO public-availability cluster gate.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
