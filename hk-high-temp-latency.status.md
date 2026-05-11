@@ -812,6 +812,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 copied-log checklist clarity pass: changed `live-readiness-checklist` so the default no-URL path starts with copied-log evidence instructions instead of HTTP log-publisher setup. The generated checklist now tells the operator to run the capped scheduler on the live machine, copy the log to the evidence runner, and provide it through `--live-log-file <path-to-live-scheduler.log>`; the HTTP server and `curl` commands only appear when `--live-log-url` is explicitly supplied. Verified with focused checklist tests passing 3 tests and a manual checklist render against `data/whenitrains.sqlite3`.
 
+2026-05-11 copied-log checklist full verification: reran `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` after the checklist renderer change; full discovery passed 467 tests.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
