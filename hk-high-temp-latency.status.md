@@ -650,6 +650,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 archive DB-audit missing-list consistency pass: tightened `low-latency-verify-evidence-archive` so `readiness_db_audit=missing_evidence` is valid only when the archived `missing_evidence=` list exactly matches the zero-count required evidence keys in `readiness_db_audit.txt`. Verified with `PYTHONPATH=src python3 -m unittest tests.test_latency_report` passing 106 tests and the full roadmap suite passing 363 tests under tracemalloc.
 
+2026-05-11 readiness DB audit no-create regression: added a CLI regression proving `low-latency-readiness-db-audit` exits `2` and does not create a missing SQLite DB path. Verified with `PYTHONPATH=src python3 -m unittest tests.test_cli` passing 32 tests and the full roadmap suite passing 364 tests under tracemalloc. The full suite still emits existing unclosed-SQLite `ResourceWarning`s from older scheduler/live tests but exits successfully.
+
 2026-05-11 runbook read-only audit update: updated `docs/low-latency-live-runbook.md` so the return-to-normal checklist explicitly runs `low-latency-readiness-db-audit` before final readiness/archive commands and requires nonzero evidence counts across latency traces, timed HKO raw snapshots, WebSocket orderbook snapshots, orderbook-age decisions, live orders, live user events, and risk-event smoke records.
 
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.

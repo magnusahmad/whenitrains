@@ -567,6 +567,27 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("live_settlement_validation_records", text)
             self.assertIn("readiness_db_audit=missing_evidence", text)
 
+    def test_low_latency_readiness_db_audit_does_not_create_missing_database(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "missing.db"
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-db-audit",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertFalse(db_path.exists())
+            self.assertIn("low latency readiness db audit", text)
+            self.assertIn("read_only_open_error=", text)
+            self.assertIn("readiness_db_audit=missing_evidence", text)
+
     def test_low_latency_readiness_db_audit_tolerates_old_schema_columns(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "old.db"
