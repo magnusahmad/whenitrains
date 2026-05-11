@@ -580,8 +580,8 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertIn("cd ~/whenitrains-live-logs", text)
         self.assertIn("python3 -m http.server 8765 --bind 0.0.0.0", text)
         self.assertIn(
-            "copy the capped scheduler log to "
-            "'data/low-latency-evidence/<run-id>/live-scheduler.log'",
+            "provide the capped scheduler log via "
+            "--live-log-file '<path-to-live-scheduler.log>'",
             text,
         )
         self.assertNotIn("curl -L http://LIVE_LOG_HOST:8765/", text)
@@ -613,11 +613,7 @@ class CliDiscoveryTests(unittest.TestCase):
             "log must include live scheduler concurrency evidence and live scheduler smoke ok",
             text,
         )
-        self.assertIn(
-            "cp '<path-to-live-scheduler.log>' "
-            "'data/low-latency-evidence/<run-id>/live-scheduler.log'",
-            text,
-        )
+        self.assertNotIn("cp '<path-to-live-scheduler.log>'", text)
         self.assertIn("verify persistent kill-switch against the real account", text)
         self.assertIn(
             command_prefix + "live-kill-switch --block-new-entries",
@@ -703,16 +699,16 @@ class CliDiscoveryTests(unittest.TestCase):
         text = stdout.getvalue()
         self.assertEqual(exit_code, 0)
         self.assertIn("curl -L http://192.168.1.50:8765/", text)
-        self.assertNotIn("copy the capped scheduler log", text)
+        self.assertNotIn("provide the capped scheduler log", text)
         self.assertIn(
-            "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
+            "curl -L -o /private/tmp/whenitrains-live-scheduler.log "
             "http://192.168.1.50:8765/<log-file-name>",
             text,
         )
         self.assertIn(
             "low-latency-archive-evidence --output-dir "
             "'data/low-latency-evidence/<run-id>' --require-evidence "
-            "--live-log-file '<path-to-live-scheduler.log>' "
+            "--live-log-file /private/tmp/whenitrains-live-scheduler.log "
             "--live-log-url http://192.168.1.50:8765/",
             text,
         )

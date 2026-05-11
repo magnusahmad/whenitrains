@@ -2716,6 +2716,11 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
     live_log_download_url = (
         live_log_url.rstrip("/") + "/<log-file-name>" if live_log_url else None
     )
+    live_log_file = (
+        "/private/tmp/whenitrains-live-scheduler.log"
+        if live_log_url
+        else "<path-to-live-scheduler.log>"
+    )
 
     buy_parts: list[object] = [
         "live-buy",
@@ -2800,7 +2805,7 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         command("low-latency-readiness-db-audit"),
         command("low-latency-readiness-report", "--require-evidence"),
         command(
-            *_archive_evidence_command_parts(live_log_url),
+            *_archive_evidence_command_parts(live_log_file, live_log_url),
         ),
         command(
             "low-latency-verify-evidence-archive",
@@ -2813,8 +2818,7 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         lines.insert(env_index, f"curl -L {live_log_url}")
     else:
         lines[env_index:env_index] = [
-            "copy the capped scheduler log to 'data/low-latency-evidence/<run-id>/live-scheduler.log'",
-            "cp '<path-to-live-scheduler.log>' 'data/low-latency-evidence/<run-id>/live-scheduler.log'",
+            "provide the capped scheduler log via --live-log-file '<path-to-live-scheduler.log>'",
         ]
     smoke_log_index = (
         lines.index("log must include live scheduler concurrency evidence and live scheduler smoke ok")
@@ -2823,20 +2827,23 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
     if live_log_download_url:
         lines.insert(
             smoke_log_index,
-            "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
+            f"curl -L -o {live_log_file} "
             f"{live_log_download_url}",
         )
     return "\n".join(lines)
 
 
-def _archive_evidence_command_parts(live_log_url: str | None) -> list[object]:
+def _archive_evidence_command_parts(
+    live_log_file: str,
+    live_log_url: str | None,
+) -> list[object]:
     parts: list[object] = [
         "low-latency-archive-evidence",
         "--output-dir",
         "data/low-latency-evidence/<run-id>",
         "--require-evidence",
         "--live-log-file",
-        "<path-to-live-scheduler.log>",
+        live_log_file,
     ]
     if live_log_url:
         parts.extend(["--live-log-url", live_log_url])

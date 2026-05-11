@@ -804,6 +804,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 live-log file provenance verifier pass: copied-log evidence archives now record `live_log_file=<path>` in `manifest.txt`, and `low-latency-verify-evidence-archive` rejects blank or duplicate `live_log_file` metadata. Verified red/green with focused manifest provenance tests, `test_latency_report.py` passing 119 tests, focused checklist tests passing 3 tests, and full discovery passing 467 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
 
+2026-05-11 live-log checklist copy-path cleanup: removed the redundant manual `cp` instruction from `live-readiness-checklist`; the archive command now performs the copy via `--live-log-file`. For reachable URL workflows, the checklist downloads to `/private/tmp/whenitrains-live-scheduler.log` and passes that file path to the archive command, avoiding a curl write into a not-yet-created evidence directory. Verified red/green with focused checklist tests, `test_cli.py` passing 37 tests, `test_latency_report.py` passing 119 tests, and full discovery passing 467 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
