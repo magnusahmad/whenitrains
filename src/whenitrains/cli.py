@@ -2638,11 +2638,17 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
         "live_clob_drift_scan_records",
         "live_settlement_validation_records",
     ]
-    ok = all(counts[key] > 0 for key in required_evidence_keys)
+    missing_evidence_keys = [key for key in required_evidence_keys if counts[key] <= 0]
+    ok = not missing_evidence_keys
     lines = [
         "low latency readiness db audit",
         f"db_path={db_path}",
         *[f"{key}={value}" for key, value in counts.items()],
+        *(
+            [f"missing_evidence={','.join(missing_evidence_keys)}"]
+            if missing_evidence_keys
+            else []
+        ),
         f"readiness_db_audit={'evidence_present' if ok else 'missing_evidence'}",
     ]
     return ok, "\n".join(lines)

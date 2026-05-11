@@ -559,6 +559,12 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("live_kill_switch_verification_records=0", text)
             self.assertIn("live_clob_drift_scan_records=0", text)
             self.assertIn("live_settlement_validation_records=0", text)
+            self.assertIn(
+                "missing_evidence=latency_trace_events,"
+                "latency_db_commit_to_decision_started_pairs,",
+                text,
+            )
+            self.assertIn("live_settlement_validation_records", text)
             self.assertIn("readiness_db_audit=missing_evidence", text)
 
     def test_low_latency_readiness_db_audit_tolerates_old_schema_columns(self):
@@ -596,6 +602,7 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("live_settlement_orders=0", text)
             self.assertIn("live_user_trade_applied_events=0", text)
             self.assertIn("live_network_smoke_records=0", text)
+            self.assertIn("missing_evidence=latency_trace_events", text)
             self.assertIn("readiness_db_audit=missing_evidence", text)
 
     def test_low_latency_readiness_db_audit_passes_when_evidence_counts_exist(self):
@@ -832,6 +839,7 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("live_kill_switch_verification_records=1", text)
             self.assertIn("live_clob_drift_scan_records=1", text)
             self.assertIn("live_settlement_validation_records=1", text)
+            self.assertNotIn("missing_evidence=", text)
             self.assertIn("readiness_db_audit=evidence_present", text)
 
     def test_live_kill_switch_records_block_and_allow_verification(self):
