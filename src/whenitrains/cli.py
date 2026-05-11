@@ -966,6 +966,19 @@ def main(argv: list[str] | None = None) -> int:
                 if not preflight.ok:
                     print(f"live preflight failed: {preflight.reason}")
                     return 2
+                balance_usd = getattr(preflight, "balance_usd", None)
+                balance_text = (
+                    f"{float(balance_usd):.4f}" if balance_usd is not None else "n/a"
+                )
+                print(
+                    "live preflight ok "
+                    f"reason={getattr(preflight, 'reason', 'ok')} "
+                    f"balance_usd={balance_text} "
+                    f"allowance_ok={getattr(preflight, 'allowance_ok', None)} "
+                    f"signer_present={bool(getattr(preflight, 'signer_address', None))} "
+                    f"funder_present={bool(getattr(preflight, 'funder_address', None))}",
+                    flush=True,
+                )
                 kill_switch_exit = enforce_live_kill_switch_exits(
                     db,
                     client,

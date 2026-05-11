@@ -256,7 +256,14 @@ class CliDiscoveryTests(unittest.TestCase):
                 patch("whenitrains.cli.PolymarketClobClient", return_value=object()),
                 patch(
                     "whenitrains.cli.preflight_live",
-                    return_value=SimpleNamespace(ok=True, reason="ok"),
+                    return_value=SimpleNamespace(
+                        ok=True,
+                        reason="ok",
+                        balance_usd=42.0,
+                        allowance_ok=True,
+                        signer_address="0xsigner",
+                        funder_address="0xfunder",
+                    ),
                 ),
                 patch(
                     "whenitrains.cli.LiveWebSocketRuntime.for_live_scheduler",
@@ -282,6 +289,11 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             runtime_factory.assert_called_once()
             self.assertEqual(runtime_events, ["start", ("stop", 5)])
+            self.assertIn(
+                "live preflight ok reason=ok balance_usd=42.0000 "
+                "allowance_ok=True signer_present=True funder_present=True",
+                stdout.getvalue(),
+            )
             self.assertIn(
                 "live websocket runtime started all_running=True client_count=2",
                 stdout.getvalue(),
