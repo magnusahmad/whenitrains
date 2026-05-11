@@ -36,6 +36,7 @@ ARCHIVE_REPORT_FILES = [
     "readiness_db_audit.txt",
     "hko_source_timing_report.txt",
     "readiness_report.txt",
+    "live-scheduler.log",
 ]
 
 
@@ -155,6 +156,14 @@ def _archive_report_fixture_content(name: str) -> str:
             "evidence gates:\n"
             f"{gate_lines}\n"
             "live:\n"
+        )
+    if name == "live-scheduler.log":
+        return (
+            "LIVE TRADING scheduler starting\n"
+            "live websocket runtime started all_running=True client_count=2\n"
+            "live-scheduler started\n"
+            "live-scheduler actions=decisions-only buys=0/0 sells=0/0 signals=0\n"
+            "live scheduler smoke ok ticks=1 websockets_enabled=True\n"
         )
     if name.startswith("latency_") and name.endswith(".txt"):
         stage_pair = name[len("latency_") : -len(".txt")].replace("_to_", " -> ")
@@ -297,6 +306,7 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("latency_db_committed_to_decision_started.txt", manifest)
             self.assertIn("sha256 readiness_db_audit.txt=", manifest)
             self.assertIn("sha256 latency_db_committed_to_decision_started.txt=", manifest)
+            self.assertNotIn("live-scheduler.log", manifest)
             db_audit = (output_dir / "readiness_db_audit.txt").read_text()
             self.assertIn("low latency readiness db audit", db_audit)
             self.assertIn("missing_evidence=", db_audit)
@@ -304,6 +314,36 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("low latency readiness report", readiness)
             latency = (output_dir / "latency_db_committed_to_decision_started.txt").read_text()
             self.assertIn("db_committed -> decision_started count=1 p50=0.500s", latency)
+
+    def test_low_latency_archive_evidence_includes_pre_downloaded_scheduler_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            output_dir = Path(tmp) / "evidence"
+            output_dir.mkdir()
+            (output_dir / "live-scheduler.log").write_text(
+                _archive_report_fixture_content("live-scheduler.log")
+            )
+            db = connect(db_path)
+            migrate(db)
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-archive-evidence",
+                        "--output-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            manifest = (output_dir / "manifest.txt").read_text()
+            self.assertIn("- live-scheduler.log", manifest)
+            self.assertIn("sha256 live-scheduler.log=", manifest)
+            self.assertIn(str(output_dir / "live-scheduler.log"), stdout.getvalue())
 
     def test_low_latency_archive_evidence_require_evidence_returns_missing_status_after_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -348,6 +388,35 @@ class LatencyReportTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn("verified low latency evidence archive", stdout.getvalue())
+
+    def test_low_latency_verify_evidence_archive_fails_without_scheduler_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            name = "live-scheduler.log"
+            (output_dir / name).unlink()
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                "\n".join(
+                    line
+                    for line in manifest.splitlines()
+                    if line != f"- {name}" and not line.startswith(f"sha256 {name}=")
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("evidence archive files missing: live-scheduler.log", stdout.getvalue())
 
     def test_low_latency_verify_evidence_archive_does_not_touch_database(self):
         with tempfile.TemporaryDirectory() as tmp:

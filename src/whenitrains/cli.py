@@ -1700,6 +1700,10 @@ def _archive_low_latency_evidence(
     readiness_path.write_text(readiness_report + "\n")
     written.append(readiness_path)
     manifest_lines.append(f"- {readiness_path.name}")
+    scheduler_log_path = output_dir / "live-scheduler.log"
+    if scheduler_log_path.is_file():
+        written.append(scheduler_log_path)
+        manifest_lines.append(f"- {scheduler_log_path.name}")
     manifest_lines.append(f"all_gates_passed={gate_status['all_passed']}")
     if gate_status["missing_gates"]:
         manifest_lines.append("missing_gates=" + ",".join(gate_status["missing_gates"]))
@@ -1726,6 +1730,7 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
         "readiness_db_audit.txt",
         "hko_source_timing_report.txt",
         "readiness_report.txt",
+        "live-scheduler.log",
     ]
     messages: list[str] = []
     if not input_dir.exists() or not input_dir.is_dir():
@@ -1913,10 +1918,23 @@ def _evidence_report_content_valid(name: str, text: str) -> bool:
         return _hko_source_timing_report_content_valid(text)
     if name == "readiness_db_audit.txt":
         return _readiness_db_audit_report_content_valid(text)
+    if name == "live-scheduler.log":
+        return _live_scheduler_log_content_valid(text)
     if name.startswith("latency_") and name.endswith(".txt"):
         pair = name[len("latency_") : -len(".txt")].replace("_to_", " -> ")
         return _latency_report_content_valid(pair, text)
     return False
+
+
+def _live_scheduler_log_content_valid(text: str) -> bool:
+    return (
+        "live-scheduler started" in text
+        and "live-scheduler actions=" in text
+        and (
+            "live scheduler smoke ok " in text
+            or "live scheduler smoke failed " in text
+        )
+    )
 
 
 def _readiness_db_audit_report_content_valid(text: str) -> bool:
