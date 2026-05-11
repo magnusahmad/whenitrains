@@ -694,6 +694,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 readiness audit latest-verification refresh: updated `docs/low-latency-readiness-audit.md` so its latest verification section reports the current 368-test suite after the split-order implementation.
 
+2026-05-11 venv live SDK verification: reran live tests with the repo venv that has `py_clob_client_v2` installed. Direct module-name unittest invocation failed under Python 3.14 because `tests` is not an importable package there, then `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_live.py'` passed 43 tests.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
