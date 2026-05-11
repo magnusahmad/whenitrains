@@ -6,12 +6,14 @@ import hashlib
 import json
 import os
 import shlex
+import sqlite3
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from .backtest import dumps_result_json, render_backtest_result, run_backtest_day
 from .alerting import alert_sink_from_env
@@ -199,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
     readiness_report.add_argument("--hko-endpoint-contains", default="latestReadings")
     readiness_report.add_argument("--hko-limit", type=int, default=200)
     readiness_report.add_argument("--require-evidence", action="store_true")
+    sub.add_parser("low-latency-readiness-db-audit")
     archive_evidence = sub.add_parser("low-latency-archive-evidence")
     archive_evidence.add_argument("--output-dir", required=True)
     archive_evidence.add_argument("--hko-endpoint-contains", default="latestReadings")
@@ -334,6 +337,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "live-readiness-checklist":
         print(_render_live_readiness_checklist(args, db_path))
         return 0
+    if args.command == "low-latency-readiness-db-audit":
+        ok, report = _render_low_latency_readiness_db_audit(db_path)
+        print(report)
+        return 0 if ok else 2
     if args.command == "low-latency-verify-evidence-archive":
         ok, messages = _verify_low_latency_evidence_archive(Path(args.input_dir))
         if ok:
@@ -2452,6 +2459,7 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         command("latency-report", "order_submitted", "fill_confirmed"),
         command("latency-report", "order_submitted", "order_rejected"),
         command("hko-source-timing-report"),
+        command("low-latency-readiness-db-audit"),
         command("low-latency-readiness-report", "--require-evidence"),
         command(
             "low-latency-archive-evidence",
@@ -2466,6 +2474,98 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         ),
     ]
     return "\n".join(lines)
+
+
+def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
+    uri = f"file:{quote(str(db_path.resolve()), safe='/:')}?mode=ro"
+    try:
+        db = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error as exc:
+        return False, "\n".join(
+            [
+                "low latency readiness db audit",
+                f"db_path={db_path}",
+                f"read_only_open_error={exc}",
+                "readiness_db_audit=missing_evidence",
+            ]
+        )
+    try:
+        db.row_factory = sqlite3.Row
+        counts = {
+            "latency_trace_events": _read_only_count(db, "latency_trace_events"),
+            "hko_raw_snapshots": _read_only_count(db, "raw_snapshots"),
+            "hko_timed_raw_snapshots": _read_only_count_where(
+                db,
+                "raw_snapshots",
+                "fetch_started_at_utc is not null and response_elapsed_ms is not null",
+            ),
+            "orderbook_snapshots": _read_only_count(db, "orderbook_snapshots"),
+            "websocket_orderbook_snapshots": _read_only_count_where(
+                db,
+                "orderbook_snapshots",
+                "depth_json like '%polymarket_market_websocket%'",
+            ),
+            "paper_decisions_with_orderbook_age": _read_only_count_where(
+                db,
+                "paper_decisions",
+                "details_json like '%orderbook_state_age_seconds%'",
+            ),
+            "live_orders": _read_only_count(db, "live_orders"),
+            "live_user_events": _read_only_count(db, "live_user_events"),
+            "risk_event_smoke_records": _read_only_count_where(
+                db,
+                "risk_events",
+                (
+                    "event_type in ("
+                    "'live_network_smoke_ok', 'live_network_smoke_failed', "
+                    "'live_auth_smoke_ok', 'live_auth_smoke_failed', "
+                    "'live_scheduler_smoke_ok', 'live_scheduler_smoke_failed', "
+                    "'live_kill_switch_allowed', 'live_kill_switch_blocked', "
+                    "'live_clob_drift_scan_clear', 'live_clob_drift_scan_drift', "
+                    "'live_settlement_validation_ok'"
+                    ")"
+                ),
+            ),
+        }
+    finally:
+        db.close()
+    required_evidence_keys = [
+        "latency_trace_events",
+        "hko_timed_raw_snapshots",
+        "websocket_orderbook_snapshots",
+        "paper_decisions_with_orderbook_age",
+        "live_orders",
+        "live_user_events",
+        "risk_event_smoke_records",
+    ]
+    ok = all(counts[key] > 0 for key in required_evidence_keys)
+    lines = [
+        "low latency readiness db audit",
+        f"db_path={db_path}",
+        *[f"{key}={value}" for key, value in counts.items()],
+        f"readiness_db_audit={'evidence_present' if ok else 'missing_evidence'}",
+    ]
+    return ok, "\n".join(lines)
+
+
+def _read_only_count(db: sqlite3.Connection, table: str) -> int:
+    if not _read_only_table_exists(db, table):
+        return 0
+    return int(db.execute(f"select count(*) from {table}").fetchone()[0])
+
+
+def _read_only_count_where(db: sqlite3.Connection, table: str, where_sql: str) -> int:
+    if not _read_only_table_exists(db, table):
+        return 0
+    return int(db.execute(f"select count(*) from {table} where {where_sql}").fetchone()[0])
+
+
+def _read_only_table_exists(db: sqlite3.Connection, table: str) -> bool:
+    row = db.execute(
+        "select 1 from sqlite_master where type = 'table' and name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
 
 
 def _record_live_clob_drift_scan(

@@ -29,9 +29,12 @@ from whenitrains.storage import (
     connect,
     live_setting_enabled,
     migrate,
+    record_latency_stage,
     store_live_order,
+    store_orderbook,
     store_polymarket_event,
     store_raw_snapshot,
+    store_risk_event,
 )
 
 
@@ -479,6 +482,11 @@ class CliDiscoveryTests(unittest.TestCase):
         )
         self.assertIn(
             "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
+            "low-latency-readiness-db-audit",
+            text,
+        )
+        self.assertIn(
+            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
             "latency-report db_committed decision_completed",
             text,
         )
@@ -509,6 +517,150 @@ class CliDiscoveryTests(unittest.TestCase):
             "'data/low-latency-evidence/<run-id>'",
             text,
         )
+
+    def test_low_latency_readiness_db_audit_reports_missing_evidence_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-db-audit",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("low latency readiness db audit", text)
+            self.assertIn(f"db_path={db_path}", text)
+            self.assertIn("latency_trace_events=0", text)
+            self.assertIn("hko_timed_raw_snapshots=0", text)
+            self.assertIn("websocket_orderbook_snapshots=0", text)
+            self.assertIn("live_orders=0", text)
+            self.assertIn("readiness_db_audit=missing_evidence", text)
+
+    def test_low_latency_readiness_db_audit_passes_when_evidence_counts_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            record_latency_stage(
+                db,
+                "event-1",
+                "db_committed",
+                1.0,
+                event_type="aws_actual_transition",
+            )
+            store_raw_snapshot(
+                db,
+                "hko",
+                "latestReadings",
+                "{}",
+                fetch_started_at_utc="2026-05-11T00:00:00+00:00",
+                headers_received_at_utc="2026-05-11T00:00:00.100000+00:00",
+                payload_received_at_utc="2026-05-11T00:00:00.200000+00:00",
+                response_elapsed_ms=200.0,
+            )
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    token_id="yes25",
+                    bids=[(0.40, 10)],
+                    asks=[(0.45, 10)],
+                    tick_size=0.01,
+                    min_order_size=5.0,
+                ),
+                metadata={"source": "polymarket_market_websocket"},
+            )
+            db.execute(
+                """
+                insert into paper_decisions
+                (created_at_utc, event_type, event_key, outcome_id, label, side,
+                 action, status, reason, details_json)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "2026-05-11T00:00:00+00:00",
+                    "event",
+                    "event-1",
+                    "yes25",
+                    "25",
+                    "YES",
+                    "BUY",
+                    "filled",
+                    "test",
+                    '{"orderbook_state_age_seconds": 0.1}',
+                ),
+            )
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="YES",
+                action="BUY",
+                status="filled",
+                event_type="manual_live",
+                event_key="manual_live_buy:yes25",
+                fill_price=0.45,
+                fill_size_usd=5.0,
+                fill_shares=11.1,
+            )
+            db.execute(
+                """
+                insert into live_user_events
+                (event_id, received_at_utc, event_type, clob_order_id, outcome_id,
+                 status, side, price, size, applied_position_delta, raw_event_json)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "trade-1",
+                    "2026-05-11T00:00:01+00:00",
+                    "trade",
+                    "clob-1",
+                    "yes25",
+                    "MATCHED",
+                    "BUY",
+                    0.45,
+                    11.1,
+                    1,
+                    "{}",
+                ),
+            )
+            db.commit()
+            store_risk_event(
+                db,
+                "live_network_smoke_ok",
+                "info",
+                {"all_running": True, "connected_once_all": True},
+            )
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-db-audit",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn("latency_trace_events=1", text)
+            self.assertIn("hko_timed_raw_snapshots=1", text)
+            self.assertIn("websocket_orderbook_snapshots=1", text)
+            self.assertIn("paper_decisions_with_orderbook_age=1", text)
+            self.assertIn("live_orders=1", text)
+            self.assertIn("live_user_events=1", text)
+            self.assertIn("risk_event_smoke_records=1", text)
+            self.assertIn("readiness_db_audit=evidence_present", text)
 
     def test_live_kill_switch_records_block_and_allow_verification(self):
         with tempfile.TemporaryDirectory() as tmp:
