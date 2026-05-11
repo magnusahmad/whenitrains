@@ -29,7 +29,7 @@ The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-0
 - Event-keyed live buy/sell execution records `order_submitted`, `clob_ack`, `fill_matched`, `fill_confirmed`, and submitted-order terminal rejection/cancellation as `order_rejected`.
 - `latency-report` summarizes p50/p95/p99 between named stages.
 - `low-latency-readiness-report` prints the core latency stage pairs, submitted-order CLOB ack/fill-match/fill-confirm/reject timing, live CLOB drift-scan timing, explicit evidence gates including commit-to-decision-completed, CLOB ack, fill-match, optional submit-to-reject evidence, WebSocket orderbook snapshot, orderbook-age-under-cap, user-channel-event, HKO public-availability fetch clustering, live CLOB drift-scan latency, clear live CLOB drift scan, live-money-state-clear, and kill-switch-clear evidence, live money-state, and HKO source-timing evidence; `--require-evidence` exits nonzero when any measurable local evidence gate is missing.
-- Compact fast-event latency lines are emitted during scheduler drain.
+- Compact fast-event latency lines are emitted during scheduler drain and include event keys, commit-to-detect timing, actual transition details, forecast raw max/min changes, and market status transitions.
 - Evidence: `src/whenitrains/storage.py`, `src/whenitrains/live.py`, `src/whenitrains/low_latency.py`, `src/whenitrains/cli.py`.
 - Tests: `tests.test_low_latency`, `tests.test_latency_report`, `tests.test_recorded_fixtures`, focused live latency tests.
 - Missing: production p50/p95/p99 from live DB rows.

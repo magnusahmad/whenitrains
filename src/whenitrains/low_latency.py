@@ -412,6 +412,17 @@ def compact_latency_event_line(event: AlphaEvent) -> str:
     transition = event.details.get("transition")
     if transition is not None:
         bits.append(f"transition={transition}")
+    for field in (
+        "old_raw_max_c",
+        "new_raw_max_c",
+        "old_raw_min_c",
+        "new_raw_min_c",
+        "previous_status",
+        "new_status",
+    ):
+        value = event.details.get(field)
+        if value is not None:
+            bits.append(f"{field}={value}")
     return " ".join(bits)
 
 

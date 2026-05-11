@@ -678,6 +678,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-live-concurrency-checklist live log endpoint retry: sandboxed `curl -L --max-time 8 http://192.168.1.23:8765/` timed out after 8 seconds; the approved LAN retry failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 1 ms: Couldn't connect to server`. Live/account evidence capture remains blocked on endpoint availability.
 
+2026-05-11 compact latency event detail pass: tightened `compact_latency_event_line` so scheduler-drained fast-event logs include forecast raw max/min changes and market status transitions in addition to actual transition details. Verified red/green with focused `tests.test_low_latency.LowLatencyReadinessTests` formatter tests, then ran `PYTHONPATH=src python3 -m unittest tests.test_low_latency tests.test_scheduler` passing 46 tests and `git diff --check` passing.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

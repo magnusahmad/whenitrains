@@ -179,6 +179,35 @@ class LowLatencyReadinessTests(unittest.TestCase):
         self.assertIn("commit_to_detect_ms=125.0", line)
         self.assertIn("transition=max", line)
 
+    def test_compact_latency_event_line_covers_forecast_and_resolution_events(self):
+        forecast_event = _alpha_event(
+            kind="forecast_sample_changed",
+            event_key="forecast_sample_changed:2026-05-04:1->2",
+            details={"old_raw_max_c": 29.1, "new_raw_max_c": 30.2},
+        )
+        resolution_event = _alpha_event(
+            kind="market_resolution_changed",
+            event_key="market_resolution_changed:2026-05-04:1:active->resolved",
+            details={"previous_status": "active", "new_status": "resolved"},
+        )
+
+        forecast_line = compact_latency_event_line(forecast_event)
+        resolution_line = compact_latency_event_line(resolution_event)
+
+        self.assertIn("latency_event=forecast_sample_changed", forecast_line)
+        self.assertIn("key=forecast_sample_changed:2026-05-04:1->2", forecast_line)
+        self.assertIn("target=2026-05-04", forecast_line)
+        self.assertIn("old_raw_max_c=29.1", forecast_line)
+        self.assertIn("new_raw_max_c=30.2", forecast_line)
+        self.assertIn("latency_event=market_resolution_changed", resolution_line)
+        self.assertIn(
+            "key=market_resolution_changed:2026-05-04:1:active->resolved",
+            resolution_line,
+        )
+        self.assertIn("target=2026-05-04", resolution_line)
+        self.assertIn("previous_status=active", resolution_line)
+        self.assertIn("new_status=resolved", resolution_line)
+
     def test_low_latency_queue_wait_wakes_when_event_arrives(self):
         queue = LowLatencyEventQueue()
         stop_event = threading.Event()
@@ -403,7 +432,7 @@ def _ocf_sample(raw_max_c: float) -> OcfForecastSample:
     )
 
 
-def _alpha_event(kind: str, event_key: str):
+def _alpha_event(kind: str, event_key: str, details: dict | None = None):
     from whenitrains.low_latency import AlphaEvent
 
     return AlphaEvent(
@@ -414,7 +443,7 @@ def _alpha_event(kind: str, event_key: str):
         previous_row_id=1,
         committed_monotonic=100.0,
         detected_monotonic=100.0,
-        details={},
+        details={} if details is None else details,
     )
 
 
