@@ -71,13 +71,13 @@ source .venv/bin/activate
 Install the package in editable mode:
 
 ```bash
-python3 -m pip install -e .
+.venv/bin/python -m pip install -e .
 ```
 
 Run the full unit suite:
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
 ```
 
 Show all CLI commands:
@@ -353,7 +353,7 @@ Recover existing L2 API credentials from the Keychain hot key using the default
 nonce:
 
 ```bash
-PYTHONPATH=src python3 - <<'PY'
+PYTHONPATH=src .venv/bin/python - <<'PY'
 from whenitrains.live import read_keychain_secret
 from whenitrains.config import Settings
 from py_clob_client_v2 import ClobClient
@@ -383,7 +383,7 @@ PY
 Create or derive credentials on first setup:
 
 ```bash
-PYTHONPATH=src python3 - <<'PY'
+PYTHONPATH=src .venv/bin/python - <<'PY'
 from whenitrains.live import read_keychain_secret
 from whenitrains.config import Settings
 from py_clob_client_v2 import ClobClient
@@ -415,7 +415,7 @@ fresh credentials and immediately update `.env`. Creating a new API key can
 invalidate the previous active key for that wallet.
 
 ```bash
-PYTHONPATH=src python3 - <<'PY'
+PYTHONPATH=src .venv/bin/python - <<'PY'
 from whenitrains.live import read_keychain_secret
 from whenitrains.config import Settings
 from py_clob_client_v2 import ClobClient
