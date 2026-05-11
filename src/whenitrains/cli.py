@@ -2738,12 +2738,24 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
     buy_parts.extend(["--live", "--yes-i-understand"])
     sell_parts.extend(["--live", "--yes-i-understand"])
 
+    live_log_lines = (
+        [
+            "0. publish live scheduler logs before evidence capture",
+            "mkdir -p ~/whenitrains-live-logs",
+            "cd ~/whenitrains-live-logs",
+            "python3 -m http.server 8765 --bind 0.0.0.0",
+        ]
+        if live_log_url
+        else [
+            "0. collect live scheduler logs for copied-log evidence",
+            "run the capped scheduler on the live machine and copy its log to this evidence runner",
+            "provide the capped scheduler log via --live-log-file '<path-to-live-scheduler.log>'",
+        ]
+    )
+
     lines = [
         "low latency live readiness evidence checklist",
-        "0. publish live scheduler logs before evidence capture",
-        "mkdir -p ~/whenitrains-live-logs",
-        "cd ~/whenitrains-live-logs",
-        "python3 -m http.server 8765 --bind 0.0.0.0",
+        *live_log_lines,
         "0b. confirm live config env is loaded before smoke commands",
         f'eval "$({command("live-env-exports", "--env-file", ".env")})"',
         command("live-env-exports", "--env-file", ".env"),
@@ -2816,10 +2828,6 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
     env_index = lines.index("0b. confirm live config env is loaded before smoke commands")
     if live_log_url:
         lines.insert(env_index, f"curl -L {live_log_url}")
-    else:
-        lines[env_index:env_index] = [
-            "provide the capped scheduler log via --live-log-file '<path-to-live-scheduler.log>'",
-        ]
     smoke_log_index = (
         lines.index("log must include live scheduler concurrency evidence and live scheduler smoke ok")
         + 1

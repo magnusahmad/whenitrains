@@ -575,10 +575,14 @@ class CliDiscoveryTests(unittest.TestCase):
             "PYTHONPATH=src .venv/bin/python -m whenitrains.cli "
             "--db data/whenitrains.sqlite3 "
         )
-        self.assertIn("0. publish live scheduler logs before evidence capture", text)
-        self.assertIn("mkdir -p ~/whenitrains-live-logs", text)
-        self.assertIn("cd ~/whenitrains-live-logs", text)
-        self.assertIn("python3 -m http.server 8765 --bind 0.0.0.0", text)
+        self.assertIn("0. collect live scheduler logs for copied-log evidence", text)
+        self.assertIn(
+            "run the capped scheduler on the live machine and copy its log to this evidence runner",
+            text,
+        )
+        self.assertNotIn("mkdir -p ~/whenitrains-live-logs", text)
+        self.assertNotIn("cd ~/whenitrains-live-logs", text)
+        self.assertNotIn("python3 -m http.server 8765 --bind 0.0.0.0", text)
         self.assertIn(
             "provide the capped scheduler log via "
             "--live-log-file '<path-to-live-scheduler.log>'",
@@ -698,6 +702,9 @@ class CliDiscoveryTests(unittest.TestCase):
 
         text = stdout.getvalue()
         self.assertEqual(exit_code, 0)
+        self.assertIn("0. publish live scheduler logs before evidence capture", text)
+        self.assertIn("mkdir -p ~/whenitrains-live-logs", text)
+        self.assertIn("python3 -m http.server 8765 --bind 0.0.0.0", text)
         self.assertIn("curl -L http://192.168.1.50:8765/", text)
         self.assertNotIn("provide the capped scheduler log", text)
         self.assertIn(
