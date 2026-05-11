@@ -682,6 +682,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 roadmap endpoint status refresh: updated `docs/low-latency-readiness-roadmap.md` so the current live-log endpoint blocker matches the latest retry result: sandbox timeout and approved LAN connection refused.
 
+2026-05-11 post-roadmap-refresh production DB audit: reran `PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 low-latency-readiness-db-audit` read-only. It exited `2` with 22,372 HKO raw snapshots and 637,810 orderbook snapshots present, but all required readiness evidence counts still zero: latency stage pairs, timed HKO rows, WebSocket orderbook snapshots, orderbook-age decisions, live/manual/reconciled/settlement orders, user-channel events, live network/auth/scheduler/kill-switch/drift/settlement-validation records. The production readiness gates remain blocked on live evidence capture.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
