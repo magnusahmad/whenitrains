@@ -2525,6 +2525,11 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
 
     lines = [
         "low latency live readiness evidence checklist",
+        "0. publish live scheduler logs before evidence capture",
+        "mkdir -p ~/whenitrains-live-logs",
+        "cd ~/whenitrains-live-logs",
+        "python3 -m http.server 8765 --bind 0.0.0.0",
+        "curl -L http://192.168.1.49:8765/",
         "1. live-network-smoke --live --require-connected",
         command("live-network-smoke", "--live", "--seconds", "10", "--require-connected"),
         "2. live-auth-smoke --live",

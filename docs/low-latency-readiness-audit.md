@@ -16,7 +16,7 @@ Local implementation is substantially complete and covered by targeted automated
 - Production p50/p95/p99 evidence for DB-commit-to-decision, decision-to-submit, submit-to-fill/reject, and local-vs-CLOB drift.
 - Real-account kill-switch and settlement validation against actual CLOB/onchain state.
 
-The live log endpoint at `http://192.168.1.23:8765/` was retried again on 2026-05-11 HKT after the DB-audit WebSocket evidence tightening. The sandboxed request timed out after 8 seconds, and the approved LAN retry failed immediately with connection refused.
+The live log endpoint at `http://192.168.1.49:8765/` was tried on 2026-05-11 HKT after the earlier `.23` endpoint failures. It is reachable, listed scheduler logs, and the latest log `live-scheduler-20260511-071055.log` was downloaded for review. That log shows live scheduler startup, preflight, and repeated decision loops with `buys=0/0 sells=0/0`, but it does not contain the missing live network smoke, auth smoke, manual live-money, settlement, or readiness report evidence.
 
 `low-latency-readiness-db-audit` inspected `data/whenitrains.sqlite3` read-only on 2026-05-11 HKT and was rechecked after the DB-audit WebSocket evidence tightening. It found 22,372 historical HKO raw snapshots and 637,810 orderbook snapshots, but no production readiness evidence yet: zero required latency-stage pairs, zero timed HKO `raw_snapshots` rows with `fetch_started_at_utc` and `response_elapsed_ms`, zero usable WebSocket orderbook snapshots with bid/ask/mid and non-empty depth, zero paper decisions carrying `orderbook_state_age_seconds`, zero manual live buy/sell orders, zero reconciled or settlement live orders, zero live user events or applied user trades, and zero live network/auth/scheduler/kill-switch/drift/settlement-validation risk-event records.
 
@@ -135,7 +135,7 @@ All passed. The combined roadmap verification ran 368 tests under tracemalloc af
 
 ## Next Steps
 
-1. Restore or expose the live log endpoint on `192.168.1.23:8765`.
+1. Use the reachable live log endpoint on `192.168.1.49:8765` for evidence capture.
 2. Run `live-network-smoke --live --require-connected` and capture the logs.
 3. Run `live-auth-smoke --live` with credentials on the live machine.
 4. With explicit approval, run minimum-size manual live buy/sell and kill-switch verification.

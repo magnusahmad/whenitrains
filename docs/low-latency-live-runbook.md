@@ -19,7 +19,25 @@ PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3
 Archive this output with the scheduler logs. It is read-only and does not touch the database.
 The checklist includes the real-account kill-switch verification sequence, a capped-scheduler log archive reminder for independent-candidate concurrency evidence, and a settlement-validation reminder for the first resolved live market.
 
-4. Run a no-trade live network smoke to confirm both scheduler-owned WebSocket workers can start:
+4. Start or verify the LAN log publisher before running live evidence commands.
+
+On the live machine:
+
+```bash
+mkdir -p ~/whenitrains-live-logs
+cd ~/whenitrains-live-logs
+python3 -m http.server 8765 --bind 0.0.0.0
+```
+
+From this workstation:
+
+```bash
+curl -L http://192.168.1.49:8765/
+```
+
+The readiness evidence run is not complete unless scheduler logs can be listed, downloaded, and archived from this endpoint.
+
+5. Run a no-trade live network smoke to confirm both scheduler-owned WebSocket workers can start:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-network-smoke --live --seconds 10 --require-connected
@@ -27,7 +45,7 @@ PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3
 
 Expected output includes `live network smoke websocket_all_running=True`, at least two reported clients, per-client `connected_once=True` lines, and `live network smoke connected_once_all=True`; the command exits `0` only when runtime liveness, market/user client count, and connection evidence pass. This command starts and stops the market/user WebSocket runtime but does not run trading decisions.
 
-5. Run a no-trade live auth smoke to confirm CLOB credentials, signer/funder addresses, balance, and allowance:
+6. Run a no-trade live auth smoke to confirm CLOB credentials, signer/funder addresses, balance, and allowance:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-auth-smoke --live
@@ -35,13 +53,13 @@ PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3
 
 Expected output includes `auth ok=True`, `required_balance_usd=...`, `allowance_ok=True`, signer/funder addresses, and exits `0`. This command performs preflight checks only and does not place orders.
 
-6. Confirm there is no emergency entry block unless intentional:
+7. Confirm there is no emergency entry block unless intentional:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-kill-switch
 ```
 
-7. Start the live scheduler:
+8. Start the live scheduler:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live --verbose

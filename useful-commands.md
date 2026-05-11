@@ -595,8 +595,8 @@ PYTHONUNBUFFERED=1 PYTHONPATH=src .venv/bin/python -u -m whenitrains.cli \
 From this machine or another LAN machine: list, download, and inspect logs.
 
 ```bash
-curl -L http://192.168.1.23:8765/
-curl -L -o /private/tmp/live-scheduler-latest.log http://192.168.1.23:8765/<log-file-name>
+curl -L http://192.168.1.49:8765/
+curl -L -o /private/tmp/live-scheduler-latest.log http://192.168.1.49:8765/<log-file-name>
 tail -n 120 /private/tmp/live-scheduler-latest.log
 ```
 
@@ -705,13 +705,13 @@ limit 50;
 The live machine publishes scheduler logs over the LAN:
 
 ```bash
-curl -L http://192.168.1.23:8765/
+curl -L http://192.168.1.49:8765/
 ```
 
 Download a log:
 
 ```bash
-curl -L -o /private/tmp/live-scheduler-latest.log http://192.168.1.23:8765/<log-file-name>
+curl -L -o /private/tmp/live-scheduler-latest.log http://192.168.1.49:8765/<log-file-name>
 ```
 
 Search for important events:

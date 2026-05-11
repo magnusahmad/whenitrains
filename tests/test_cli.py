@@ -451,6 +451,11 @@ class CliDiscoveryTests(unittest.TestCase):
             "PYTHONPATH=src .venv/bin/python -m whenitrains.cli "
             "--db data/whenitrains.sqlite3 "
         )
+        self.assertIn("0. publish live scheduler logs before evidence capture", text)
+        self.assertIn("mkdir -p ~/whenitrains-live-logs", text)
+        self.assertIn("cd ~/whenitrains-live-logs", text)
+        self.assertIn("python3 -m http.server 8765 --bind 0.0.0.0", text)
+        self.assertIn("curl -L http://192.168.1.49:8765/", text)
         self.assertIn("1. live-network-smoke --live --require-connected", text)
         self.assertIn("archive live-reconcile output as REST/recent-trades validation evidence", text)
         self.assertIn(
