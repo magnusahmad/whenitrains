@@ -203,4 +203,4 @@ Exit criteria:
 4. Add user WebSocket reconciliation and restart repair.
 5. Harden HKO burst polling/backoff and operational fail-closed checks.
 
-The current code has local/tested scaffolding for every roadmap milestone. It should not be treated as production-complete until the live network, real-auth, manual-money, capped-scheduler, kill-switch, settlement, and production latency evidence in `docs/low-latency-readiness-audit.md` has been captured.
+The current code has local/tested scaffolding for every roadmap milestone. It should not be treated as production-complete until the live network, real-auth, manual-money, capped-scheduler, kill-switch, settlement, and production latency evidence in `docs/low-latency-readiness-audit.md` has been captured. Use `docs/low-latency-live-evidence-handoff.md` for the current non-LAN live evidence procedure.

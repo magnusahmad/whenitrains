@@ -840,6 +840,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 audit handoff cross-reference: updated `docs/low-latency-readiness-audit.md` next steps to point operators to `docs/low-latency-live-evidence-handoff.md` as the first live-machine evidence procedure.
 
+2026-05-11 roadmap handoff cross-reference: updated `docs/low-latency-readiness-roadmap.md` to point its final production-completion note at `docs/low-latency-live-evidence-handoff.md`, so the roadmap, audit, and runbook all converge on the same non-LAN evidence workflow.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
