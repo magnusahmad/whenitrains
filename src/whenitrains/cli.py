@@ -1039,7 +1039,15 @@ def main(argv: list[str] | None = None) -> int:
                         min_date_hkt=datetime.now(HKT).date().isoformat(),
                     )
                     websocket_runtime.start()
-                    print("live websocket runtime started", flush=True)
+                    client_statuses = list(
+                        getattr(websocket_runtime, "client_statuses", ())
+                    )
+                    print(
+                        "live websocket runtime started "
+                        f"all_running={websocket_runtime.all_running} "
+                        f"client_count={len(client_statuses)}",
+                        flush=True,
+                    )
                 aws_actual_poll_fetch = lambda: _fetch_current_temperature_for_path(
                     db_path, event_queue=low_latency_queue
                 )

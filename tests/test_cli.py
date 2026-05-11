@@ -221,6 +221,20 @@ class CliDiscoveryTests(unittest.TestCase):
 
                 def __init__(self):
                     self.book_cache = book_cache
+                    self.client_statuses = [
+                        SimpleNamespace(
+                            connected_once=False,
+                            connection_attempts=0,
+                            messages_applied=0,
+                            last_error=None,
+                        ),
+                        SimpleNamespace(
+                            connected_once=False,
+                            connection_attempts=0,
+                            messages_applied=0,
+                            last_error=None,
+                        ),
+                    ]
 
                 def start(self):
                     runtime_events.append("start")
@@ -268,6 +282,10 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             runtime_factory.assert_called_once()
             self.assertEqual(runtime_events, ["start", ("stop", 5)])
+            self.assertIn(
+                "live websocket runtime started all_running=True client_count=2",
+                stdout.getvalue(),
+            )
             self.assertEqual(live_tick.call_count, 2)
             for call in live_tick.call_args_list:
                 self.assertIs(call.kwargs["book_cache"], book_cache)
