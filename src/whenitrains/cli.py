@@ -1682,6 +1682,7 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
         messages.append("evidence archive files missing: " + ", ".join(missing_files))
     readiness_report_missing_gates: list[str] | None = None
     readiness_report_text: str | None = None
+    readiness_db_audit_status: str | None = None
     for name in required_files:
         if name == "manifest.txt":
             continue
@@ -1690,6 +1691,8 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
             text = path.read_text()
             if name == "readiness_report.txt":
                 readiness_report_text = text
+            if name == "readiness_db_audit.txt":
+                readiness_db_audit_status = _readiness_db_audit_status(text)
             if not text.strip():
                 messages.append(f"evidence archive file empty: {name}")
             elif not _evidence_report_content_valid(name, text):
@@ -1772,6 +1775,11 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
         and not _readiness_latency_lines_positive(readiness_report_text)
     ):
         messages.append("evidence archive file malformed: readiness_report.txt")
+    if all_gates_passed == "True" and readiness_db_audit_status == "missing_evidence":
+        messages.append(
+            "evidence archive gates inconsistent: "
+            "readiness_db_audit.txt missing evidence while all_gates_passed is True"
+        )
     if missing_gates and _missing_gates_malformed(missing_gates):
         messages.append("evidence archive missing_gates malformed")
     elif missing_gates and readiness_report_missing_gates is not None:
@@ -1920,6 +1928,13 @@ def _readiness_db_audit_report_content_valid(text: str) -> bool:
     observed_missing = missing_evidence.split(",")
     allowed_missing = {key for key in required_count_keys if key != "hko_raw_snapshots"}
     return all(key in allowed_missing for key in observed_missing)
+
+
+def _readiness_db_audit_status(text: str) -> str | None:
+    for line in text.splitlines():
+        if line.startswith("readiness_db_audit="):
+            return line.split("=", 1)[1]
+    return None
 
 
 def _latency_report_content_valid(pair: str, text: str) -> bool:
