@@ -786,6 +786,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 latest `.49` live log access retry: retried `curl -L --max-time 8 http://192.168.1.49:8765/` from the sandbox and again with approved LAN access. Both attempts timed out after 8 seconds with no response, so the previously reachable `.49` live-log endpoint is not currently usable for evidence capture from this machine.
 
+2026-05-11 configurable live-log checklist pass: added `--live-log-url` to `live-readiness-checklist` so the generated log probe and scheduler-log archive download commands can target whichever LAN endpoint is reachable instead of hard-coding the stale `.49` address. Updated the live runbook, readiness roadmap, and audit notes to reflect that the latest `.49` retry now times out and live evidence capture is blocked until a log endpoint is reachable. Verified red/green with focused checklist tests, `test_cli.py` passing 37 tests, and full discovery passing 460 tests under `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

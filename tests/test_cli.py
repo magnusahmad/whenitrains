@@ -669,6 +669,66 @@ class CliDiscoveryTests(unittest.TestCase):
             text,
         )
 
+    def test_live_readiness_checklist_accepts_live_log_url(self):
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            exit_code = main(
+                [
+                    "--db",
+                    "data/whenitrains.sqlite3",
+                    "live-readiness-checklist",
+                    "--label",
+                    "30",
+                    "--side",
+                    "YES",
+                    "--date",
+                    "2026-05-11",
+                    "--market-kind",
+                    "highest",
+                    "--size-usd",
+                    "5",
+                    "--live-log-url",
+                    "http://192.168.1.50:8765/",
+                ]
+            )
+
+        text = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("curl -L http://192.168.1.50:8765/", text)
+        self.assertIn(
+            "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
+            "http://192.168.1.50:8765/<log-file-name>",
+            text,
+        )
+        self.assertNotIn("http://192.168.1.49:8765/<log-file-name>", text)
+
+    def test_live_readiness_checklist_strips_live_log_url_trailing_slashes(self):
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            exit_code = main(
+                [
+                    "--db",
+                    "data/whenitrains.sqlite3",
+                    "live-readiness-checklist",
+                    "--label",
+                    "30",
+                    "--side",
+                    "YES",
+                    "--size-usd",
+                    "5",
+                    "--live-log-url",
+                    "http://192.168.1.50:8765///",
+                ]
+            )
+
+        text = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("curl -L http://192.168.1.50:8765/", text)
+        self.assertIn("http://192.168.1.50:8765/<log-file-name>", text)
+        self.assertNotIn("http://192.168.1.50:8765///<log-file-name>", text)
+
     def test_low_latency_readiness_db_audit_reports_missing_evidence_read_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

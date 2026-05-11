@@ -13,7 +13,7 @@ This runbook covers the low-latency live scheduler path for HK temperature marke
 3. Generate the concrete live evidence command list for the target market before running any live-money command:
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-readiness-checklist --label <label> --side <YES-or-NO> --size-usd <minimum-size> --date <YYYY-MM-DD> --market-kind <highest-or-lowest> --scheduler-ticks 3
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 live-readiness-checklist --label <label> --side <YES-or-NO> --size-usd <minimum-size> --date <YYYY-MM-DD> --market-kind <highest-or-lowest> --scheduler-ticks 3 --live-log-url http://<live-host>:8765/
 ```
 
 Archive this output with the scheduler logs. It is read-only and does not touch the database.
@@ -34,6 +34,8 @@ From this workstation:
 ```bash
 curl -L http://192.168.1.49:8765/
 ```
+
+If the live machine is on a different LAN address, pass that address as `--live-log-url` when generating the checklist so the probe and archive download commands match the actual endpoint.
 
 The readiness evidence run is not complete unless scheduler logs can be listed, downloaded, and archived from this endpoint.
 
@@ -166,7 +168,7 @@ The webhook receives JSON with `title`, `severity`, `details`, and formatted `te
 - Download the capped scheduler log into the evidence directory:
 
 ```bash
-curl -L -o data/low-latency-evidence/<run-id>/live-scheduler.log http://192.168.1.49:8765/<log-file-name>
+curl -L -o data/low-latency-evidence/<run-id>/live-scheduler.log http://<live-host>:8765/<log-file-name>
 ```
 
 - Run `low-latency-readiness-db-audit` read-only before final readiness/archive commands; it should report nonzero evidence counts for latency traces, timed HKO raw snapshots, WebSocket orderbook snapshots, orderbook-age decisions, live orders, live user events, and risk-event smoke records.

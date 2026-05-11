@@ -271,6 +271,11 @@ def main(argv: list[str] | None = None) -> int:
     live_readiness_checklist.add_argument("--date")
     live_readiness_checklist.add_argument("--market-kind", choices=["highest", "lowest"])
     live_readiness_checklist.add_argument("--scheduler-ticks", type=int, default=3)
+    live_readiness_checklist.add_argument(
+        "--live-log-url",
+        default="http://192.168.1.49:8765/",
+        help="Base URL for the live scheduler log server.",
+    )
     live_buy = sub.add_parser("live-buy")
     live_buy.add_argument("label")
     live_buy.add_argument("side", choices=["YES", "NO"])
@@ -2675,6 +2680,9 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
     def command(*parts: object) -> str:
         return " ".join(shlex.quote(str(part)) for part in [*base, *parts])
 
+    live_log_url = args.live_log_url.rstrip("/") + "/"
+    live_log_download_url = live_log_url.rstrip("/") + "/<log-file-name>"
+
     buy_parts: list[object] = [
         "live-buy",
         args.label,
@@ -2697,7 +2705,7 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         "mkdir -p ~/whenitrains-live-logs",
         "cd ~/whenitrains-live-logs",
         "python3 -m http.server 8765 --bind 0.0.0.0",
-        "curl -L http://192.168.1.49:8765/",
+        f"curl -L {live_log_url}",
         "0b. confirm live config env is loaded before smoke commands",
         f'eval "$({command("live-env-exports", "--env-file", ".env")})"',
         command("live-env-exports", "--env-file", ".env"),
@@ -2732,7 +2740,7 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         "archive capped scheduler logs showing independent candidate concurrency or no independent candidate opportunity",
         "log must include live scheduler concurrency evidence and live scheduler smoke ok",
         "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
-        "http://192.168.1.49:8765/<log-file-name>",
+        f"{live_log_download_url}",
         "10. validate live settlement against CLOB/onchain truth after a resolved market",
         command("live-reconcile", "--live"),
         command(
