@@ -16,6 +16,7 @@ The local roadmap implementation is substantially complete. See `docs/low-latenc
 - Market and user WebSocket clients, live runtime ownership, authenticated user-event storage/application, pending-order reconciliation, sellable-balance drift repair/freeze, and resolved-market local settlement are implemented with fixture and scheduler tests.
 - Candidate planning, ladder metadata, and execution scheduling are wired into actual-cross, lowest-temperature actual-cross, forecast-change, forecast-value, forecast-exit, and open-position exit paths.
 - Operational safeguards now include a DB-specific live scheduler lock, startup health freeze, stale submitted-order freeze, persistent kill-switch exit enforcement, alerts, stalled-WebSocket freeze, source-freshness alerts, and a live runbook.
+- Readiness reports and evidence archives include p50/p95/p99 latency files for commit-to-decision, decision-to-submit, submit-to-ack, submit-to-match, submit-to-fill/reject, and live CLOB drift-scan timing.
 
 Remaining readiness gaps require live-environment evidence rather than more local scaffolding:
 

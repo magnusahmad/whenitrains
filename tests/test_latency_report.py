@@ -27,9 +27,12 @@ from whenitrains.polymarket import OrderBook
 ARCHIVE_REPORT_FILES = [
     "latency_db_committed_to_decision_started.txt",
     "latency_decision_started_to_order_submitted.txt",
+    "latency_order_submitted_to_clob_ack.txt",
+    "latency_order_submitted_to_fill_matched.txt",
     "latency_order_submitted_to_fill_confirmed.txt",
     "latency_order_submitted_to_order_rejected.txt",
     "latency_db_committed_to_decision_completed.txt",
+    "latency_live_clob_drift_scan_started_to_live_clob_drift_scan_completed.txt",
     "readiness_db_audit.txt",
     "hko_source_timing_report.txt",
     "readiness_report.txt",
@@ -86,6 +89,7 @@ def _archive_report_fixture_content(name: str) -> str:
             "latency_submit_to_ack_pairs=1\n"
             "latency_submit_to_match_pairs=1\n"
             "latency_submit_to_fill_pairs=1\n"
+            "latency_live_clob_drift_scan_pairs=1\n"
             "hko_raw_snapshots=1\n"
             "hko_timed_raw_snapshots=1\n"
             "orderbook_snapshots=1\n"
@@ -124,6 +128,7 @@ def _archive_report_fixture_content(name: str) -> str:
             "live_reconcile_observed",
             "live_settlement_observed",
             "live_settlement_validated",
+            "live_clob_drift_scan_latency_observed",
             "live_clob_drift_scan_clear",
             "live_auth_smoke_ok",
             "live_network_smoke_ok",
@@ -140,9 +145,12 @@ def _archive_report_fixture_content(name: str) -> str:
             "latency:\n"
             "db_committed -> decision_started count=1 p50=0.100s p95=0.100s p99=0.100s\n"
             "decision_started -> order_submitted count=1 p50=0.100s p95=0.100s p99=0.100s\n"
+            "order_submitted -> clob_ack count=1 p50=0.100s p95=0.100s p99=0.100s\n"
+            "order_submitted -> fill_matched count=1 p50=0.100s p95=0.100s p99=0.100s\n"
             "order_submitted -> fill_confirmed count=1 p50=0.100s p95=0.100s p99=0.100s\n"
             "order_submitted -> order_rejected count=1 p50=0.100s p95=0.100s p99=0.100s\n"
             "db_committed -> decision_completed count=1 p50=0.100s p95=0.100s p99=0.100s\n"
+            "live_clob_drift_scan_started -> live_clob_drift_scan_completed count=1 p50=0.100s p95=0.100s p99=0.100s\n"
             "evidence gates:\n"
             f"{gate_lines}\n"
             "live:\n"
@@ -2638,6 +2646,10 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("gate clob_ack_observed=pass count=1 p95=0.050s", text)
             self.assertIn("gate fill_matched_observed=pass count=1 p95=0.250s", text)
             self.assertIn(
+                "gate live_clob_drift_scan_latency_observed=missing count=0 p95=n/a",
+                text,
+            )
+            self.assertIn(
                 "gate orderbook_age_under_cap=missing count=0 "
                 "p95=n/a threshold=0.250s",
                 text,
@@ -2758,6 +2770,20 @@ class LatencyReportTests(unittest.TestCase):
             record_latency_stage(db, "event-1", "fill_matched", 10.7, "actual")
             record_latency_stage(db, "event-1", "fill_confirmed", 10.8, "actual")
             record_latency_stage(db, "event-1", "decision_completed", 10.9, "actual")
+            record_latency_stage(
+                db,
+                "drift-scan-1",
+                "live_clob_drift_scan_started",
+                20.0,
+                "live_clob_drift_scan",
+            )
+            record_latency_stage(
+                db,
+                "drift-scan-1",
+                "live_clob_drift_scan_completed",
+                20.2,
+                "live_clob_drift_scan",
+            )
             store_trading_decision(
                 db,
                 event_type="actual",
@@ -2933,6 +2959,10 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("gate user_channel_trade_applied=pass count=1", text)
             self.assertIn("gate live_reconcile_observed=pass count=1", text)
             self.assertIn("gate live_settlement_observed=pass count=1", text)
+            self.assertIn(
+                "gate live_clob_drift_scan_latency_observed=pass count=1 p95=0.200s",
+                text,
+            )
             self.assertIn("gate live_clob_drift_scan_clear=pass count=1", text)
             self.assertIn("gate live_auth_smoke_ok=pass count=1 latest=ok", text)
             self.assertIn("gate live_network_smoke_ok=pass count=1 latest=ok", text)

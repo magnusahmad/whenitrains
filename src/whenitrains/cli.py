@@ -91,6 +91,7 @@ from .storage import (
     list_outcomes_from_date,
     list_outcomes_for_date,
     migrate,
+    record_latency_stage,
     reset_paper_state,
     record_hko_update_minute,
     store_hko_forecasts,
@@ -112,9 +113,12 @@ HKO_PUBLIC_AVAILABILITY_MIN_CLUSTERED_FETCHES = 2
 LOW_LATENCY_READINESS_LATENCY_PAIRS = [
     ("db_committed", "decision_started"),
     ("decision_started", "order_submitted"),
+    ("order_submitted", "clob_ack"),
+    ("order_submitted", "fill_matched"),
     ("order_submitted", "fill_confirmed"),
     ("order_submitted", "order_rejected"),
     ("db_committed", "decision_completed"),
+    ("live_clob_drift_scan_started", "live_clob_drift_scan_completed"),
 ]
 LOW_LATENCY_READINESS_GATE_NAMES = [
     "hko_commit_to_decision_under_1s",
@@ -133,6 +137,7 @@ LOW_LATENCY_READINESS_GATE_NAMES = [
     "live_reconcile_observed",
     "live_settlement_observed",
     "live_settlement_validated",
+    "live_clob_drift_scan_latency_observed",
     "live_clob_drift_scan_clear",
     "live_auth_smoke_ok",
     "live_network_smoke_ok",
@@ -985,8 +990,16 @@ def main(argv: list[str] | None = None) -> int:
                         f"rebuilt_positions={reconcile_result.rebuilt_positions}",
                         flush=True,
                     )
+                drift_scan_started = time.monotonic()
                 drifts = find_live_position_drifts(db, client)
-                _record_live_clob_drift_scan(db, phase="startup", drifts=drifts)
+                drift_scan_completed = time.monotonic()
+                _record_live_clob_drift_scan(
+                    db,
+                    phase="startup",
+                    drifts=drifts,
+                    started_monotonic=drift_scan_started,
+                    completed_monotonic=drift_scan_completed,
+                )
                 drift_count = len(drifts)
                 health = evaluate_live_startup_health(
                     market_websocket_connected=not args.no_websockets,
@@ -1041,6 +1054,7 @@ def main(argv: list[str] | None = None) -> int:
                         event_key="live_reconcile_watchdog",
                     )
                     reconcile_result = reconcile_pending_live_orders(tick_db, client)
+                    drift_scan_started = time.monotonic()
                     drifts = find_live_position_drifts(tick_db, client)
                     repaired = 0
                     if drifts:
@@ -1051,11 +1065,14 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         if repaired:
                             drifts = find_live_position_drifts(tick_db, client)
+                    drift_scan_completed = time.monotonic()
                     _record_live_clob_drift_scan(
                         tick_db,
                         phase="reconcile_watchdog",
                         drifts=drifts,
                         repaired=repaired,
+                        started_monotonic=drift_scan_started,
+                        completed_monotonic=drift_scan_completed,
                     )
                     websocket_stalled = (
                         websocket_runtime is not None and not websocket_runtime.all_running
@@ -1605,13 +1622,6 @@ def _archive_low_latency_evidence(
     hko_limit: int,
 ) -> tuple[list[Path], dict[str, object]]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    latency_pairs = [
-        ("db_committed", "decision_started"),
-        ("decision_started", "order_submitted"),
-        ("order_submitted", "fill_confirmed"),
-        ("order_submitted", "order_rejected"),
-        ("db_committed", "decision_completed"),
-    ]
     written: list[Path] = []
     manifest_lines = [
         "low latency evidence archive",
@@ -1621,7 +1631,7 @@ def _archive_low_latency_evidence(
         f"hko_limit={hko_limit}",
         "files:",
     ]
-    for start_stage, end_stage in latency_pairs:
+    for start_stage, end_stage in LOW_LATENCY_READINESS_LATENCY_PAIRS:
         summary = latency_duration_summary(db, start_stage, end_stage)
         path = output_dir / f"latency_{start_stage}_to_{end_stage}.txt"
         path.write_text(_render_latency_summary(summary) + "\n")
@@ -1667,9 +1677,12 @@ def _verify_low_latency_evidence_archive(input_dir: Path) -> tuple[bool, list[st
         "manifest.txt",
         "latency_db_committed_to_decision_started.txt",
         "latency_decision_started_to_order_submitted.txt",
+        "latency_order_submitted_to_clob_ack.txt",
+        "latency_order_submitted_to_fill_matched.txt",
         "latency_order_submitted_to_fill_confirmed.txt",
         "latency_order_submitted_to_order_rejected.txt",
         "latency_db_committed_to_decision_completed.txt",
+        "latency_live_clob_drift_scan_started_to_live_clob_drift_scan_completed.txt",
         "readiness_db_audit.txt",
         "hko_source_timing_report.txt",
         "readiness_report.txt",
@@ -2554,6 +2567,11 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         command("latency-report", "order_submitted", "fill_matched"),
         command("latency-report", "order_submitted", "fill_confirmed"),
         command("latency-report", "order_submitted", "order_rejected"),
+        command(
+            "latency-report",
+            "live_clob_drift_scan_started",
+            "live_clob_drift_scan_completed",
+        ),
         command("hko-source-timing-report"),
         command("low-latency-readiness-db-audit"),
         command("low-latency-readiness-report", "--require-evidence"),
@@ -2606,6 +2624,9 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
             ),
             "latency_submit_to_fill_pairs": _read_only_latency_pair_count(
                 db, "order_submitted", "fill_confirmed"
+            ),
+            "latency_live_clob_drift_scan_pairs": _read_only_latency_pair_count(
+                db, "live_clob_drift_scan_started", "live_clob_drift_scan_completed"
             ),
             "hko_raw_snapshots": _read_only_count(db, "raw_snapshots"),
             "hko_timed_raw_snapshots": _read_only_count_where(
@@ -2717,6 +2738,7 @@ def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
         "latency_submit_to_ack_pairs",
         "latency_submit_to_match_pairs",
         "latency_submit_to_fill_pairs",
+        "latency_live_clob_drift_scan_pairs",
         "hko_timed_raw_snapshots",
         "websocket_orderbook_snapshots",
         "paper_decisions_with_orderbook_age",
@@ -2802,6 +2824,8 @@ def _record_live_clob_drift_scan(
     phase: str,
     drifts: list[object],
     repaired: int = 0,
+    started_monotonic: float | None = None,
+    completed_monotonic: float | None = None,
 ) -> None:
     drift_details = []
     for drift in drifts:
@@ -2814,6 +2838,32 @@ def _record_live_clob_drift_scan(
             }
         )
     drift_count = len(drifts)
+    scan_event_key = None
+    if started_monotonic is not None and completed_monotonic is not None:
+        scan_event_key = (
+            "live_clob_drift_scan:"
+            f"{phase}:{datetime.now(timezone.utc).isoformat()}"
+        )
+        record_latency_stage(
+            db,
+            scan_event_key,
+            "live_clob_drift_scan_started",
+            started_monotonic,
+            "live_clob_drift_scan",
+            {"phase": phase},
+        )
+        record_latency_stage(
+            db,
+            scan_event_key,
+            "live_clob_drift_scan_completed",
+            completed_monotonic,
+            "live_clob_drift_scan",
+            {
+                "phase": phase,
+                "drift_count": drift_count,
+                "repaired": repaired,
+            },
+        )
     store_risk_event(
         db,
         "live_clob_drift_scan_clear"
@@ -2824,6 +2874,7 @@ def _record_live_clob_drift_scan(
             "phase": phase,
             "drift_count": drift_count,
             "repaired": repaired,
+            "latency_event_key": scan_event_key,
             "drifts": drift_details,
         },
     )
@@ -3049,6 +3100,11 @@ def _low_latency_readiness_report(
     submit_to_reject = latency_duration_summary(db, "order_submitted", "order_rejected")
     submit_to_ack = latency_duration_summary(db, "order_submitted", "clob_ack")
     submit_to_match = latency_duration_summary(db, "order_submitted", "fill_matched")
+    drift_scan_latency = latency_duration_summary(
+        db,
+        "live_clob_drift_scan_started",
+        "live_clob_drift_scan_completed",
+    )
     orderbook_age = _decision_orderbook_age_summary(db)
     hko_timing_count = _hko_source_timing_count(
         db,
@@ -3128,6 +3184,10 @@ def _low_latency_readiness_report(
         _count_observed_gate(
             "live_settlement_validated",
             live_settlement_validation_count,
+        ),
+        _latency_observed_gate(
+            "live_clob_drift_scan_latency_observed",
+            drift_scan_latency,
         ),
         _live_clob_drift_scan_gate(live_clob_drift_scan),
         _live_auth_smoke_gate(live_auth_smoke),

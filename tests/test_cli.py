@@ -28,6 +28,7 @@ from whenitrains.markets import parse_outcome_label
 from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
 from whenitrains.storage import (
     connect,
+    latency_duration_summary,
     live_setting_enabled,
     migrate,
     record_latency_stage,
@@ -508,6 +509,11 @@ class CliDiscoveryTests(unittest.TestCase):
         )
         self.assertIn(
             "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
+            "latency-report live_clob_drift_scan_started live_clob_drift_scan_completed",
+            text,
+        )
+        self.assertIn(
+            "PYTHONPATH=src python3 -m whenitrains.cli --db data/whenitrains.sqlite3 "
             "low-latency-archive-evidence --output-dir "
             "'data/low-latency-evidence/<run-id>' --require-evidence",
             text,
@@ -547,6 +553,7 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("latency_submit_to_ack_pairs=0", text)
             self.assertIn("latency_submit_to_match_pairs=0", text)
             self.assertIn("latency_submit_to_fill_pairs=0", text)
+            self.assertIn("latency_live_clob_drift_scan_pairs=0", text)
             self.assertIn("hko_timed_raw_snapshots=0", text)
             self.assertIn("websocket_orderbook_snapshots=0", text)
             self.assertIn("live_orders=0", text)
@@ -619,6 +626,7 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("websocket_orderbook_snapshots=0", text)
             self.assertIn("paper_decisions_with_orderbook_age=0", text)
             self.assertIn("latency_db_commit_to_decision_started_pairs=0", text)
+            self.assertIn("latency_live_clob_drift_scan_pairs=0", text)
             self.assertIn("manual_live_buy_orders=0", text)
             self.assertIn("live_settlement_orders=0", text)
             self.assertIn("live_user_trade_applied_events=0", text)
@@ -679,6 +687,20 @@ class CliDiscoveryTests(unittest.TestCase):
                 "fill_confirmed",
                 1.6,
                 event_type="aws_actual_transition",
+            )
+            record_latency_stage(
+                db,
+                "drift-scan-1",
+                "live_clob_drift_scan_started",
+                2.0,
+                event_type="live_clob_drift_scan",
+            )
+            record_latency_stage(
+                db,
+                "drift-scan-1",
+                "live_clob_drift_scan_completed",
+                2.2,
+                event_type="live_clob_drift_scan",
             )
             store_raw_snapshot(
                 db,
@@ -837,13 +859,14 @@ class CliDiscoveryTests(unittest.TestCase):
 
             text = stdout.getvalue()
             self.assertEqual(exit_code, 0)
-            self.assertIn("latency_trace_events=7", text)
+            self.assertIn("latency_trace_events=9", text)
             self.assertIn("latency_db_commit_to_decision_started_pairs=1", text)
             self.assertIn("latency_db_commit_to_decision_completed_pairs=1", text)
             self.assertIn("latency_decision_to_submit_pairs=1", text)
             self.assertIn("latency_submit_to_ack_pairs=1", text)
             self.assertIn("latency_submit_to_match_pairs=1", text)
             self.assertIn("latency_submit_to_fill_pairs=1", text)
+            self.assertIn("latency_live_clob_drift_scan_pairs=1", text)
             self.assertIn("hko_timed_raw_snapshots=1", text)
             self.assertIn("websocket_orderbook_snapshots=1", text)
             self.assertIn("paper_decisions_with_orderbook_age=1", text)
@@ -1258,6 +1281,12 @@ class CliDiscoveryTests(unittest.TestCase):
                     """
                 ).fetchone()[0]
                 self.assertEqual(clear_scan_count, 2)
+                summary = latency_duration_summary(
+                    db,
+                    "live_clob_drift_scan_started",
+                    "live_clob_drift_scan_completed",
+                )
+                self.assertEqual(summary["count"], 2)
             finally:
                 db.close()
 
