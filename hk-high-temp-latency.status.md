@@ -744,6 +744,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-log-evidence full venv verification: `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passed with 449 tests after the live scheduler preflight/WebSocket/drift/smoke log lines and scheduler-log download checklist update.
 
+2026-05-11 post-log-evidence readiness gate check: reran `PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 low-latency-readiness-report --require-evidence`. It exited `2`: all latency stage-pair counts are zero, WebSocket orderbook snapshots are zero, orderbook-age decisions are zero, live user/reconcile/settlement/manual-money/smoke/kill-switch evidence is zero, and live CLOB drift-scan latency/clear evidence is missing. The report sees 200 HKO source rows and a passing public-availability cluster gate, but `hko_source_timing_observed` is still missing because response timing percentiles are `n/a`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
