@@ -396,15 +396,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "low-latency-archive-evidence":
             migrate(db)
             output_dir = Path(args.output_dir)
-            report_paths, gate_status = _archive_low_latency_evidence(
-                db,
-                db_path=db_path,
-                output_dir=output_dir,
-                hko_endpoint_contains=args.hko_endpoint_contains,
-                hko_limit=args.hko_limit,
-                live_log_file=Path(args.live_log_file) if args.live_log_file else None,
-                live_log_url=args.live_log_url,
-            )
+            try:
+                report_paths, gate_status = _archive_low_latency_evidence(
+                    db,
+                    db_path=db_path,
+                    output_dir=output_dir,
+                    hko_endpoint_contains=args.hko_endpoint_contains,
+                    hko_limit=args.hko_limit,
+                    live_log_file=Path(args.live_log_file) if args.live_log_file else None,
+                    live_log_url=args.live_log_url,
+                )
+            except OSError as exc:
+                print(f"cannot copy live scheduler log: {args.live_log_file}: {exc}")
+                return 2
             print(f"archived low latency evidence to {output_dir}")
             for path in report_paths:
                 print(path)

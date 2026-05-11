@@ -382,6 +382,36 @@ class LatencyReportTests(unittest.TestCase):
             self.assertIn("sha256 live-scheduler.log=", manifest)
             self.assertIn(str(copied_log), stdout.getvalue())
 
+    def test_low_latency_archive_evidence_fails_missing_scheduler_log_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            output_dir = Path(tmp) / "evidence"
+            missing_log = Path(tmp) / "missing-live-scheduler.log"
+            db = connect(db_path)
+            migrate(db)
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-archive-evidence",
+                        "--output-dir",
+                        str(output_dir),
+                        "--live-log-file",
+                        str(missing_log),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn(
+                f"cannot copy live scheduler log: {missing_log}",
+                stdout.getvalue(),
+            )
+            self.assertFalse((output_dir / "manifest.txt").exists())
+
     def test_low_latency_archive_evidence_records_live_log_url(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"
