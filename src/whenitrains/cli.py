@@ -2608,7 +2608,10 @@ def _read_only_count(db: sqlite3.Connection, table: str) -> int:
 def _read_only_count_where(db: sqlite3.Connection, table: str, where_sql: str) -> int:
     if not _read_only_table_exists(db, table):
         return 0
-    return int(db.execute(f"select count(*) from {table} where {where_sql}").fetchone()[0])
+    try:
+        return int(db.execute(f"select count(*) from {table} where {where_sql}").fetchone()[0])
+    except sqlite3.OperationalError:
+        return 0
 
 
 def _read_only_table_exists(db: sqlite3.Connection, table: str) -> bool:

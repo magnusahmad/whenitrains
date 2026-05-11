@@ -1,6 +1,7 @@
 import tempfile
 import threading
 import time
+import sqlite3
 import unittest
 from contextlib import redirect_stdout
 from datetime import date
@@ -552,6 +553,40 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertIn("live_kill_switch_verification_records=0", text)
             self.assertIn("live_clob_drift_scan_records=0", text)
             self.assertIn("live_settlement_validation_records=0", text)
+            self.assertIn("readiness_db_audit=missing_evidence", text)
+
+    def test_low_latency_readiness_db_audit_tolerates_old_schema_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "old.db"
+            db = sqlite3.connect(db_path)
+            db.execute("create table raw_snapshots (id integer primary key, source text)")
+            db.execute(
+                "create table orderbook_snapshots (id integer primary key, outcome_id text)"
+            )
+            db.execute("create table paper_decisions (id integer primary key)")
+            db.execute("create table live_orders (id integer primary key)")
+            db.execute("create table risk_events (id integer primary key)")
+            db.commit()
+            db.close()
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "low-latency-readiness-db-audit",
+                    ]
+                )
+
+            text = stdout.getvalue()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("hko_raw_snapshots=0", text)
+            self.assertIn("hko_timed_raw_snapshots=0", text)
+            self.assertIn("websocket_orderbook_snapshots=0", text)
+            self.assertIn("paper_decisions_with_orderbook_age=0", text)
+            self.assertIn("manual_live_buy_orders=0", text)
+            self.assertIn("live_network_smoke_records=0", text)
             self.assertIn("readiness_db_audit=missing_evidence", text)
 
     def test_low_latency_readiness_db_audit_passes_when_evidence_counts_exist(self):
