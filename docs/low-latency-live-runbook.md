@@ -163,6 +163,12 @@ The webhook receives JSON with `title`, `severity`, `details`, and formatted `te
 - At least one resolved-market live settlement row has been validated against CLOB/onchain state and archived.
 - Record the validation with `live-settlement-validate --live --order-id <live-settlement-order-id> --reference <CLOB/onchain-reference>`.
 - Archive capped live scheduler logs showing either independent candidate actions progressing concurrently or that no independent-candidate opportunity occurred during the smoke.
+- Download the capped scheduler log into the evidence directory:
+
+```bash
+curl -L -o data/low-latency-evidence/<run-id>/live-scheduler.log http://192.168.1.49:8765/<log-file-name>
+```
+
 - Run `low-latency-readiness-db-audit` read-only before final readiness/archive commands; it should report nonzero evidence counts for latency traces, timed HKO raw snapshots, WebSocket orderbook snapshots, orderbook-age decisions, live orders, live user events, and risk-event smoke records.
 - `low-latency-readiness-report --require-evidence` has exited `0` and been archived with scheduler logs after any capped live readiness run.
 - Archive report artifacts with `low-latency-archive-evidence --output-dir data/low-latency-evidence/<run-id> --require-evidence`; the archive includes the read-only DB audit output alongside latency, HKO source timing, and readiness reports.

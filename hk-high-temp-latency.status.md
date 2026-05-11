@@ -740,6 +740,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 capped live scheduler smoke log pass: when `live-scheduler --live --ticks N` records a scheduler smoke risk event, it now also prints `live scheduler smoke ok/failed ticks=<n> websockets_enabled=<bool>` to the scheduler log. This makes archived capped-smoke logs show the same smoke outcome that readiness gates read from the DB. Verified red/green with `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py' -k test_live_scheduler_starts_websocket_runtime_and_passes_book_cache_to_ticks`, then `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py'` passing 33 tests.
 
+2026-05-11 scheduler-log evidence download checklist pass: `live-readiness-checklist` and the live runbook now include the exact `curl -L -o data/low-latency-evidence/<run-id>/live-scheduler.log http://192.168.1.49:8765/<log-file-name>` command so the capped scheduler log lands beside the generated readiness archive. Verified red/green with `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py' -k test_live_readiness_checklist_prints_ordered_evidence_commands`, then `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py'` passing 33 tests.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

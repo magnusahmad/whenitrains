@@ -2594,6 +2594,8 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         "9. capped live scheduler smoke with explicit approval",
         command("live-scheduler", "--live", "--ticks", args.scheduler_ticks, "--verbose"),
         "archive capped scheduler logs showing independent candidate concurrency or no independent candidate opportunity",
+        "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
+        "http://192.168.1.49:8765/<log-file-name>",
         "10. validate live settlement against CLOB/onchain truth after a resolved market",
         command("live-reconcile", "--live"),
         command(

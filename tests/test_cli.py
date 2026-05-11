@@ -507,6 +507,11 @@ class CliDiscoveryTests(unittest.TestCase):
             "archive capped scheduler logs showing independent candidate concurrency",
             text,
         )
+        self.assertIn(
+            "curl -L -o 'data/low-latency-evidence/<run-id>/live-scheduler.log' "
+            "http://192.168.1.49:8765/<log-file-name>",
+            text,
+        )
         self.assertIn("verify persistent kill-switch against the real account", text)
         self.assertIn(
             command_prefix + "live-kill-switch --block-new-entries",
