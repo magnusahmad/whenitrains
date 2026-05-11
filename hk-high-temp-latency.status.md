@@ -628,6 +628,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-archive-incomplete-manifest live log endpoint retry: sandboxed `curl -L --max-time 8 http://192.168.1.23:8765/` timed out after 8 seconds; the approved LAN retry failed immediately with `curl: (7) Failed to connect to 192.168.1.23 port 8765 after 1 ms: Couldn't connect to server`. Live/account evidence capture remains blocked on endpoint availability.
 
+2026-05-11 disposable readiness audit check: initialized `/private/tmp/whenitrains-roadmap-audit.sqlite3` and ran `PYTHONPATH=src python3 -m whenitrains.cli --db /private/tmp/whenitrains-roadmap-audit.sqlite3 low-latency-readiness-report --require-evidence`. The command exited `2` as expected, with no production DB access, and reported the expected missing evidence gates for latency traces, HKO timing/public-availability clustering, WebSocket orderbook snapshots, user-channel trade application, live reconcile/settlement validation, drift scan, auth/network/scheduler smoke, kill-switch verification, and manual live buy/sell. Empty live money state and clear kill-switch sanity gates passed.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
