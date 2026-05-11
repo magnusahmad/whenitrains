@@ -847,16 +847,24 @@ def execute_live_sell(
             side="SELL",
             action="SELL",
             status="rejected",
-            reason="no sellable token balance"
-            if sellable_shares is not None
-            else "position rounds below sellable share precision",
+            reason="sellable token balance below exchange precision"
+            if sellable_shares is not None and shares > 0
+            else (
+                "no sellable token balance"
+                if sellable_shares is not None
+                else "position rounds below sellable share precision"
+            ),
             event_type=event_type,
             event_key=event_key,
         )
         reason_text = (
-            "no sellable token balance"
-            if sellable_shares is not None
-            else "position rounds below sellable share precision"
+            "sellable token balance below exchange precision"
+            if sellable_shares is not None and shares > 0
+            else (
+                "no sellable token balance"
+                if sellable_shares is not None
+                else "position rounds below sellable share precision"
+            )
         )
         return LiveExecutionResult(
             "rejected",

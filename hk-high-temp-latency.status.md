@@ -38,7 +38,7 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 Past-date unresolved local positions remain a documented residual risk. The real market should eventually resolve, but local paper/live state still needs a reconcile/settlement path to reflect that resolution in risk and dashboard state if the scheduler missed the same-day exit window.
 
-2026-05-11 live audit finding: repeated `sell missed 29°C YES: no sellable token balance` messages are mostly dust after live sells left only `0.003` local shares, below the exchange submission precision. Separately, the May 11 lowest-temperature `22°C YES` and `23°C NO` buys were real matched CLOB responses, but local reconciliation left them as `unknown_fill` because the later order lookup returned uppercase `MATCHED` and the fill parser did not normalize that status or reuse `makingAmount` / `takingAmount`. Live reconciliation now normalizes matched CLOB payloads with amount fields so a future reconcile pass can recover those positions from the order ledger.
+2026-05-11 live audit finding: repeated `sell missed 29°C YES: no sellable token balance` messages are mostly dust after live sells left only `0.003` local shares, below the exchange submission precision. Separately, the May 11 lowest-temperature `22°C YES` and `23°C NO` buys were real matched CLOB responses, but local reconciliation left them as `unknown_fill` because the later order lookup returned uppercase `MATCHED` and the fill parser did not normalize that status or reuse `makingAmount` / `takingAmount`. Live reconciliation now normalizes matched CLOB payloads with amount fields so a future reconcile pass can recover those positions from the order ledger. Confirmed local live positions below the `0.01` sell precision are retained for settlement accounting, but the live exit loop skips them so invalidated dust does not emit repeated unsellable-position misses forever.
 
 ## API Discovery Findings
 
@@ -163,6 +163,21 @@ Green result after normalizing matched CLOB reconciliation payloads with amount 
 
 ```text
 Ran 1 test in 0.022s
+OK
+```
+
+Sub-precision live sell dust red/green:
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_runner.RunnerTests.test_live_exit_skips_sub_precision_dust_without_logging_miss
+```
+
+Red result: a local and CLOB-confirmed `0.003` share remainder rejected every exit attempt as `no sellable token balance`.
+
+Green result after keeping the dust position but skipping live exit attempts below sell precision:
+
+```text
+Ran 1 test in 0.019s
 OK
 ```
 

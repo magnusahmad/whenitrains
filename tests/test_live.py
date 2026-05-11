@@ -901,6 +901,36 @@ class LiveTests(unittest.TestCase):
             pos = get_live_position(db, "yes25")
             self.assertAlmostEqual(pos["net_shares"], 0.005)
 
+    def test_execute_live_sell_rejects_but_keeps_sub_precision_sellable_dust(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            upsert_live_position(db, "yes25", 0.003, 0.29, 0.0)
+            client = FakeClobClient(token_balances={"yes25": 0.003})
+
+            result = execute_live_sell(
+                db,
+                client,
+                token_id="yes25",
+                bids=[(0.15, 100)],
+                reason="position invalidated by hourly forecast",
+                label="29°C",
+            )
+
+            self.assertEqual(result.status, "rejected")
+            self.assertEqual(result.reason, "sellable token balance below exchange precision")
+            self.assertEqual(client.sells, [])
+            pos = get_live_position(db, "yes25")
+            self.assertAlmostEqual(pos["net_shares"], 0.003)
+            adjustments = db.execute(
+                """
+                select side, action, status, fill_shares, reason
+                from live_orders
+                where side = 'RECONCILE_SELL'
+                """
+            ).fetchall()
+            self.assertEqual(adjustments, [])
+
     def test_execute_live_sell_caps_to_clob_sellable_balance(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

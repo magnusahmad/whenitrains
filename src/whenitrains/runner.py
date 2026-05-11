@@ -1091,6 +1091,10 @@ def process_open_position_exits(
             continue
         if not invalidated and hourly_reason is None:
             continue
+        if _LIVE_CLIENT is not None and _rounds_below_live_sell_precision(
+            float(pos["net_shares"])
+        ):
+            continue
 
         try:
             book = latest_orderbook(db, token_id)
@@ -1207,6 +1211,10 @@ def _sell_miss_note(
     trigger_text = trigger or "unknown trigger"
     bid_text = "n/a" if bid is None else f"{bid:.3f}"
     return f"sell missed {label_text} {side_text}: {reason_text} (trigger={trigger_text}, bid={bid_text})"
+
+
+def _rounds_below_live_sell_precision(shares: float) -> bool:
+    return floor(shares * 100) / 100 <= 0
 
 
 def build_forecast_move_candidates(
