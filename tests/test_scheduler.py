@@ -416,6 +416,39 @@ HKO,27.3,28.5,24.0
             self.assertIn("💰 TRADE EXECUTED 💰", text)
             self.assertIn("paper-scheduler filled_buys=1 filled_sells=0", text)
 
+    def test_scheduler_returns_aggregate_runner_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = self.connect_db(Path(tmp) / "test.db")
+            migrate(db)
+            now = datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT)
+
+            result = run_scheduled_paper_loop(
+                db,
+                fetch_since_midnight=lambda: "",
+                fetch_bulletin=lambda: "",
+                discover_market=lambda target: None,
+                fetch_orderbooks=lambda target: None,
+                run_tick_fn=lambda _db, today_hkt: RunnerResult(
+                    buys_filled=1,
+                    buys_missed=2,
+                    sells_filled=3,
+                    sells_missed=4,
+                    signals=5,
+                    notes=("aggregate me",),
+                ),
+                max_ticks=2,
+                now_fn=lambda: now,
+                quiet=True,
+                base_sleep_seconds=0,
+            )
+
+            self.assertEqual(result.buys_filled, 1)
+            self.assertEqual(result.buys_missed, 2)
+            self.assertEqual(result.sells_filled, 3)
+            self.assertEqual(result.sells_missed, 4)
+            self.assertEqual(result.signals, 5)
+            self.assertIn("aggregate me", result.notes)
+
     def test_scheduler_prints_loud_trade_log_for_live_fills(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = self.connect_db(Path(tmp) / "test.db")

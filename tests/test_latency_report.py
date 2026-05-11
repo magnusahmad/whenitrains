@@ -163,6 +163,8 @@ def _archive_report_fixture_content(name: str) -> str:
             "live websocket runtime started all_running=True client_count=2\n"
             "live-scheduler started\n"
             "live-scheduler actions=decisions-only buys=0/0 sells=0/0 signals=0\n"
+            "live scheduler concurrency evidence "
+            "independent_candidate_opportunity=not_observed candidate_actions=0\n"
             "live scheduler smoke ok ticks=1 websockets_enabled=True\n"
         )
     if name.startswith("latency_") and name.endswith(".txt"):
@@ -429,6 +431,45 @@ class LatencyReportTests(unittest.TestCase):
                     "live scheduler smoke ok",
                     "live scheduler smoke failed",
                 )
+            )
+            digest = hashlib.sha256(report.read_bytes()).hexdigest()
+            manifest = (output_dir / "manifest.txt").read_text()
+            (output_dir / "manifest.txt").write_text(
+                "\n".join(
+                    f"sha256 {name}={digest}"
+                    if line.startswith(f"sha256 {name}=")
+                    else line
+                    for line in manifest.splitlines()
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "low-latency-verify-evidence-archive",
+                        "--input-dir",
+                        str(output_dir),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("evidence archive file malformed: live-scheduler.log", stdout.getvalue())
+
+    def test_low_latency_verify_evidence_archive_fails_scheduler_log_without_concurrency_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "evidence"
+            _write_complete_evidence_archive(output_dir)
+            name = "live-scheduler.log"
+            report = output_dir / name
+            report.write_text(
+                "\n".join(
+                    line
+                    for line in _archive_report_fixture_content(name).splitlines()
+                    if not line.startswith("live scheduler concurrency evidence ")
+                )
+                + "\n"
             )
             digest = hashlib.sha256(report.read_bytes()).hexdigest()
             manifest = (output_dir / "manifest.txt").read_text()

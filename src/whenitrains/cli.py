@@ -1151,7 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     )
                 try:
-                    run_scheduled_paper_loop(
+                    scheduler_result = run_scheduled_paper_loop(
                         db,
                         fetch_since_midnight=lambda: _fetch_since_midnight(db),
                         fetch_bulletin=lambda: _fetch_bulletin(
@@ -1194,7 +1194,13 @@ def main(argv: list[str] | None = None) -> int:
                         output_label="live-scheduler",
                         alert_sink=alert_sink,
                     )
+                    if scheduler_result is None:
+                        scheduler_result = RunnerResult()
                     if args.ticks is not None and not scheduler_smoke_blocked:
+                        print(
+                            _live_scheduler_concurrency_evidence_line(scheduler_result),
+                            flush=True,
+                        )
                         _record_live_scheduler_smoke(
                             db,
                             ok=True,
@@ -1930,8 +1936,55 @@ def _live_scheduler_log_content_valid(text: str) -> bool:
     return (
         "live-scheduler started" in text
         and "live-scheduler actions=" in text
+        and _live_scheduler_concurrency_log_valid(text)
         and "live scheduler smoke ok " in text
     )
+
+
+def _live_scheduler_concurrency_evidence_line(result: RunnerResult) -> str:
+    candidate_actions = (
+        result.buys_filled
+        + result.buys_missed
+        + result.sells_filled
+        + result.sells_missed
+    )
+    if candidate_actions < 2:
+        return (
+            "live scheduler concurrency evidence "
+            "independent_candidate_opportunity=not_observed "
+            f"candidate_actions={candidate_actions}"
+        )
+    return (
+        "live scheduler concurrency evidence "
+        "independent_candidate_opportunity=observed "
+        f"candidate_actions={candidate_actions} "
+        "independent_candidate_concurrency=not_proven"
+    )
+
+
+def _live_scheduler_concurrency_log_valid(text: str) -> bool:
+    prefix = "live scheduler concurrency evidence "
+    for line in text.splitlines():
+        if not line.startswith(prefix):
+            continue
+        fields = _parse_log_fields(line[len(prefix) :])
+        if fields.get("independent_candidate_opportunity") == "not_observed":
+            try:
+                return int(fields.get("candidate_actions", "")) < 2
+            except ValueError:
+                return False
+        return fields.get("independent_candidate_concurrency") == "observed"
+    return False
+
+
+def _parse_log_fields(text: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for part in text.split():
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        fields[key] = value
+    return fields
 
 
 def _readiness_db_audit_report_content_valid(text: str) -> bool:

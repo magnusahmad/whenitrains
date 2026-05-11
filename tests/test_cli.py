@@ -303,6 +303,11 @@ class CliDiscoveryTests(unittest.TestCase):
                 "live scheduler smoke ok ticks=0 websockets_enabled=True",
                 stdout.getvalue(),
             )
+            self.assertIn(
+                "live scheduler concurrency evidence "
+                "independent_candidate_opportunity=not_observed candidate_actions=0",
+                stdout.getvalue(),
+            )
             self.assertEqual(live_tick.call_count, 2)
             for call in live_tick.call_args_list:
                 self.assertIs(call.kwargs["book_cache"], book_cache)

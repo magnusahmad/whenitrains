@@ -235,8 +235,9 @@ def run_scheduled_paper_loop(
     output_label: str = "paper-scheduler",
     stop_event: threading.Event | None = None,
     alert_sink: AlertSink | None = None,
-) -> None:
+) -> RunnerResult:
     state = SchedulerState()
+    aggregate_result = RunnerResult()
     scheduler_stop = stop_event or threading.Event()
     stop_aws_actual_polling = threading.Event()
     aws_actual_thread: threading.Thread | None = None
@@ -376,6 +377,7 @@ def run_scheduled_paper_loop(
             else:
                 state.trading_warmed_up = True
                 result = RunnerResult(notes=("startup warmup: trading skipped",))
+            aggregate_result = _merge_runner_results(aggregate_result, result)
             if should_print_scheduled_tick(notes, result, quiet):
                 print(
                     f"{output_label} "
@@ -427,6 +429,7 @@ def run_scheduled_paper_loop(
         _restore_signal_handlers(previous_signal_handlers)
         if scheduler_stop.is_set():
             print(f"{output_label} stopped", flush=True)
+    return aggregate_result
 
 
 def _run_aws_actual_poll_loop(
