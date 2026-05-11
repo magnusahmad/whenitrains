@@ -774,6 +774,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 post-live-scheduler-smoke-startup-failure full verification: `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passed with 457 tests.
 
+2026-05-11 live readiness env-prerequisite checklist pass: updated `live-readiness-checklist` so it explicitly runs `live-env-exports` and lists the required live config environment variables before network/auth/scheduler smoke commands. This matches the current live blocker where no-trade smoke commands fail and record evidence because the shell is missing live config. Verified with `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_cli.py -k live_readiness_checklist`.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings

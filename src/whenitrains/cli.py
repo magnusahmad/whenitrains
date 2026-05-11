@@ -2679,6 +2679,13 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
         "cd ~/whenitrains-live-logs",
         "python3 -m http.server 8765 --bind 0.0.0.0",
         "curl -L http://192.168.1.49:8765/",
+        "0b. confirm live config env is loaded before smoke commands",
+        command("live-env-exports"),
+        (
+            "required env: WHENITRAINS_TRADING_MODE=live "
+            "POLYMARKET_SIGNATURE_TYPE POLYMARKET_FUNDER_ADDRESS "
+            "POLYMARKET_API_KEY POLYMARKET_API_SECRET POLYMARKET_API_PASSPHRASE"
+        ),
         "1. live-network-smoke --live --require-connected",
         command("live-network-smoke", "--live", "--seconds", "10", "--require-connected"),
         "2. live-auth-smoke --live",

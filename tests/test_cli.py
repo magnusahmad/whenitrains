@@ -580,6 +580,10 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertIn("cd ~/whenitrains-live-logs", text)
         self.assertIn("python3 -m http.server 8765 --bind 0.0.0.0", text)
         self.assertIn("curl -L http://192.168.1.49:8765/", text)
+        self.assertIn("0b. confirm live config env is loaded before smoke commands", text)
+        self.assertIn(command_prefix + "live-env-exports", text)
+        self.assertIn("required env: WHENITRAINS_TRADING_MODE=live", text)
+        self.assertIn("POLYMARKET_API_SECRET", text)
         self.assertIn("1. live-network-smoke --live --require-connected", text)
         self.assertIn("archive live-reconcile output as REST/recent-trades validation evidence", text)
         self.assertIn(
