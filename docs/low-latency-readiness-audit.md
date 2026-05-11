@@ -131,7 +131,7 @@ PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/b
 git diff --check
 ```
 
-All passed. The combined roadmap verification ran 368 tests under tracemalloc after switching generated live readiness commands to `.venv/bin/python`. The broader venv discovery command also passed with 449 tests while escalating `ResourceWarning` to an error, confirming the broader dashboard, experiment, hourly, paper, and user WebSocket fixture connections are closed cleanly and the DB-audit usable WebSocket book regression is covered. `git diff --check` passed.
+All passed. The combined roadmap verification ran 368 tests under tracemalloc after switching generated live readiness commands to `.venv/bin/python`. After the live scheduler log-evidence and scheduler-log download checklist updates, the broader venv discovery command also passed with 449 tests while escalating `ResourceWarning` to an error, confirming the broader dashboard, experiment, hourly, paper, and user WebSocket fixture connections are closed cleanly and the DB-audit usable WebSocket book regression is covered. `git diff --check` passed.
 
 ## Next Steps
 

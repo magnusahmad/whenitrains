@@ -742,6 +742,8 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 scheduler-log evidence download checklist pass: `live-readiness-checklist` and the live runbook now include the exact `curl -L -o data/low-latency-evidence/<run-id>/live-scheduler.log http://192.168.1.49:8765/<log-file-name>` command so the capped scheduler log lands beside the generated readiness archive. Verified red/green with `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py' -k test_live_readiness_checklist_prints_ordered_evidence_commands`, then `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py'` passing 33 tests.
 
+2026-05-11 post-log-evidence full venv verification: `PYTHONWARNINGS=error::ResourceWarning PYTHONTRACEMALLOC=5 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passed with 449 tests after the live scheduler preflight/WebSocket/drift/smoke log lines and scheduler-log download checklist update.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
