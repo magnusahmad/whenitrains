@@ -954,6 +954,29 @@ class RunnerTests(unittest.TestCase):
                 result.notes,
             )
 
+    def test_live_exit_skips_sub_precision_dust_without_logging_miss(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            upsert_live_position(db, "yes29", 0.003, 0.40, 0.0)
+            _store_observation(db, 30.0)
+            store_orderbook(
+                db,
+                "yes29",
+                OrderBook("yes29", bids=[(0.10, 1000)], asks=[(0.41, 1000)], tick_size=0.01, min_order_size=5),
+            )
+            client = _FakeLiveClient()
+            client.token_balances["yes29"] = 0.003
+
+            result = run_live_tick(db, client, today_hkt=date(2026, 5, 4), order_cap_usd=5)
+
+            self.assertEqual(result.sells_missed, 0)
+            self.assertEqual(client.sells, [])
+            self.assertFalse(any("sell missed" in note for note in result.notes))
+            pos = db.execute("select net_shares from live_positions where outcome_id = 'yes29'").fetchone()
+            self.assertAlmostEqual(pos["net_shares"], 0.003)
+            live_order_count = db.execute("select count(*) from live_orders").fetchone()[0]
+            self.assertEqual(live_order_count, 0)
+
     def test_tick_exits_invalidated_exact_position(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(Path(tmp) / "test.db")

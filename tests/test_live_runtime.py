@@ -98,6 +98,49 @@ class LiveRuntimeTests(unittest.TestCase):
             user_client.db.close()
             db.close()
 
+    def test_live_scheduler_market_cache_persists_websocket_snapshots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            config = LiveConfig(
+                trading_mode="live",
+                private_key="private",
+                signature_type=1,
+                funder_address="0xfunder",
+                api_key="key",
+                api_secret="secret",
+                api_passphrase="passphrase",
+            )
+            runtime = LiveWebSocketRuntime.for_live_scheduler(
+                db_path=db_path,
+                config=config,
+                min_date_hkt="2026-05-04",
+            )
+
+            runtime.book_cache.apply_message(
+                {
+                    "event_type": "book",
+                    "asset_id": "yes30",
+                    "bids": [{"price": "0.36", "size": "100"}],
+                    "asks": [{"price": "0.37", "size": "100"}],
+                }
+            )
+
+            row = db.execute(
+                """
+                select best_bid, best_ask, depth_json
+                from orderbook_snapshots
+                where outcome_id = 'yes30'
+                """
+            ).fetchone()
+
+            self.assertIsNotNone(row)
+            self.assertEqual(row["best_bid"], 0.36)
+            self.assertEqual(row["best_ask"], 0.37)
+            self.assertIn('"source": "polymarket_market_websocket"', row["depth_json"])
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

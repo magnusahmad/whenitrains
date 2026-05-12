@@ -58,6 +58,29 @@ class LowLatencyEventQueue:
     def get(self, timeout: float | None = None) -> AlphaEvent:
         return self._queue.get(timeout=timeout)
 
+    def drain_coalesced(self) -> list[AlphaEvent]:
+        events: list[AlphaEvent] = []
+        while True:
+            try:
+                events.append(self._queue.get_nowait())
+            except queue.Empty:
+                break
+        if len(events) <= 1:
+            return events
+        forecast_index_by_date: dict[tuple[str, str], int] = {}
+        ordered: list[AlphaEvent] = []
+        for event in events:
+            if event.kind != "forecast_sample_changed":
+                ordered.append(event)
+                continue
+            key = (event.kind, event.target_date_hkt)
+            if key in forecast_index_by_date:
+                ordered[forecast_index_by_date[key]] = event
+            else:
+                forecast_index_by_date[key] = len(ordered)
+                ordered.append(event)
+        return ordered
+
     def empty(self) -> bool:
         return self._queue.empty()
 

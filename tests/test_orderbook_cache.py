@@ -176,6 +176,43 @@ class OrderBookCacheTests(unittest.TestCase):
 
             self.assertEqual(condition_ids, ["market-2026-05-04-yes-today"])
 
+    def test_lists_condition_ids_from_nested_gamma_market_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_polymarket_event(
+                db,
+                TemperatureMarket(
+                    event_id="event-2026-05-04",
+                    event_slug="highest-temperature-in-hong-kong-on-2026-05-04",
+                    title="Highest temperature in Hong Kong on 2026-05-04?",
+                    target_date=date(2026, 5, 4),
+                    raw_event={
+                        "markets": [
+                            {
+                                "id": "2227746",
+                                "conditionId": "0xcondition30",
+                            }
+                        ]
+                    },
+                    outcomes=[
+                        Outcome(
+                            market_id="2227746",
+                            label="30°C",
+                            predicate=parse_outcome_label("30°C"),
+                            yes_token_id="yes30",
+                            no_token_id="no30",
+                        )
+                    ],
+                ),
+            )
+
+            condition_ids = list_active_market_condition_ids(
+                db, min_date_hkt="2026-05-04"
+            )
+
+            self.assertEqual(condition_ids, ["0xcondition30"])
+
     def test_subscription_manager_emits_payload_only_when_tokens_change(self):
         manager = SubscriptionManager()
 

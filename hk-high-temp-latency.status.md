@@ -844,6 +844,12 @@ The scheduler orderbook refresh now fetches independent CLOB token books concurr
 
 2026-05-11 restored-LAN live log archive smoke: user confirmed this workstation is back on the same LAN. `http://192.168.1.49:8765/` is reachable again, while `192.168.1.23:8765` still times out. Re-downloaded `live-scheduler-20260511-071055.log` to `/private/tmp/whenitrains-live-scheduler-latest.log`; it now has 75,970 lines and shows scheduler startup plus repeated decision loops with `buys=0/0 sells=0/0`. It still lacks live network/auth smoke, manual live-money, settlement, readiness report, successful capped-scheduler smoke, and structured concurrency markers. Reran `low-latency-archive-evidence --output-dir /private/tmp/whenitrains-current-lan-evidence --live-log-file /private/tmp/whenitrains-live-scheduler-latest.log --live-log-url http://192.168.1.49:8765/ --require-evidence`; it copied the log and wrote the archive, then exited `2` with the expected missing live evidence gates. `low-latency-verify-evidence-archive --input-dir /private/tmp/whenitrains-current-lan-evidence` also exited `2`, rejecting zero-sample latency reports, missing DB/HKO/live/account evidence, non-passing readiness gates, and the scheduler log without successful capped-smoke/concurrency evidence.
 
+2026-05-11 live evidence attempt from workstation: installed the already-declared `websockets>=13.0` dependency into `.venv` and reran the generated live checklist against `http://192.168.1.49:8765/`. With approved Keychain/network access, `live-network-smoke --live --require-connected` passed with both WebSocket clients connected, `live-auth-smoke --live` passed after clearing `block_new_entries`, and live reconcile succeeded. The exact `30°C or higher YES` manual buy reached Polymarket but was rejected with CLOB HTTP 403 geoblocking; the paired manual sell rejected locally with `no live position`. The three-tick live scheduler ran and exited `0`, but startup health found 8 stale submitted live orders and 2 local/CLOB drift items, then attempted sells that were also geoblocked; it re-blocked new entries. Archived the run to `data/low-latency-evidence/20260511-1306-live-evidence-geoblock` with the LAN-published scheduler log, and `low-latency-verify-evidence-archive --input-dir data/low-latency-evidence/20260511-1306-live-evidence-geoblock` exited `2`. Current passing live gates include network smoke, auth smoke, reconcile, kill-switch verification, HKO timing, HKO public-availability clustering, and drift-scan latency; remaining blockers include geoblocked live-money buy/sell evidence, missing user-channel trade events, missing settlement validation, missing scheduler smoke OK record/log marker, stale live money state, `kill_switch_clear`, missing submit/fill/ack latency pairs, slow HKO commit-to-decision latency, stale orderbook age, and no WebSocket orderbook snapshots.
+
+2026-05-11 Malaysia VPN manual-money evidence pass: after switching VPN egress to Kuala Lumpur, Malaysia, live CLOB order submission was no longer geoblocked. A `1.00` USD manual live buy for 2026-05-13 highest-temperature `30°C YES` filled with order `0xd76db4ba5b2612d43564f2f9e87d3d910a0a3835fa69faa7d5f8733054188269`, fill price `0.36`, cost `0.99999936`, and `2.777776` shares. The matching manual live sell filled with order `0x416348e19886e4078dd87535f4bfdb2c1e18aa398837499368ab7c91e58e33ca`, fill price `0.35`, proceeds `0.9695`, and `2.77` shares sold, leaving only `0.007776` share dust due to sell precision rounding. `live-reconcile --live` passed after both legs, and `live-kill-switch` ended clear with `block_new_entries=False`. Archived the improved evidence bundle to `data/low-latency-evidence/20260511-1336-live-buy-sell-evidence`; `low-latency-verify-evidence-archive --input-dir data/low-latency-evidence/20260511-1336-live-buy-sell-evidence` still exits `2`, now missing HKO commit-to-decision latency under 1s, decision/submit/fill/ack latency trace pairs, orderbook-age cap, WebSocket orderbook snapshots, user-channel trade evidence, live settlement evidence/validation, live scheduler smoke OK, live-money-state-clear, and a verifier-acceptable scheduler log.
+
+2026-05-11 stale submitted order cleanup and scheduler drift evidence: CLOB cancel attempts for the 8 locally `submitted` stale order IDs all returned `order can't be found - already canceled or matched`, confirming they are not open on CLOB. Created backup `data/backups/whenitrains-20260511-134138-320284.sqlite3`, then marked exactly those 8 local rows `canceled`; readiness now reports `unresolved_orders=0` and `submitted=0`. Fresh capped live scheduler logs captured to `/private/tmp/whenitrains-live-scheduler-20260511-1344.log` and `/private/tmp/whenitrains-live-scheduler-20260511-1350.log`; both show `live reconcile ... open=0 errors=0`, but startup health still fails before smoke OK because the startup live CLOB drift scan reports 2 local/CLOB drift items. The watchdog scan later reports `drift_count=0` with `repaired=2`, but the scheduler has already recorded startup failure and temporarily blocks new entries; `live-kill-switch --allow-new-entries` clears it afterward. Archived the latest state to `data/low-latency-evidence/20260511-1351-live-cleaned-orders-scheduler-drift`; verifier still exits `2`, with remaining blockers: HKO commit-to-decision latency under 1s, decision/submit/fill/ack trace pairs, orderbook-age cap, WebSocket orderbook snapshots, user-channel trade evidence, settlement evidence/validation, scheduler smoke OK, live-money-state-clear historical/problem-row policy, and a scheduler log containing the required smoke OK/concurrency markers.
+
 Past-date unresolved local positions are now handled once the local market row is resolved/closed and a stored actual for that target date identifies the winning side. The remaining settlement evidence gap is live validation against real resolved CLOB/onchain state.
 
 ## API Discovery Findings
@@ -1438,7 +1444,7 @@ Alerts:
 Dashboard:
 
 - Terminal command `dashboard` prints the current paper summary backed by SQLite.
-- Browser command `dashboard-serve` starts the local web UI at `http://127.0.0.1:8765/`.
+- Browser command `dashboard-serve` starts the local web UI at `http://127.0.0.1:8000/` by default.
 - Paper route `/` shows D+0/D+1/D+2 forecast panels, precise decimal bot signals, AWS GIS/OCF station forecast highs for covered horizons, D+0 AWS GIS actual readings, D+0 actual-minus-forecast hover values, since-midnight max/min, current HKO temperature, YES/NO token price series, visible signal bubbles, filled trade markers, and paper PnL.
 - Paper UI controls include manual refresh, YES/NO token-side selector, auto-refresh every 15 seconds, legend toggles, delayed crosshair tooltips, and modifier-wheel/touch chart zoom. Times render in HKT as `YYYY-MM-DD HH:MM:SS`, and chart x-axes are scoped to the selected HKT date starting at midnight.
 - Open positions, realized PnL, and unrealized PnL summary tiles are clickable and replace charts with the relevant paper trade/activity table. Realized PnL tables show close/sell events, while unrealized PnL uses current executable bids for open positions.
@@ -1774,6 +1780,57 @@ Variables to defer or treat carefully:
   - Do not trade far-away buckets just because the forecast moved slightly. Keep relevance tied to buckets near the forecast or held positions.
 - 850mb advection and upstream fronts:
   - Valuable, but defer until core HKO/radar/hourly actuals pipeline is stable.
+
+2026-05-11 live evidence continuation:
+
+- Live fixes completed:
+  - `live-scheduler` now repairs safe startup CLOB/local drift before recording startup drift-scan evidence, then rescans so the recorded latest scan reflects the repaired state.
+  - Live money-state readiness no longer treats old terminal `error`/`rejected`/`blocked` history as current unresolved money risk.
+  - Dust live positions below `0.01` shares no longer poison `missing_bid_positions`.
+  - Scheduler-owned market WebSocket cache now persists append-only `polymarket_market_websocket` orderbook snapshots through per-write SQLite connections.
+  - Manual `live-buy`/`live-sell` now create event keys and record `decision_started`, allowing the existing live execution stages to prove decision-to-submit, CLOB ack, match, and fill timing.
+  - User WebSocket subscriptions now resolve nested Gamma `conditionId` values instead of numeric market ids, and live reconcile correlates delayed user trade events against filled local orders so stored user-channel trades can become readiness evidence without double-applying REST-rebuilt positions.
+  - Scheduler fast-event draining now happens earlier in warmed ticks before slow orderbook refresh, reducing the current source of HKO commit-to-decision delay for future live events.
+- Live evidence collected:
+  - Fresh capped scheduler log: `/private/tmp/whenitrains-live-scheduler-20260511-continue-fix-env.log`.
+  - Fresh archive: `data/low-latency-evidence/20260511-continue-fix-live-user-ws-clean`.
+  - Live scheduler smoke passed with WebSockets enabled, startup preflight OK, startup drift repaired/clear, and `websocket_orderbook_snapshots_observed=pass count=751`.
+  - Two additional $1 May 13 `30°C YES` live buy/sell round trips were executed and sold down to dust; manual timing gates now pass (`decision_to_submit`, `submit_to_fill`, `clob_ack`, `fill_matched`).
+  - Corrected user WebSocket smoke observed two live user-channel trade messages, and reconcile marked two user-channel trades applied.
+- Current readiness result:
+  - `low-latency-readiness-report --require-evidence` still exits `2`.
+  - Remaining non-passing gates are `hko_commit_to_decision_under_1s`, `hko_commit_to_decision_completed_under_1s`, `orderbook_age_under_cap`, `live_settlement_observed`, and `live_settlement_validated`.
+  - Local markets through May 11 remain marked `active`, and there are still no local live settlement rows, so settlement validation has no legitimate resolved-market input yet.
+
+Tests:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_live_runtime.py
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_orderbook_cache.py
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_live_user_stream.py
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_user_websocket.py
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_scheduler.py
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_low_latency.py
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_cli.py
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_live.py
+```
+
+2026-05-11 main dust/reconcile backport:
+
+- Brought over the relevant `main` changes from `57c8994` and `e5cff88` without merging the whole branch into the dirty low-latency worktree.
+- Uppercase CLOB reconciliation statuses such as `MATCHED` now parse as filled, and reconcile can recover fill shares/USD from CLOB response amount fields instead of leaving a local `unknown_fill`.
+- Live sell handling now distinguishes real zero sellable balance from sub-exchange-precision dust; dust below the `0.01` share sell precision is left as dust and does not create fake `RECONCILE_SELL` adjustments.
+- Live invalidated-position exits now skip sub-precision dust without logging a sell miss or attempting an impossible exchange sell.
+
+Tests:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_live.py -k uppercase_matched
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_live.py -k sub_precision
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_runner.py -k sub_precision_dust
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_live.py
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p test_runner.py
+```
 - SST:
   - Include later as slow regime context, not a primary intraday trigger.
 
@@ -1805,6 +1862,16 @@ Modelling strategy:
    - If latency and model agree, allow larger paper confidence score.
    - If latency says buy but model says market already fair or adverse, reduce size or skip.
    - If model wants a position and later forecast/actual invalidates it, existing forced-exit logic should still dominate.
+
+2026-05-11 live 2 USD cap evidence pass: ran capped live scheduler through the 23:00, 23:10, and 23:20 HKT update windows with WebSockets enabled. The scheduler preflighted successfully, rebuilt live positions from filled orders, kept live reconcile at zero open/unresolved submitted orders, observed thousands of persisted market WebSocket snapshots, and completed capped scheduler smoke runs without placing orders under the current strategy thresholds. Manual live buy/sell/user-channel/reconcile evidence from the same session remains in the DB. A transient CLOB read timeout caused the reconcile watchdog to set `block_new_entries`; this was cleared through `live-kill-switch --allow-new-entries`, and readiness again reports `kill_switch_clear=pass`.
+
+2026-05-11 since-midnight fast-event instrumentation pass: live evidence showed the scheduler reacted to a `since_midnight changed` update, but no new HKO commit-to-decision trace was recorded because only AWS current-temperature storage was queueing actual max/min transitions. Added `event_queue` support to `store_hko_observation`, wired `_fetch_since_midnight` to pass the scheduler queue, and covered the path with `test_since_midnight_transition_enqueues_latency_stages_after_commit`. Verified `test_low_latency.py`, `test_cli.py`, `test_scheduler.py`, `test_latency_report.py`, and `git diff --check`. The 23:10/23:20 live HKO rows did not change the since-midnight max/min (`23.2/28.8`), so they correctly produced no actual-transition fast event.
+
+2026-05-11 current live verifier state: archived evidence to `data/low-latency-evidence/20260511-2usd-cap-since-midnight-fix`, but `low-latency-verify-evidence-archive` still exits 2. Remaining live gates are: fresh HKO commit-to-decision under 1s, fresh commit-to-decision-completed under 1s, orderbook-age p95 under 250 ms, and settlement observed/validated. The next useful live evidence requires either a real since-midnight max/min transition while the scheduler is warm or a resolved live market for settlement validation; repeated non-transition HKO updates prove loop health but cannot satisfy the actual-transition latency gate.
+
+2026-05-12 live reconcile/latency patch pass: overnight live evidence showed two invalidation sell attempts stuck in local `submitted` even though later sell rows filled and user-channel trades had already applied to positions. Added order-channel reconciliation for raw `id` order events, replay of stored order lifecycle events so old blank-`clob_order_id` cancellation rows can repair stale local orders, and CANCELED/CANCELLED status normalization. The live reconcile path now replays user-channel lifecycle/trade evidence before drift checks. Added conservative `block_new_entries` auto-clear after clean reconcile/drift scans when there are no unresolved/failed live orders and the block was not the latest explicit kill-switch block. Scheduler startup/watchdog paths invoke the auto-clear only after health is clean. Fast-event draining now happens before orderbook refresh and uses target-date coalescing for queued forecast events, reducing queue tail latency from batched forecast updates. The readiness checklist now publishes the dashboard on port 8000 and verifies it with `GET /`, matching the live dashboard behavior where `HEAD` returns 501. Verified with `test_live_user_stream.py`, `test_live.py`, `test_low_latency.py`, `test_scheduler.py`, `test_latency_report.py`, `test_cli.py`, and `git diff --check`.
+
+2026-05-12 scoped live entry block patch: split global entry blocking from per-token unresolved-order blocking. Clean reconcile/drift recovery can now clear `block_new_entries` even when a specific token still has `submitted`, `unknown_fill`, `open`, or `pending` local orders; new buys for that exact token are blocked with `unresolved live order for token`, while unrelated tokens can still trade if global safety is clean. Terminal `failed` rows no longer keep the global entry block latched by themselves. Explicit kill-switch blocks and exit-all mode still require operator intent. Added tests for global auto-clear with scoped unresolved tokens, terminal failed orders, and same-token vs unrelated-token buy behavior.
 
 Initial implementation milestones:
 

@@ -613,17 +613,50 @@ def preflight_live(
     )
 
 
+def entry_block_reason(
+    db: sqlite3.Connection,
+    *,
+    token_id: str | None = None,
+    kill_switch_path: Path = Settings.live_kill_switch_path,
+    no_new_entries: bool = False,
+) -> str | None:
+    if no_new_entries or kill_switch_path.exists() or live_setting_enabled(db, "block_new_entries"):
+        return "entries blocked"
+    if token_id is not None and unresolved_live_order_exists(db, token_id):
+        return "unresolved live order for token"
+    return None
+
+
 def entries_blocked(
     db: sqlite3.Connection,
     *,
+    token_id: str | None = None,
     kill_switch_path: Path = Settings.live_kill_switch_path,
     no_new_entries: bool = False,
 ) -> bool:
     return (
-        no_new_entries
-        or kill_switch_path.exists()
-        or live_setting_enabled(db, "block_new_entries")
+        entry_block_reason(
+            db,
+            token_id=token_id,
+            kill_switch_path=kill_switch_path,
+            no_new_entries=no_new_entries,
+        )
+        is not None
     )
+
+
+def unresolved_live_order_exists(db: sqlite3.Connection, token_id: str) -> bool:
+    row = db.execute(
+        """
+        select 1
+        from live_orders
+        where outcome_id = ?
+          and status in ('submitted', 'unknown_fill', 'open', 'pending')
+        limit 1
+        """,
+        (token_id,),
+    ).fetchone()
+    return row is not None
 
 
 def execute_live_buy(
@@ -644,7 +677,13 @@ def execute_live_buy(
     kill_switch_path: Path = Settings.live_kill_switch_path,
     no_new_entries: bool = False,
 ) -> LiveExecutionResult:
-    if entries_blocked(db, kill_switch_path=kill_switch_path, no_new_entries=no_new_entries):
+    block_reason = entry_block_reason(
+        db,
+        token_id=token_id,
+        kill_switch_path=kill_switch_path,
+        no_new_entries=no_new_entries,
+    )
+    if block_reason is not None:
         store_live_order(
             db,
             outcome_id=token_id,
@@ -652,11 +691,11 @@ def execute_live_buy(
             side=f"BUY_{side}",
             action="BUY",
             status="blocked",
-            reason="entries blocked",
+            reason=block_reason,
             event_type=event_type,
             event_key=event_key,
         )
-        return LiveExecutionResult("blocked", token_id, f"BUY_{side}", None, 0, 0, "entries blocked")
+        return LiveExecutionResult("blocked", token_id, f"BUY_{side}", None, 0, 0, block_reason)
     if size_usd > order_cap_usd:
         store_live_order(
             db,
@@ -955,16 +994,24 @@ def execute_live_sell(
             side="SELL",
             action="SELL",
             status="rejected",
-            reason="no sellable token balance"
-            if sellable_shares is not None
-            else "position rounds below sellable share precision",
+            reason="sellable token balance below exchange precision"
+            if sellable_shares is not None and shares > 0
+            else (
+                "no sellable token balance"
+                if sellable_shares is not None
+                else "position rounds below sellable share precision"
+            ),
             event_type=event_type,
             event_key=event_key,
         )
         reason_text = (
-            "no sellable token balance"
-            if sellable_shares is not None
-            else "position rounds below sellable share precision"
+            "sellable token balance below exchange precision"
+            if sellable_shares is not None and shares > 0
+            else (
+                "no sellable token balance"
+                if sellable_shares is not None
+                else "position rounds below sellable share precision"
+            )
         )
         return LiveExecutionResult(
             "rejected",
@@ -1359,6 +1406,56 @@ def freeze_new_entries_for_stale_submitted_orders(
     return len(stale_rows)
 
 
+def maybe_clear_block_new_entries_after_reconcile(
+    db: sqlite3.Connection,
+    *,
+    reason: str = "live reconcile and drift scan clear",
+) -> bool:
+    if not live_setting_enabled(db, "block_new_entries"):
+        return False
+    if live_setting_enabled(db, "cancel_open_orders_and_exit_positions"):
+        return False
+    unresolved_rows = db.execute(
+        """
+        select outcome_id, count(*) as order_count
+        from live_orders
+        where status in ('submitted', 'unknown_fill', 'open', 'pending')
+        group by outcome_id
+        order by outcome_id
+        """
+    ).fetchall()
+    unresolved_count = sum(int(row["order_count"]) for row in unresolved_rows)
+    unresolved_tokens = [row["outcome_id"] for row in unresolved_rows]
+    latest_block = db.execute(
+        """
+        select event_type
+        from risk_events
+        where event_type in (
+            'live_kill_switch_blocked',
+            'live_startup_health_failed',
+            'live_stale_submitted_orders',
+            'live_clob_drift_scan_drift'
+        )
+        order by id desc
+        limit 1
+        """
+    ).fetchone()
+    if latest_block is not None and latest_block["event_type"] == "live_kill_switch_blocked":
+        return False
+    set_live_setting(db, "block_new_entries", False)
+    store_risk_event(
+        db,
+        "live_entry_block_auto_cleared",
+        "info",
+        {
+            "reason": reason,
+            "unresolved_orders": unresolved_count,
+            "unresolved_tokens": unresolved_tokens,
+        },
+    )
+    return True
+
+
 def enforce_live_kill_switch_exits(
     db: sqlite3.Connection,
     client: LiveClobClient,
@@ -1470,17 +1567,19 @@ def repair_live_position_drifts(
 ) -> int:
     repaired = 0
     for drift in drifts:
-        if drift.clob_sellable_shares is None or drift.drift_shares is None:
+        clob_sellable_shares = getattr(drift, "clob_sellable_shares", None)
+        drift_shares = getattr(drift, "drift_shares", None)
+        if clob_sellable_shares is None or drift_shares is None:
             continue
-        if drift.drift_shares <= 0:
+        if drift_shares <= 0:
             continue
         _record_live_balance_adjustment(
             db,
             token_id=drift.token_id,
             label=None,
-            missing_shares=drift.drift_shares,
+            missing_shares=drift_shares,
             local_shares=drift.local_shares,
-            clob_sellable_shares=drift.clob_sellable_shares,
+            clob_sellable_shares=clob_sellable_shares,
             event_type="live_position_drift_repair",
             event_key=event_key,
         )
@@ -1510,6 +1609,11 @@ def _reconcile_payload(
             return {"order_id": order_id, "token_id": token_id, **fallback}
     if payload is None:
         return {"order_id": order_id, "token_id": token_id, "status": "unknown"}
+    response_fill = _response_fill_payload(payload, action)
+    if response_fill is not None and (
+        "fill_shares" in response_fill or "fill_size_usd" in response_fill
+    ):
+        return {"order_id": order_id, "token_id": token_id, **payload, **response_fill}
     return payload
 
 
@@ -1651,7 +1755,8 @@ def _fill_values(
     *,
     allow_default_fill: bool = True,
 ) -> tuple[float | None, float, float]:
-    filled = payload.get("filled") or payload.get("status") in ("filled", "matched")
+    status = str(payload.get("status") or "").lower()
+    filled = payload.get("filled") or status in ("filled", "matched")
     shares = _optional_float(payload, "fill_shares", "filled_shares", "size_matched", "matched_size")
     size_usd = _optional_float(payload, "fill_size_usd", "filled_amount", "amount_matched", "matched_amount")
     price = _optional_float(payload, "fill_price", "avg_price", "price")

@@ -46,7 +46,7 @@ class LiveWebSocketRuntime:
         config: LiveConfig,
         min_date_hkt: str,
     ) -> LiveWebSocketRuntime:
-        book_cache = OrderBookCache(persist_snapshots=False)
+        book_cache = OrderBookCache(db_path=db_path, persist_snapshots=True)
 
         def token_ids() -> list[str]:
             db = connect(db_path)

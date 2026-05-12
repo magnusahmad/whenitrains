@@ -684,18 +684,6 @@ HKO,27.3,28.5,24.0
             db = self.connect_db(Path(tmp) / "test.db")
             migrate(db)
             queue = LowLatencyEventQueue()
-            queue.put(
-                AlphaEvent(
-                    kind="aws_actual_transition",
-                    event_key="aws_actual_transition:max:2026-05-04:1:25.6->2:26.1",
-                    target_date_hkt="2026-05-04",
-                    source_row_id=2,
-                    previous_row_id=1,
-                    committed_monotonic=100.0,
-                    detected_monotonic=100.0,
-                    details={},
-                )
-            )
             calls = []
             output = StringIO()
             now = datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT)
@@ -708,13 +696,27 @@ HKO,27.3,28.5,24.0
                 calls.append(("fast", today_hkt))
                 return RunnerResult(buys_filled=1, notes=("fast",))
 
+            def fetch_orderbooks(_target):
+                queue.put(
+                    AlphaEvent(
+                        kind="aws_actual_transition",
+                        event_key="aws_actual_transition:max:2026-05-04:1:25.6->2:26.1",
+                        target_date_hkt="2026-05-04",
+                        source_row_id=2,
+                        previous_row_id=1,
+                        committed_monotonic=100.0,
+                        detected_monotonic=100.0,
+                        details={},
+                    )
+                )
+
             with redirect_stdout(output):
                 run_scheduled_paper_loop(
                     db,
                     fetch_since_midnight=lambda: "",
                     fetch_bulletin=lambda: "",
                     discover_market=lambda target: None,
-                    fetch_orderbooks=lambda target: None,
+                    fetch_orderbooks=fetch_orderbooks,
                     run_tick_fn=watchdog_tick,
                     low_latency_event_queue=queue,
                     fast_event_handler=fast_handler,
@@ -724,9 +726,55 @@ HKO,27.3,28.5,24.0
                     base_sleep_seconds=0,
                 )
 
-            self.assertEqual(calls, [("fast", now.date())])
+            self.assertEqual(calls[0], ("fast", now.date()))
+            self.assertNotIn(("watchdog", now.date()), calls[:1])
             self.assertIn("fast hko events", output.getvalue())
             self.assertIn("latency_event=aws_actual_transition", output.getvalue())
+
+    def test_scheduler_drains_fast_event_queue_before_orderbook_refresh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = self.connect_db(Path(tmp) / "test.db")
+            migrate(db)
+            queue = LowLatencyEventQueue()
+            calls = []
+            now = datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT)
+
+            def fetch_orderbooks(_target):
+                calls.append("orderbooks")
+                if len(calls) == 1:
+                    queue.put(
+                        AlphaEvent(
+                            kind="aws_actual_transition",
+                            event_key="aws_actual_transition:max:2026-05-04:2:26.1->3:26.3",
+                            target_date_hkt="2026-05-04",
+                            source_row_id=3,
+                            previous_row_id=2,
+                            committed_monotonic=101.0,
+                            detected_monotonic=101.0,
+                            details={},
+                        )
+                    )
+
+            def fast_handler(_db, today_hkt):
+                calls.append("fast")
+                return RunnerResult(notes=("fast",))
+
+            with redirect_stdout(StringIO()):
+                run_scheduled_paper_loop(
+                    db,
+                    fetch_since_midnight=lambda: "",
+                    fetch_bulletin=lambda: "",
+                    discover_market=lambda target: None,
+                    fetch_orderbooks=fetch_orderbooks,
+                    low_latency_event_queue=queue,
+                    fast_event_handler=fast_handler,
+                    max_ticks=2,
+                    now_fn=lambda: now,
+                    quiet=True,
+                    base_sleep_seconds=0,
+                )
+
+            self.assertEqual(calls, ["orderbooks", "fast"])
 
     def test_scheduler_uses_default_fast_event_dispatch_without_custom_handler(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -752,8 +800,7 @@ HKO,27.3,28.5,24.0
                 calls.append(("watchdog", today_hkt))
                 return RunnerResult(notes=("watchdog",))
 
-            def fast_side_effect(_db, event_queue, **_kwargs):
-                event = event_queue.get_nowait()
+            def fast_side_effect(_db, event, **_kwargs):
                 return type(
                     "FastResult",
                     (),
@@ -761,7 +808,7 @@ HKO,27.3,28.5,24.0
                 )()
 
             with patch(
-                "whenitrains.scheduler.process_next_fast_event",
+                "whenitrains.scheduler.process_fast_event",
                 side_effect=fast_side_effect,
             ) as fast:
                 with redirect_stdout(StringIO()):

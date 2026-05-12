@@ -3,10 +3,11 @@ from __future__ import annotations
 import sqlite3
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from .polymarket import OrderBook
-from .storage import store_orderbook
+from .storage import connect, store_orderbook
 
 
 class BookCacheMiss(KeyError):
@@ -53,11 +54,13 @@ class OrderBookCache:
         self,
         *,
         db: sqlite3.Connection | None = None,
+        db_path: Path | None = None,
         monotonic_fn: Callable[[], float] = time.monotonic,
         persist_snapshots: bool = True,
     ) -> None:
         self._books: dict[str, CachedOrderBook] = {}
         self._db = db
+        self._db_path = db_path
         self._monotonic_fn = monotonic_fn
         self._persist_snapshots = persist_snapshots
 
@@ -179,18 +182,22 @@ class OrderBookCache:
             updated_monotonic=updated,
             last_trade_price=trade_price,
         )
-        if self._db is not None and self._persist_snapshots:
-            store_orderbook(
-                self._db,
-                book.token_id,
-                book,
-                metadata={
-                    "source": "polymarket_market_websocket",
-                    "websocket_event_type": websocket_event_type,
-                    "received_monotonic": updated,
-                    "last_trade_price": trade_price,
-                },
-            )
+        if not self._persist_snapshots:
+            return
+        metadata = {
+            "source": "polymarket_market_websocket",
+            "websocket_event_type": websocket_event_type,
+            "received_monotonic": updated,
+            "last_trade_price": trade_price,
+        }
+        if self._db is not None:
+            store_orderbook(self._db, book.token_id, book, metadata=metadata)
+        elif self._db_path is not None:
+            db = connect(self._db_path)
+            try:
+                store_orderbook(db, book.token_id, book, metadata=metadata)
+            finally:
+                db.close()
 
 
 def _token_id(message: dict[str, Any]) -> str | None:

@@ -16,6 +16,7 @@ from whenitrains.live import (
     execute_live_sell,
     find_live_position_drifts,
     freeze_new_entries_for_stale_submitted_orders,
+    maybe_clear_block_new_entries_after_reconcile,
     reconcile_pending_live_orders,
     repair_live_position_drifts,
     reconcile_submitted_live_order,
@@ -466,6 +467,54 @@ class LiveTests(unittest.TestCase):
             self.assertIsNotNone(pos)
             self.assertAlmostEqual(pos["net_shares"], 12.5)
 
+    def test_reconcile_uppercase_matched_order_amounts_apply_position(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            order_id = db.execute(
+                """
+                insert into live_orders (
+                    created_at_utc, submitted_at_utc, outcome_id, label, side, action,
+                    clob_order_id, order_type, status, requested_size_usd, limit_price,
+                    reason, raw_request_json, raw_response_json, raw_reconcile_json
+                )
+                values (
+                    '2026-05-08T01:00:00+00:00', '2026-05-08T01:00:00+00:00',
+                    'yes25', '25C', 'BUY_YES', 'BUY', 'buy-1', 'FAK', 'unknown_fill',
+                    5.0, 0.40, 'late live buy', '{}', ?, '{}'
+                )
+                """,
+                (
+                    json.dumps(
+                        {
+                            "orderID": "buy-1",
+                            "status": "matched",
+                            "makingAmount": "5000000",
+                            "takingAmount": "12500000",
+                        }
+                    ),
+                ),
+            ).lastrowid
+            db.commit()
+            row = db.execute("select * from live_orders where id = ?", (order_id,)).fetchone()
+            client = FakeClobClient(
+                reconcile_payload={
+                    "id": "buy-1",
+                    "status": "MATCHED",
+                    "makingAmount": "5000000",
+                    "takingAmount": "12500000",
+                }
+            )
+
+            result = reconcile_submitted_live_order(db, client, row)
+
+            self.assertEqual(result.status, "filled")
+            self.assertAlmostEqual(result.shares, 12.5)
+            pos = get_live_position(db, "yes25")
+            self.assertIsNotNone(pos)
+            self.assertAlmostEqual(pos["net_shares"], 12.5)
+            self.assertAlmostEqual(pos["avg_price"], 0.4)
+
     def test_reconcile_unknown_fill_applies_trade_history_fill_to_position(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
@@ -847,6 +896,134 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(result.status, "blocked")
             self.assertEqual(client.buys, [])
 
+    def test_auto_clear_block_new_entries_after_clean_reconcile_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            set_live_setting(db, "block_new_entries", True)
+
+            cleared = maybe_clear_block_new_entries_after_reconcile(
+                db,
+                reason="clean watchdog",
+            )
+
+            self.assertTrue(cleared)
+            self.assertFalse(live_setting_enabled(db, "block_new_entries"))
+            event = db.execute(
+                "select event_type, severity, details_json from risk_events order by id desc limit 1"
+            ).fetchone()
+            self.assertEqual(event["event_type"], "live_entry_block_auto_cleared")
+            self.assertEqual(event["severity"], "info")
+            self.assertIn("clean watchdog", event["details_json"])
+
+    def test_auto_clear_block_new_entries_keeps_manual_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            set_live_setting(db, "block_new_entries", True)
+            db.execute(
+                """
+                insert into risk_events (created_at_utc, event_type, severity, details_json)
+                values ('2026-05-12T00:00:00+00:00', 'live_kill_switch_blocked', 'critical', '{}')
+                """
+            )
+            db.commit()
+
+            cleared = maybe_clear_block_new_entries_after_reconcile(db)
+
+            self.assertFalse(cleared)
+            self.assertTrue(live_setting_enabled(db, "block_new_entries"))
+
+    def test_auto_clear_block_new_entries_with_unresolved_orders_uses_scoped_guard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            set_live_setting(db, "block_new_entries", True)
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="BUY_YES",
+                action="BUY",
+                status="submitted",
+                clob_order_id="order-1",
+            )
+
+            cleared = maybe_clear_block_new_entries_after_reconcile(db)
+
+            self.assertTrue(cleared)
+            self.assertFalse(live_setting_enabled(db, "block_new_entries"))
+            event = db.execute(
+                "select event_type, details_json from risk_events order by id desc limit 1"
+            ).fetchone()
+            self.assertEqual(event["event_type"], "live_entry_block_auto_cleared")
+            self.assertIn("yes25", event["details_json"])
+
+    def test_auto_clear_block_new_entries_ignores_terminal_failed_orders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            set_live_setting(db, "block_new_entries", True)
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="BUY_YES",
+                action="BUY",
+                status="failed",
+                clob_order_id="order-1",
+                reason="CANCELED_no orders found to match with FAK order",
+            )
+
+            cleared = maybe_clear_block_new_entries_after_reconcile(db)
+
+            self.assertTrue(cleared)
+            self.assertFalse(live_setting_enabled(db, "block_new_entries"))
+
+    def test_execute_live_buy_blocks_only_token_with_unresolved_live_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="BUY_YES",
+                action="BUY",
+                status="unknown_fill",
+                clob_order_id="order-1",
+            )
+            client = FakeClobClient()
+
+            blocked = execute_live_buy(
+                db,
+                client,
+                token_id="yes25",
+                side="YES",
+                size_usd=5,
+                asks=[(0.40, 100)],
+                reason="test live buy",
+                max_price=0.40,
+                min_fill_usd=5,
+                order_cap_usd=5,
+                label="25C",
+            )
+            allowed = execute_live_buy(
+                db,
+                client,
+                token_id="yes26",
+                side="YES",
+                size_usd=5,
+                asks=[(0.40, 100)],
+                reason="test live buy",
+                max_price=0.40,
+                min_fill_usd=5,
+                order_cap_usd=5,
+                label="26C",
+            )
+
+            self.assertEqual(blocked.status, "blocked")
+            self.assertEqual(blocked.reason, "unresolved live order for token")
+            self.assertEqual(allowed.status, "filled")
+            self.assertEqual(client.buys, [("yes26", 0.40, 5.0)])
+
     def test_execute_live_buy_blocks_future_entries_after_three_insufficient_balance_errors(self):
         class InsufficientBalanceClient(FakeClobClient):
             def buy_fak(self, token_id, price, size_usd):
@@ -1213,6 +1390,36 @@ class LiveTests(unittest.TestCase):
             pos = get_live_position(db, "yes25")
             self.assertAlmostEqual(pos["net_shares"], 0.005)
 
+    def test_execute_live_sell_rejects_but_keeps_sub_precision_sellable_dust(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            upsert_live_position(db, "yes25", 0.003, 0.29, 0.0)
+            client = FakeClobClient(token_balances={"yes25": 0.003})
+
+            result = execute_live_sell(
+                db,
+                client,
+                token_id="yes25",
+                bids=[(0.15, 100)],
+                reason="position invalidated by hourly forecast",
+                label="29°C",
+            )
+
+            self.assertEqual(result.status, "rejected")
+            self.assertEqual(result.reason, "sellable token balance below exchange precision")
+            self.assertEqual(client.sells, [])
+            pos = get_live_position(db, "yes25")
+            self.assertAlmostEqual(pos["net_shares"], 0.003)
+            adjustments = db.execute(
+                """
+                select side, action, status, fill_shares, reason
+                from live_orders
+                where side = 'RECONCILE_SELL'
+                """
+            ).fetchall()
+            self.assertEqual(adjustments, [])
+
     def test_execute_live_sell_caps_to_clob_sellable_balance(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
@@ -1347,6 +1554,17 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(stats["mode"], "live")
             self.assertEqual(stats["open_positions"], 0)
             self.assertFalse(stats["block_new_entries"])
+
+    def test_live_dashboard_stats_does_not_count_unsellable_dust_as_missing_bid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            upsert_live_position(db, "yes25", 0.003, 0.29, 0.0)
+
+            stats = live_dashboard_stats(db)
+
+            self.assertEqual(stats["open_positions"], 1)
+            self.assertEqual(stats["missing_bid_positions"], 0)
 
 
 if __name__ == "__main__":

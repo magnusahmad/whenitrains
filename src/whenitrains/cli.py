@@ -46,6 +46,7 @@ from .hko import (
 )
 from .hourly_accuracy import build_hourly_accuracy_report, render_hourly_accuracy_report
 from .low_latency import FastDecisionWorker, LowLatencyEventQueue
+from .live_user_stream import reconcile_unapplied_user_trades
 from .live_runtime import LiveWebSocketRuntime
 from .operational import (
     LiveSchedulerLock,
@@ -73,6 +74,7 @@ from .live import (
     find_live_position_drifts,
     freeze_new_entries_for_stale_submitted_orders,
     load_live_config,
+    maybe_clear_block_new_entries_after_reconcile,
     preflight_live,
     read_live_env_file,
     reconcile_pending_live_orders,
@@ -228,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("dashboard")
     dashboard_serve = sub.add_parser("dashboard-serve")
     dashboard_serve.add_argument("--host", default="127.0.0.1")
-    dashboard_serve.add_argument("--port", type=int, default=8765)
+    dashboard_serve.add_argument("--port", type=int, default=8000)
     backtest = sub.add_parser("backtest-day")
     backtest.add_argument("date")
     backtest.add_argument("--replay-db")
@@ -767,6 +769,15 @@ def main(argv: list[str] | None = None) -> int:
                 token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
                 book = latest_orderbook(db, token_id)
                 max_price = book.best_ask + Settings.max_entry_limit_slippage if book.best_ask is not None else None
+                event_key = _manual_live_event_key("buy", token_id)
+                record_latency_stage(
+                    db,
+                    event_key,
+                    "decision_started",
+                    time.monotonic(),
+                    "manual_live",
+                    details={"token_id": token_id},
+                )
                 result = execute_live_buy(
                     db,
                     client,
@@ -780,6 +791,7 @@ def main(argv: list[str] | None = None) -> int:
                     order_cap_usd=Settings.live_manual_order_cap_usd,
                     label=args.label,
                     event_type="manual_live",
+                    event_key=event_key,
                 )
             except (LiveTradingError, ValueError) as exc:
                 print(f"live buy failed: {exc}")
@@ -808,6 +820,15 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 token_id = outcome["yes_token_id"] if args.side == "YES" else outcome["no_token_id"]
                 book = latest_orderbook(db, token_id)
+                event_key = _manual_live_event_key("sell", token_id)
+                record_latency_stage(
+                    db,
+                    event_key,
+                    "decision_started",
+                    time.monotonic(),
+                    "manual_live",
+                    details={"token_id": token_id},
+                )
                 result = execute_live_sell(
                     db,
                     client,
@@ -816,6 +837,7 @@ def main(argv: list[str] | None = None) -> int:
                     reason=f"manual live sell {args.label} {args.side}",
                     label=args.label,
                     event_type="manual_live",
+                    event_key=event_key,
                 )
             except (LiveTradingError, ValueError) as exc:
                 print(f"live sell failed: {exc}")
@@ -837,6 +859,7 @@ def main(argv: list[str] | None = None) -> int:
                 config = load_live_config()
                 client = PolymarketClobClient(config)
                 reconcile_result = reconcile_pending_live_orders(db, client)
+                user_trade_result = reconcile_unapplied_user_trades(db)
             except LiveTradingError as exc:
                 print(f"live reconcile failed: {exc}")
                 return 2
@@ -847,6 +870,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"errors={reconcile_result.orders_error} "
                 f"rebuilt_positions={reconcile_result.rebuilt_positions}"
             )
+            if user_trade_result.checked:
+                print(
+                    f"user channel trades checked={user_trade_result.checked} "
+                    f"applied={user_trade_result.applied}"
+                )
             return 0
         if args.command == "live-settlement-validate":
             migrate(db)
@@ -1024,6 +1052,7 @@ def main(argv: list[str] | None = None) -> int:
                         flush=True,
                     )
                 reconcile_result = reconcile_pending_live_orders(db, client)
+                reconcile_unapplied_user_trades(db)
                 if reconcile_result.orders_checked:
                     print(
                         "live reconcile "
@@ -1036,11 +1065,21 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 drift_scan_started = time.monotonic()
                 drifts = find_live_position_drifts(db, client)
+                startup_repaired = 0
+                if drifts:
+                    startup_repaired = repair_live_position_drifts(
+                        db,
+                        drifts,
+                        event_key="live_scheduler_startup",
+                    )
+                    if startup_repaired:
+                        drifts = find_live_position_drifts(db, client)
                 drift_scan_completed = time.monotonic()
                 _record_live_clob_drift_scan(
                     db,
                     phase="startup",
                     drifts=drifts,
+                    repaired=startup_repaired,
                     started_monotonic=drift_scan_started,
                     completed_monotonic=drift_scan_completed,
                 )
@@ -1048,6 +1087,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     "live CLOB drift scan "
                     f"phase=startup drift_count={drift_count} "
+                    f"repaired={startup_repaired} "
                     f"duration_seconds={drift_scan_completed - drift_scan_started:.4f}",
                     flush=True,
                 )
@@ -1068,6 +1108,14 @@ def main(argv: list[str] | None = None) -> int:
                     print(
                         "blocked new entries: live startup health failed: "
                         + "; ".join(health.reasons),
+                        flush=True,
+                    )
+                elif maybe_clear_block_new_entries_after_reconcile(
+                    db,
+                    reason="startup reconcile and drift scan clear",
+                ):
+                    print(
+                        "live entry block auto-cleared after startup health recovery",
                         flush=True,
                     )
             except LiveTradingError as exc:
@@ -1120,6 +1168,7 @@ def main(argv: list[str] | None = None) -> int:
                         event_key="live_reconcile_watchdog",
                     )
                     reconcile_result = reconcile_pending_live_orders(tick_db, client)
+                    reconcile_unapplied_user_trades(tick_db)
                     drift_scan_started = time.monotonic()
                     drifts = find_live_position_drifts(tick_db, client)
                     repaired = 0
@@ -1144,16 +1193,23 @@ def main(argv: list[str] | None = None) -> int:
                         websocket_runtime is not None and not websocket_runtime.all_running
                     )
                     if not drifts and not websocket_stalled:
+                        auto_cleared = maybe_clear_block_new_entries_after_reconcile(
+                            tick_db,
+                            reason="watchdog reconcile and drift scan clear",
+                        )
                         if reconcile_result.orders_checked:
+                            notes = (
+                                "live reconcile "
+                                f"checked={reconcile_result.orders_checked} "
+                                f"filled={reconcile_result.orders_filled} "
+                                f"open={reconcile_result.orders_open} "
+                                f"errors={reconcile_result.orders_error} "
+                                f"rebuilt_positions={reconcile_result.rebuilt_positions}",
+                            )
+                            if auto_cleared:
+                                notes = notes + ("live entry block auto-cleared",)
                             return RunnerResult(
-                                notes=(
-                                    "live reconcile "
-                                    f"checked={reconcile_result.orders_checked} "
-                                    f"filled={reconcile_result.orders_filled} "
-                                    f"open={reconcile_result.orders_open} "
-                                    f"errors={reconcile_result.orders_error} "
-                                    f"rebuilt_positions={reconcile_result.rebuilt_positions}",
-                                )
+                                notes=notes
                             )
                         if kill_switch_exit.enabled:
                             return RunnerResult(
@@ -1170,6 +1226,8 @@ def main(argv: list[str] | None = None) -> int:
                                     f"live reconcile watchdog repaired {repaired} local/CLOB drift items",
                                 )
                             )
+                        if auto_cleared:
+                            return RunnerResult(notes=("live entry block auto-cleared",))
                         return RunnerResult()
                     health = evaluate_live_startup_health(
                         market_websocket_connected=not args.no_websockets and not websocket_stalled,
@@ -1192,7 +1250,9 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     scheduler_result = run_scheduled_paper_loop(
                         db,
-                        fetch_since_midnight=lambda: _fetch_since_midnight(db),
+                        fetch_since_midnight=lambda: _fetch_since_midnight(
+                            db, event_queue=low_latency_queue
+                        ),
                         fetch_bulletin=lambda: _fetch_bulletin(
                             db, event_queue=low_latency_queue
                         ),
@@ -1325,7 +1385,9 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 run_scheduled_paper_loop(
                     db,
-                    fetch_since_midnight=lambda: _fetch_since_midnight(db),
+                    fetch_since_midnight=lambda: _fetch_since_midnight(
+                        db, event_queue=low_latency_queue
+                    ),
                     fetch_bulletin=lambda: _fetch_bulletin(db, event_queue=low_latency_queue),
                     fetch_current_temperature=lambda: _fetch_current_temperature(
                         db, event_queue=low_latency_queue
@@ -1448,10 +1510,15 @@ def _store_hko_raw_snapshot(db, response) -> object:
     )
 
 
-def _fetch_since_midnight(db) -> str:
+def _fetch_since_midnight(db, event_queue: LowLatencyEventQueue | None = None) -> str:
     response = fetch_response(SINCE_MIDNIGHT_URL)
     obs_snapshot = _store_hko_raw_snapshot(db, response)
-    store_hko_observation(db, obs_snapshot.id, parse_since_midnight_csv(response.text))
+    store_hko_observation(
+        db,
+        obs_snapshot.id,
+        parse_since_midnight_csv(response.text),
+        event_queue=event_queue,
+    )
     return response.text
 
 
@@ -2764,6 +2831,9 @@ def _render_live_readiness_checklist(args, db_path: Path) -> str:
             "POLYMARKET_SIGNATURE_TYPE POLYMARKET_FUNDER_ADDRESS "
             "POLYMARKET_API_KEY POLYMARKET_API_SECRET POLYMARKET_API_PASSPHRASE"
         ),
+        "0c. publish dashboard on port 8000 and verify with GET",
+        command("dashboard-serve", "--host", "0.0.0.0", "--port", "8000"),
+        "curl -L http://127.0.0.1:8000/",
         "1. live-network-smoke --live --require-connected",
         command("live-network-smoke", "--live", "--seconds", "10", "--require-connected"),
         "2. live-auth-smoke --live",
@@ -2860,6 +2930,10 @@ def _archive_evidence_command_parts(
 
 def _normalize_live_log_url(url: str) -> str:
     return url.rstrip("/") + "/"
+
+
+def _manual_live_event_key(action: str, token_id: str) -> str:
+    return f"manual_live_{action}:{token_id}:{time.time_ns()}"
 
 
 def _render_low_latency_readiness_db_audit(db_path: Path) -> tuple[bool, str]:
@@ -4044,7 +4118,7 @@ def _live_money_state_gate(db, live: dict[str, object]) -> dict[str, object]:
             """
             select count(*)
             from live_orders
-            where status in ('error', 'rejected', 'blocked', 'failed')
+            where status = 'failed'
             """
         ).fetchone()[0]
     )

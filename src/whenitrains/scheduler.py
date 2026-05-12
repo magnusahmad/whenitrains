@@ -12,7 +12,7 @@ from .hko import HKT, parse_aws_gis_current_temperature
 from .low_latency import (
     LowLatencyEventQueue,
     compact_latency_event_line,
-    process_next_fast_event,
+    process_fast_event,
 )
 from .runner import RunnerResult, run_paper_tick
 
@@ -273,6 +273,8 @@ def run_scheduled_paper_loop(
             }
             notes: list[str] = []
             data_failed = False
+            fast_events_processed = False
+            fast_event_result = RunnerResult()
             if actions.fetch_since_midnight:
                 payload = _try_fetch_source("since_midnight", fetch_since_midnight, notes)
                 if payload is None:
@@ -317,6 +319,27 @@ def run_scheduled_paper_loop(
                 else:
                     data_failed = True
                     notes.extend(temp_notes)
+            if (
+                state.trading_warmed_up
+                and low_latency_event_queue is not None
+                and not low_latency_event_queue.empty()
+            ):
+                fast_event_result = _merge_runner_results(
+                    fast_event_result, RunnerResult(notes=("fast event queue drained",))
+                )
+                for event in low_latency_event_queue.drain_coalesced():
+                    fast_result = process_fast_event(
+                        db,
+                        event,
+                        decision_handler=fast_event_handler,
+                    )
+                    notes.append(compact_latency_event_line(fast_result.event))
+                    if isinstance(fast_result.result, RunnerResult):
+                        fast_event_result = _merge_runner_results(
+                            fast_event_result, fast_result.result
+                        )
+                notes.append("fast hko events")
+                fast_events_processed = True
             if actions.discover_market:
                 if _try_run_action("market discovery", lambda: discover_market(now.date()), notes):
                     mark_market_discovered(state, now)
@@ -338,6 +361,8 @@ def run_scheduled_paper_loop(
                         else "startup warmup blocked: data fetch failed",
                     )
                 )
+                if fast_events_processed:
+                    result = _merge_runner_results(fast_event_result, result)
                 if warmed_up and alert_sink is not None:
                     alert_sink.send(
                         AlertMessage(
@@ -352,28 +377,54 @@ def run_scheduled_paper_loop(
             elif state.trading_warmed_up:
                 tick_fn = run_tick_fn or run_paper_tick
                 result = RunnerResult()
-                if reconcile_watchdog_fn is not None:
-                    result = _merge_runner_results(
-                        result, reconcile_watchdog_fn(db)
-                    )
-                if low_latency_event_queue is not None and not low_latency_event_queue.empty():
-                    result = _merge_runner_results(
-                        result, RunnerResult(notes=("fast event queue drained",))
-                    )
-                    while not low_latency_event_queue.empty():
-                        fast_result = process_next_fast_event(
-                            db,
-                            low_latency_event_queue,
-                            decision_handler=fast_event_handler,
-                        )
-                        notes.append(compact_latency_event_line(fast_result.event))
-                        if isinstance(fast_result.result, RunnerResult):
-                            result = _merge_runner_results(result, fast_result.result)
-                    notes.append("fast hko events")
+                if fast_events_processed:
+                    result = _merge_runner_results(result, fast_event_result)
                 else:
-                    result = _merge_runner_results(
-                        result, tick_fn(db, today_hkt=now.date())
-                    )
+                    if (
+                        low_latency_event_queue is not None
+                        and not low_latency_event_queue.empty()
+                    ):
+                        result = _merge_runner_results(
+                            result, RunnerResult(notes=("fast event queue drained",))
+                        )
+                        for event in low_latency_event_queue.drain_coalesced():
+                            fast_result = process_fast_event(
+                                db,
+                                event,
+                                decision_handler=fast_event_handler,
+                            )
+                            notes.append(compact_latency_event_line(fast_result.event))
+                            if isinstance(fast_result.result, RunnerResult):
+                                result = _merge_runner_results(result, fast_result.result)
+                        notes.append("fast hko events")
+                    else:
+                        if reconcile_watchdog_fn is not None:
+                            result = _merge_runner_results(
+                                result, reconcile_watchdog_fn(db)
+                            )
+                        if (
+                            low_latency_event_queue is not None
+                            and not low_latency_event_queue.empty()
+                        ):
+                            result = _merge_runner_results(
+                                result, RunnerResult(notes=("fast event queue drained",))
+                            )
+                            for event in low_latency_event_queue.drain_coalesced():
+                                fast_result = process_fast_event(
+                                    db,
+                                    event,
+                                    decision_handler=fast_event_handler,
+                                )
+                                notes.append(compact_latency_event_line(fast_result.event))
+                                if isinstance(fast_result.result, RunnerResult):
+                                    result = _merge_runner_results(
+                                        result, fast_result.result
+                                    )
+                            notes.append("fast hko events")
+                        else:
+                            result = _merge_runner_results(
+                                result, tick_fn(db, today_hkt=now.date())
+                            )
             else:
                 state.trading_warmed_up = True
                 result = RunnerResult(notes=("startup warmup: trading skipped",))

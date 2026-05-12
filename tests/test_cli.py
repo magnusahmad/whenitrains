@@ -41,6 +41,26 @@ from whenitrains.storage import (
 )
 
 
+class FakeManualClobClient:
+    def __init__(self):
+        self.buys = []
+        self.sells = []
+
+    def buy_fak(self, token_id, price, size_usd):
+        self.buys.append((token_id, price, size_usd))
+        return {"orderID": "buy-1", "status": "matched"}
+
+    def sell_fak(self, token_id, price, shares):
+        self.sells.append((token_id, price, shares))
+        return {"orderID": "sell-1", "status": "matched"}
+
+    def token_balance(self, token_id):
+        return None
+
+    def reconcile_order(self, order_id, token_id):
+        return {"order_id": order_id, "token_id": token_id, "status": "filled"}
+
+
 class CliDiscoveryTests(unittest.TestCase):
     def test_paper_scheduler_starts_blocking_fast_worker(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -149,6 +169,112 @@ class CliDiscoveryTests(unittest.TestCase):
                 ],
             )
             db.close()
+
+    def test_manual_live_buy_and_sell_record_latency_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            migrate(db)
+            store_polymarket_event(
+                db,
+                TemperatureMarket(
+                    event_id="event",
+                    event_slug="highest-temperature-in-hong-kong-on-may-13-2026",
+                    title="Highest temperature",
+                    target_date=date(2026, 5, 13),
+                    outcomes=[
+                        Outcome(
+                            market_id="m30",
+                            label="30°C",
+                            predicate=parse_outcome_label("30°C"),
+                            yes_token_id="yes30",
+                            no_token_id="no30",
+                        ),
+                    ],
+                ),
+            )
+            store_orderbook(
+                db,
+                "yes30",
+                OrderBook(
+                    token_id="yes30",
+                    bids=[(0.35, 100)],
+                    asks=[(0.36, 100)],
+                    tick_size=0.01,
+                    min_order_size=1,
+                ),
+            )
+            db.close()
+            client = FakeManualClobClient()
+            stdout = StringIO()
+
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch("whenitrains.cli.PolymarketClobClient", return_value=client),
+                redirect_stdout(stdout),
+            ):
+                buy_exit = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-buy",
+                        "30°C",
+                        "YES",
+                        "5.00",
+                        "--date",
+                        "2026-05-13",
+                        "--market-kind",
+                        "highest",
+                        "--live",
+                        "--yes-i-understand",
+                    ]
+                )
+                sell_exit = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-sell",
+                        "30°C",
+                        "YES",
+                        "--date",
+                        "2026-05-13",
+                        "--market-kind",
+                        "highest",
+                        "--live",
+                        "--yes-i-understand",
+                    ]
+                )
+
+            self.assertEqual(buy_exit, 0, stdout.getvalue())
+            self.assertEqual(sell_exit, 0, stdout.getvalue())
+            db = connect(db_path)
+            try:
+                decision_to_submit = latency_duration_summary(
+                    db, "decision_started", "order_submitted"
+                )
+                submit_to_ack = latency_duration_summary(db, "order_submitted", "clob_ack")
+                submit_to_match = latency_duration_summary(
+                    db, "order_submitted", "fill_matched"
+                )
+                self.assertEqual(decision_to_submit["count"], 2)
+                self.assertEqual(submit_to_ack["count"], 2)
+                self.assertEqual(submit_to_match["count"], 2)
+                keys = [
+                    row["event_key"]
+                    for row in db.execute(
+                        """
+                        select event_key
+                        from live_orders
+                        where event_type = 'manual_live'
+                        order by id asc
+                        """
+                    ).fetchall()
+                ]
+                self.assertEqual(len(keys), 2)
+                self.assertTrue(keys[0].startswith("manual_live_buy:yes30:"))
+                self.assertTrue(keys[1].startswith("manual_live_sell:yes30:"))
+            finally:
+                db.close()
 
     def test_live_env_exports_prints_shell_safe_required_exports(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -597,6 +723,12 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertIn(command_prefix + "live-env-exports --env-file .env", text)
         self.assertIn("required env: WHENITRAINS_TRADING_MODE=live", text)
         self.assertIn("POLYMARKET_API_SECRET", text)
+        self.assertIn("0c. publish dashboard on port 8000 and verify with GET", text)
+        self.assertIn(
+            command_prefix + "dashboard-serve --host 0.0.0.0 --port 8000",
+            text,
+        )
+        self.assertIn("curl -L http://127.0.0.1:8000/", text)
         self.assertIn("1. live-network-smoke --live --require-connected", text)
         self.assertIn("archive live-reconcile output as REST/recent-trades validation evidence", text)
         self.assertIn(
@@ -1682,6 +1814,84 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual(find_drifts.call_count, 3)
             repair.assert_called_once()
+            db = connect(db_path)
+            try:
+                self.assertFalse(live_setting_enabled(db, "block_new_entries"))
+            finally:
+                db.close()
+
+    def test_live_scheduler_repairs_startup_drift_before_freezing_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            drift = SimpleNamespace(
+                token_id="yes25",
+                local_shares=12.5,
+                clob_sellable_shares=7.0,
+                drift_shares=5.5,
+            )
+
+            def run_loop(*args, **kwargs):
+                return SimpleNamespace(
+                    buys_filled=0,
+                    buys_missed=0,
+                    sells_filled=0,
+                    sells_missed=0,
+                    signals=0,
+                    notes=(),
+                    independent_candidate_opportunity=False,
+                    candidate_actions=0,
+                )
+
+            class FakeRuntime:
+                book_cache = object()
+                all_running = True
+
+                def start(self):
+                    return None
+
+                def stop(self, timeout=None):
+                    return None
+
+            stdout = StringIO()
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch("whenitrains.cli.PolymarketClobClient", return_value=object()),
+                patch(
+                    "whenitrains.cli.preflight_live",
+                    return_value=SimpleNamespace(ok=True, reason="ok"),
+                ),
+                patch(
+                    "whenitrains.cli.find_live_position_drifts",
+                    side_effect=[[drift], []],
+                ) as find_drifts,
+                patch("whenitrains.cli.repair_live_position_drifts", return_value=1) as repair,
+                patch(
+                    "whenitrains.cli.LiveWebSocketRuntime.for_live_scheduler",
+                    return_value=FakeRuntime(),
+                ),
+                patch("whenitrains.cli.run_scheduled_paper_loop", side_effect=run_loop),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-scheduler",
+                        "--live",
+                        "--ticks",
+                        "0",
+                        "--no-startup-backup",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(find_drifts.call_count, 2)
+            repair.assert_called_once()
+            self.assertIn(
+                "live CLOB drift scan phase=startup drift_count=0 repaired=1",
+                stdout.getvalue(),
+            )
+            self.assertIn("live scheduler smoke ok ticks=0", stdout.getvalue())
             db = connect(db_path)
             try:
                 self.assertFalse(live_setting_enabled(db, "block_new_entries"))

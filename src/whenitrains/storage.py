@@ -547,9 +547,14 @@ def list_hko_update_times(db: sqlite3.Connection, source: str) -> list[day_time]
 
 
 def store_hko_observation(
-    db: sqlite3.Connection, snapshot_id: int, observation: HkoObservation
+    db: sqlite3.Connection,
+    snapshot_id: int,
+    observation: HkoObservation,
+    *,
+    event_queue=None,
+    monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> None:
-    db.execute(
+    cursor = db.execute(
         """
         insert into hko_current_observations
         (snapshot_id, observed_at_hkt, station, temperature_c,
@@ -567,6 +572,16 @@ def store_hko_observation(
         ),
     )
     db.commit()
+    if event_queue is not None:
+        from .low_latency import enqueue_hko_actual_transition_events
+
+        enqueue_hko_actual_transition_events(
+            db,
+            event_queue,
+            observation_id=int(cursor.lastrowid),
+            committed_monotonic=monotonic_fn(),
+            monotonic_fn=monotonic_fn,
+        )
 
 
 def store_hko_current_temperature(
@@ -1010,7 +1025,7 @@ def list_active_market_condition_ids(
 ) -> list[str]:
     rows = db.execute(
         """
-        select o.polymarket_market_id
+        select o.polymarket_market_id, m.raw_market
         from outcomes o
         join markets m on m.id = o.market_id
         where m.target_date_hkt >= ?
@@ -1023,11 +1038,35 @@ def list_active_market_condition_ids(
     condition_ids: list[str] = []
     seen: set[str] = set()
     for row in rows:
-        condition_id = row["polymarket_market_id"]
+        condition_id = _condition_id_for_outcome_market(
+            row["raw_market"],
+            row["polymarket_market_id"],
+        )
         if condition_id and condition_id not in seen:
             seen.add(condition_id)
             condition_ids.append(condition_id)
     return condition_ids
+
+
+def _condition_id_for_outcome_market(
+    raw_market_json: str | None,
+    polymarket_market_id: str | None,
+) -> str | None:
+    if not polymarket_market_id:
+        return None
+    if raw_market_json:
+        try:
+            raw_market = json.loads(raw_market_json)
+        except json.JSONDecodeError:
+            raw_market = {}
+        for market in raw_market.get("markets") or []:
+            if not isinstance(market, dict):
+                continue
+            if str(market.get("id") or "") == str(polymarket_market_id):
+                condition_id = market.get("conditionId") or market.get("condition_id")
+                if condition_id:
+                    return str(condition_id)
+    return str(polymarket_market_id)
 
 
 def list_hko_forecast_dates(
@@ -1916,10 +1955,10 @@ def live_dashboard_stats(db: sqlite3.Connection) -> dict:
         unrealized = (
             shares * (latest_bid - avg_price) if latest_bid is not None else None
         )
-        if unrealized is None:
+        if unrealized is None and shares >= 0.01:
             missing_bid_count += 1
         else:
-            executable_unrealized_pnl += unrealized
+            executable_unrealized_pnl += unrealized or 0.0
         token_side = None
         if outcome is not None:
             token_side = "YES" if pos["outcome_id"] == outcome["yes_token_id"] else "NO"

@@ -8,8 +8,9 @@ from pathlib import Path
 from sqlite3 import ProgrammingError
 from unittest.mock import patch
 
-from whenitrains.hko import HKT, HkoCurrentTemperature, OcfForecastSample
+from whenitrains.hko import HKT, HkoCurrentTemperature, HkoObservation, OcfForecastSample
 from whenitrains.low_latency import (
+    AlphaEvent,
     FastDecisionWorker,
     LowLatencyEventQueue,
     compact_latency_event_line,
@@ -20,6 +21,7 @@ from whenitrains.storage import (
     latency_stages_for_event,
     migrate,
     store_hko_current_temperature,
+    store_hko_observation,
     store_ocf_forecast_samples,
     store_orderbook,
     store_polymarket_event,
@@ -78,6 +80,40 @@ class LowLatencyReadinessTests(unittest.TestCase):
             self.assertAlmostEqual(stages[0]["monotonic_ts"], 100.2)
             self.assertAlmostEqual(stages[1]["monotonic_ts"], 100.2)
 
+    def test_since_midnight_transition_enqueues_latency_stages_after_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            queue = LowLatencyEventQueue()
+            clock = _FakeMonotonic([110.0, 110.2, 110.2])
+
+            _store_since_midnight(
+                db,
+                high=25.6,
+                minute=40,
+                event_queue=queue,
+                monotonic_fn=clock,
+            )
+            _store_since_midnight(
+                db,
+                high=26.1,
+                minute=50,
+                event_queue=queue,
+                monotonic_fn=clock,
+            )
+
+            event = queue.get_nowait()
+            stages = latency_stages_for_event(db, event.event_key)
+
+            self.assertEqual(event.kind, "aws_actual_transition")
+            self.assertEqual(event.target_date_hkt, "2026-05-04")
+            self.assertEqual(
+                [stage["stage"] for stage in stages],
+                ["db_committed", "event_detected"],
+            )
+            self.assertAlmostEqual(stages[0]["monotonic_ts"], 110.2)
+            self.assertAlmostEqual(stages[1]["monotonic_ts"], 110.2)
+
     def test_forecast_sample_change_enqueues_latency_stages_after_commit(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
@@ -114,6 +150,47 @@ class LowLatencyReadinessTests(unittest.TestCase):
                 ["db_committed", "event_detected"],
             )
             self.assertAlmostEqual(stages[0]["monotonic_ts"], 300.2)
+
+    def test_low_latency_queue_coalesces_forecast_events_by_target_date(self):
+        queue = LowLatencyEventQueue()
+        first = AlphaEvent(
+            kind="forecast_sample_changed",
+            event_key="forecast_sample_changed:2026-05-04:1->2",
+            target_date_hkt="2026-05-04",
+            source_row_id=2,
+            previous_row_id=1,
+            committed_monotonic=100.0,
+            detected_monotonic=100.0,
+            details={},
+        )
+        latest = AlphaEvent(
+            kind="forecast_sample_changed",
+            event_key="forecast_sample_changed:2026-05-04:2->3",
+            target_date_hkt="2026-05-04",
+            source_row_id=3,
+            previous_row_id=2,
+            committed_monotonic=101.0,
+            detected_monotonic=101.0,
+            details={},
+        )
+        actual = AlphaEvent(
+            kind="aws_actual_transition",
+            event_key="aws_actual_transition:max:2026-05-04:1:25.6->2:26.1",
+            target_date_hkt="2026-05-04",
+            source_row_id=2,
+            previous_row_id=1,
+            committed_monotonic=102.0,
+            detected_monotonic=102.0,
+            details={},
+        )
+
+        queue.put(first)
+        queue.put(latest)
+        queue.put(actual)
+
+        drained = queue.drain_coalesced()
+
+        self.assertEqual([event.event_key for event in drained], [latest.event_key, actual.event_key])
 
     def test_fast_worker_starts_decision_under_one_second_after_hko_commit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -411,6 +488,30 @@ def _store_aws_actual(
             observed_at_hkt=datetime(2026, 5, 4, 15, minute, tzinfo=HKT),
             station="HKO",
             temperature_c=high,
+            since_midnight_max_c=high,
+            since_midnight_min_c=21.0,
+            raw={},
+        ),
+        event_queue=event_queue,
+        monotonic_fn=monotonic_fn,
+    )
+
+
+def _store_since_midnight(
+    db,
+    high: float,
+    minute: int,
+    *,
+    event_queue: LowLatencyEventQueue,
+    monotonic_fn,
+) -> None:
+    snapshot = store_raw_snapshot(db, "hko", f"since-midnight-{high}", str(high))
+    store_hko_observation(
+        db,
+        snapshot.id,
+        HkoObservation(
+            observed_at_hkt=datetime(2026, 5, 4, 15, minute, tzinfo=HKT),
+            station="HKO",
             since_midnight_max_c=high,
             since_midnight_min_c=21.0,
             raw={},
