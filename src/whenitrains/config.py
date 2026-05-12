@@ -12,6 +12,9 @@ class Settings:
     actual_new_bucket_stale_price_min_move: float = 0.10
     actual_new_bucket_max_entry_price: float = 0.70
     actual_invalidated_bucket_max_entry_price: float = 0.99
+    near_boundary_peak_take_profit_c: float = 0.20
+    peak_heating_start_hour_hkt: int = 11
+    peak_heating_end_hour_hkt: int = 16
     take_profit_move: float = 0.20
     max_hold_minutes: float = 10.0
     max_entry_price: float = 0.98

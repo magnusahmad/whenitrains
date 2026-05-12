@@ -1,6 +1,6 @@
 # HK High Temp Latency Status
 
-Last updated: 2026-05-11 HKT
+Last updated: 2026-05-12 HKT
 
 ## Current State
 
@@ -35,6 +35,8 @@ Dashboard executable PnL now values open positions against only the latest order
 Entry candidates now fail closed when the latest actual max/min has already invalidated the side being considered. This prevents forecast-change entries such as buying same-day `28°C YES` after the since-midnight max is already `29°C+`.
 
 Same-day effective forecast values now combine actuals with remaining-hour forecast values: high uses `max(latest_since_midnight_max, forecast_hourly_max)` and low uses `min(latest_since_midnight_min, forecast_hourly_min)`. This prevents the bot from treating a lower remaining-day forecast as a lower full-day forecast after the actual high has already occurred.
+
+Open-position exits now include a same-day peak-heating profit-taking guard for exact highest-temperature YES positions. During 11:00-16:00 HKT, if the latest since-midnight actual max has just risen, the held exact bucket is still winning, and the actual max is within 0.20C of the bucket's upper invalidation boundary, the exit loop sells into available bid depth with reason `near-boundary peak heating take profit`. This targets the May 12 pattern where the market repriced before official invalidation, while avoiding flat readings, pre-heating-window readings, and values farther from the boundary.
 
 Scheduler hot-read indexes are now additive migration state. The live `data/whenitrains.sqlite3` database was backed up before applying them, then migrated with indexes for latest orderbook snapshots, OCF forecast samples, HKO forecast rows, and HKO observation reads. `EXPLAIN QUERY PLAN` on the live DB confirms the latest orderbook, latest OCF sample, and latest HKO forecast reads use those indexes instead of scanning the append-only historical tables.
 

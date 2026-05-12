@@ -833,6 +833,127 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result.sells_missed, 0)
             self.assertEqual(result.notes, ())
 
+    def test_exit_loop_takes_profit_on_peak_heating_near_upper_exact_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            from whenitrains.paper_db import execute_paper_buy
+
+            execute_paper_buy(
+                db,
+                token_id="yes29",
+                side="YES",
+                size_usd=100,
+                asks=[(0.40, 1000)],
+                max_order_usd=250,
+                reason="test",
+            )
+            _store_aws_actual(db, 29.6, hour=12)
+            _store_aws_actual(db, 29.8, hour=13)
+            store_orderbook(
+                db,
+                "yes29",
+                OrderBook("yes29", bids=[(0.72, 1000)], asks=[(0.75, 1000)], tick_size=0.01, min_order_size=5),
+            )
+
+            result = process_open_position_exits(db, today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(result.sells_filled, 1)
+            position = db.execute(
+                "select net_shares, realized_pnl from paper_positions where outcome_id = 'yes29'"
+            ).fetchone()
+            self.assertAlmostEqual(position["net_shares"], 0.0)
+            self.assertGreater(position["realized_pnl"], 0)
+            decision = db.execute(
+                """
+                select event_type, status, reason, details_json
+                from paper_decisions
+                where action = 'SELL'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["event_type"], "exit_check")
+            self.assertEqual(decision["status"], "filled")
+            self.assertEqual(decision["reason"], "near-boundary peak heating take profit")
+            self.assertIn('"boundary_c": 30.0', decision["details_json"])
+
+    def test_exit_loop_does_not_take_peak_boundary_profit_before_heating_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            from whenitrains.paper_db import execute_paper_buy
+
+            execute_paper_buy(
+                db,
+                token_id="yes29",
+                side="YES",
+                size_usd=100,
+                asks=[(0.40, 1000)],
+                max_order_usd=250,
+                reason="test",
+            )
+            _store_aws_actual(db, 29.6, hour=9)
+            _store_aws_actual(db, 29.8, hour=10)
+            store_orderbook(
+                db,
+                "yes29",
+                OrderBook("yes29", bids=[(0.72, 1000)], asks=[(0.75, 1000)], tick_size=0.01, min_order_size=5),
+            )
+
+            result = process_open_position_exits(db, today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(result.sells_filled, 0)
+
+    def test_exit_loop_does_not_take_peak_boundary_profit_when_not_near_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            from whenitrains.paper_db import execute_paper_buy
+
+            execute_paper_buy(
+                db,
+                token_id="yes29",
+                side="YES",
+                size_usd=100,
+                asks=[(0.40, 1000)],
+                max_order_usd=250,
+                reason="test",
+            )
+            _store_aws_actual(db, 29.5, hour=12)
+            _store_aws_actual(db, 29.7, hour=13)
+            store_orderbook(
+                db,
+                "yes29",
+                OrderBook("yes29", bids=[(0.72, 1000)], asks=[(0.75, 1000)], tick_size=0.01, min_order_size=5),
+            )
+
+            result = process_open_position_exits(db, today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(result.sells_filled, 0)
+
+    def test_exit_loop_does_not_take_peak_boundary_profit_when_actual_max_is_flat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            from whenitrains.paper_db import execute_paper_buy
+
+            execute_paper_buy(
+                db,
+                token_id="yes29",
+                side="YES",
+                size_usd=100,
+                asks=[(0.40, 1000)],
+                max_order_usd=250,
+                reason="test",
+            )
+            _store_aws_actual(db, 29.8, hour=12)
+            _store_aws_actual(db, 29.8, hour=13)
+            store_orderbook(
+                db,
+                "yes29",
+                OrderBook("yes29", bids=[(0.72, 1000)], asks=[(0.75, 1000)], tick_size=0.01, min_order_size=5),
+            )
+
+            result = process_open_position_exits(db, today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(result.sells_filled, 0)
+
     def test_exit_loop_settles_resolved_past_date_position_without_bid_depth(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(Path(tmp) / "test.db")

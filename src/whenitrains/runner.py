@@ -1311,6 +1311,13 @@ def process_open_position_exits(
             )
         invalidated = _position_invalidated(outcome, side, actual_value_for_outcome)
         hourly_reason = _hourly_forecast_invalidation_reason(db, outcome, side)
+        take_profit_details = _near_boundary_peak_take_profit_details(
+            db,
+            outcome,
+            side,
+            latest_actual,
+            actual_value_for_outcome,
+        )
         settled_price = _resolved_market_settlement_price(db, outcome, side)
         if settled_price is not None:
             shares = float(pos["net_shares"])
@@ -1357,7 +1364,7 @@ def process_open_position_exits(
         if hold_to_maturity:
             notes.append(f"holding settled {outcome['label']} {side}")
             continue
-        if not invalidated and hourly_reason is None:
+        if not invalidated and hourly_reason is None and take_profit_details is None:
             continue
         if _LIVE_CLIENT is not None and _rounds_below_live_sell_precision(
             float(pos["net_shares"])
@@ -1383,11 +1390,18 @@ def process_open_position_exits(
             sells_missed += 1
             continue
         if book.best_bid is None:
-            reason = hourly_reason or (
-                "position invalidated by observed min"
-                if market_kind == "lowest"
-                else "position invalidated by observed max"
+            reason = _open_position_exit_reason(
+                market_kind,
+                invalidated=invalidated,
+                hourly_reason=hourly_reason,
             )
+            details = {
+                "current_value": actual_value_for_outcome,
+                "bid": book.best_bid,
+                "hourly_forecast_reason": hourly_reason,
+            }
+            if take_profit_details is not None:
+                details.update(take_profit_details)
             notes.append(
                 _sell_miss_note(outcome["label"], side, "no bid depth", reason, None)
             )
@@ -1400,14 +1414,22 @@ def process_open_position_exits(
                 "SELL",
                 "missed",
                 "no bid depth",
+                details,
             )
             sells_missed += 1
             continue
-        reason = hourly_reason or (
-            "position invalidated by observed min"
-            if market_kind == "lowest"
-            else "position invalidated by observed max"
+        reason = _open_position_exit_reason(
+            market_kind,
+            invalidated=invalidated,
+            hourly_reason=hourly_reason,
         )
+        details = {
+            "current_value": actual_value_for_outcome,
+            "bid": book.best_bid,
+            "hourly_forecast_reason": hourly_reason,
+        }
+        if take_profit_details is not None:
+            details.update(take_profit_details)
         source_event_key = f"exit_check:{outcome['target_date_hkt']}:{token_id}"
         pending_sells.append(
             (
@@ -1426,11 +1448,7 @@ def process_open_position_exits(
                     bids=book.bids,
                     best_bid=book.best_bid,
                     reason=reason,
-                    details={
-                        "current_value": actual_value_for_outcome,
-                        "bid": book.best_bid,
-                        "hourly_forecast_reason": hourly_reason,
-                    },
+                    details=details,
                     event_type="exit_check",
                     event_key=None,
                 ),
@@ -1463,6 +1481,67 @@ def _sell_miss_note(
 
 def _rounds_below_live_sell_precision(shares: float) -> bool:
     return floor(shares * 100) / 100 <= 0
+
+
+def _open_position_exit_reason(
+    market_kind: str,
+    *,
+    invalidated: bool,
+    hourly_reason: str | None,
+) -> str:
+    if hourly_reason is not None:
+        return hourly_reason
+    if invalidated:
+        return (
+            "position invalidated by observed min"
+            if market_kind == "lowest"
+            else "position invalidated by observed max"
+        )
+    return "near-boundary peak heating take profit"
+
+
+def _near_boundary_peak_take_profit_details(
+    db: sqlite3.Connection,
+    outcome: sqlite3.Row,
+    side: str,
+    latest_actual: sqlite3.Row | None,
+    current_value: float | None,
+) -> dict[str, object] | None:
+    if side != "YES" or latest_actual is None or current_value is None:
+        return None
+    if _temperature_market_kind_for_row(outcome) != "highest":
+        return None
+    predicate = parse_outcome_label(outcome["label"])
+    if predicate.type != PredicateType.EXACT_C or predicate.value_c is None:
+        return None
+    if not predicate_matches(predicate, current_value):
+        return None
+    observed_at_hkt = latest_actual["observed_at_hkt"]
+    target_date_hkt = outcome["target_date_hkt"]
+    if not any(
+        new["id"] == latest_actual["id"]
+        for _, new in observed_max_increases(db, target_date_hkt)
+    ):
+        return None
+    observed_hour = _hkt_hour(observed_at_hkt)
+    if observed_hour is None:
+        return None
+    if (
+        observed_hour < Settings.peak_heating_start_hour_hkt
+        or observed_hour > Settings.peak_heating_end_hour_hkt
+    ):
+        return None
+    boundary = float(predicate.value_c) + 1.0
+    distance = boundary - current_value
+    if distance < -1e-9 or distance > Settings.near_boundary_peak_take_profit_c + 1e-9:
+        return None
+    return {
+        "boundary_c": boundary,
+        "distance_to_boundary_c": round(distance, 3),
+        "observed_at_hkt": observed_at_hkt,
+        "peak_heating_start_hour_hkt": Settings.peak_heating_start_hour_hkt,
+        "peak_heating_end_hour_hkt": Settings.peak_heating_end_hour_hkt,
+    }
 
 
 def build_forecast_move_candidates(
