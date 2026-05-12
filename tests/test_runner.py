@@ -496,7 +496,74 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(result.buys_filled, 1)
             self.assertEqual(client.buys, [("yes29", 0.39, 5)])
 
-    def test_live_forecast_change_skips_when_websocket_book_cache_is_stale(self):
+    def test_live_forecast_change_refreshes_target_book_when_websocket_cache_is_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target_date = date(2026, 5, 5)
+            db = _seed_market(Path(tmp) / "test.db", target_date=target_date)
+            _store_forecast(
+                db,
+                28,
+                "2026-05-04T00:45:00+08:00",
+                forecast_date=target_date,
+            )
+            _store_forecast(
+                db,
+                29,
+                "2026-05-04T01:45:00+08:00",
+                forecast_date=target_date,
+            )
+            _store_book_pair(db, "yes29", old_ask=0.39, new_ask=0.395)
+            _store_book_pair(db, "no29", old_ask=0.61, new_ask=0.61)
+            now = [10.0]
+            cache = OrderBookCache(monotonic_fn=lambda: now[0])
+            cache.seed(
+                OrderBook(
+                    "yes29",
+                    bids=[(0.37, 1000)],
+                    asks=[(0.39, 1000)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                )
+            )
+            now[0] = 10.3
+            client = _FakeLiveClient()
+            fresh_book = OrderBook(
+                "yes29",
+                bids=[(0.37, 1000)],
+                asks=[(0.39, 1000)],
+                tick_size=0.01,
+                min_order_size=5,
+            )
+
+            with patch("whenitrains.runner.fetch_orderbook", return_value=fresh_book) as fetch:
+                result = run_live_tick(
+                    db,
+                    client,
+                    today_hkt=date(2026, 5, 4),
+                    order_cap_usd=5,
+                    book_cache=cache,
+                )
+
+            fetch.assert_called_once_with(
+                "yes29",
+                timeout_seconds=0.5,
+            )
+            self.assertEqual(result.buys_filled, 1)
+            self.assertEqual(result.buys_missed, 0)
+            self.assertEqual(client.buys, [("yes29", 0.39, 5)])
+            decision = db.execute(
+                """
+                select status, reason, details_json
+                from paper_decisions
+                where action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "filled")
+            self.assertEqual(decision["reason"], "price has not moved with HKO event")
+            self.assertIn('"orderbook_refresh_source": "rest_targeted"', decision["details_json"])
+
+    def test_live_forecast_change_misses_when_target_book_refresh_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             target_date = date(2026, 5, 5)
             db = _seed_market(Path(tmp) / "test.db", target_date=target_date)
@@ -528,7 +595,10 @@ class RunnerTests(unittest.TestCase):
             now[0] = 10.3
             client = _FakeLiveClient()
 
-            with patch("whenitrains.runner.fetch_orderbook") as fetch:
+            with patch(
+                "whenitrains.runner.fetch_orderbook",
+                side_effect=TimeoutError("too slow"),
+            ) as fetch:
                 result = run_live_tick(
                     db,
                     client,
@@ -537,7 +607,10 @@ class RunnerTests(unittest.TestCase):
                     book_cache=cache,
                 )
 
-            fetch.assert_not_called()
+            fetch.assert_called_once_with(
+                "yes29",
+                timeout_seconds=0.5,
+            )
             self.assertEqual(result.buys_filled, 0)
             self.assertEqual(result.buys_missed, 1)
             self.assertEqual(client.buys, [])
@@ -550,7 +623,7 @@ class RunnerTests(unittest.TestCase):
                 """
             ).fetchone()
             self.assertEqual(decision["status"], "missed")
-            self.assertEqual(decision["reason"], "stale Polymarket orderbook cache")
+            self.assertEqual(decision["reason"], "targeted orderbook refresh failed: TimeoutError")
 
     def test_forecast_change_d2_buys_when_entry_price_is_at_twenty_cents(self):
         with tempfile.TemporaryDirectory() as tmp:

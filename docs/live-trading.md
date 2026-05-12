@@ -414,7 +414,7 @@ Live mode must not share paper positions for duplicate-position checks. It must 
 - Live buy rejects without env gate.
 - Live buy rejects without credentials.
 - Live buy rejects when balance/allowance is insufficient.
-- Live buy rejects stale orderbooks.
+- Live buy uses a fresh WebSocket book when available, performs a bounded targeted CLOB `/book` refresh when only the candidate token cache is stale or missing, and rejects when the refresh cannot produce executable depth under the existing cap.
 - Live buy uses worst-price cap.
 - Live buy respects `min_entry_fill_usd`.
 - Live buy persists rejected SDK responses.

@@ -2020,6 +2020,7 @@ def _execute_candidate_buy(
             return False
         book = None
     reference_best_ask = book.best_ask if book is not None else None
+    orderbook_refresh_source = "stored"
     if _LIVE_CLIENT is not None:
         if _BOOK_CACHE is not None:
             try:
@@ -2027,36 +2028,42 @@ def _execute_candidate_buy(
                     token_id,
                     max_age_seconds=Settings.live_orderbook_cache_max_age_seconds,
                 )
-            except BookCacheMiss:
-                store_trading_decision(
-                    db,
-                    event_type,
-                    token_id,
-                    candidate.outcome.label,
-                    side,
-                    "BUY",
-                    "missed",
-                    "missing Polymarket orderbook cache",
-                    event_key=event_key,
-                )
-                return False
-            except BookCacheStale:
-                store_trading_decision(
-                    db,
-                    event_type,
-                    token_id,
-                    candidate.outcome.label,
-                    side,
-                    "BUY",
-                    "missed",
-                    "stale Polymarket orderbook cache",
-                    event_key=event_key,
-                )
-                return False
+                orderbook_refresh_source = "websocket_cache"
+            except (BookCacheMiss, BookCacheStale):
+                try:
+                    book = fetch_orderbook(
+                        token_id,
+                        timeout_seconds=Settings.live_targeted_orderbook_refresh_timeout_seconds,
+                    )
+                    store_orderbook(
+                        db,
+                        token_id,
+                        book,
+                        metadata={"source": "rest_targeted"},
+                    )
+                    _BOOK_CACHE.seed(book)
+                    orderbook_refresh_source = "rest_targeted"
+                except Exception as exc:
+                    store_trading_decision(
+                        db,
+                        event_type,
+                        token_id,
+                        candidate.outcome.label,
+                        side,
+                        "BUY",
+                        "missed",
+                        f"targeted orderbook refresh failed: {type(exc).__name__}",
+                        event_key=event_key,
+                    )
+                    return False
         else:
             try:
-                book = fetch_orderbook(token_id)
+                book = fetch_orderbook(
+                    token_id,
+                    timeout_seconds=Settings.live_targeted_orderbook_refresh_timeout_seconds,
+                )
                 store_orderbook(db, token_id, book, metadata={"source": "rest_hot_path"})
+                orderbook_refresh_source = "rest_hot_path"
             except Exception as exc:
                 store_trading_decision(
                     db,
@@ -2142,6 +2149,7 @@ def _execute_candidate_buy(
             "impact": candidate.impact.value,
             "prior_yes_ask": candidate.prior_yes_ask,
             "current_yes_ask": candidate.current_yes_ask,
+            "orderbook_refresh_source": orderbook_refresh_source,
         },
         event_key=event_key,
     )

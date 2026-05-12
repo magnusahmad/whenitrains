@@ -65,9 +65,9 @@ def _json_loads_field(value: Any) -> list[str]:
     return list(value or [])
 
 
-def fetch_json(url: str) -> Any:
+def fetch_json(url: str, *, timeout_seconds: float = 15) -> Any:
     request = Request(url, headers={"User-Agent": "whenitrains/0.1"})
-    with urlopen(request, timeout=15) as response:
+    with urlopen(request, timeout=timeout_seconds) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -228,8 +228,11 @@ def _normalize_resolution_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
-def fetch_orderbook(token_id: str) -> OrderBook:
-    payload = fetch_json(f"{CLOB_BOOK}?token_id={quote(token_id)}")
+def fetch_orderbook(token_id: str, *, timeout_seconds: float = 15) -> OrderBook:
+    payload = fetch_json(
+        f"{CLOB_BOOK}?token_id={quote(token_id)}",
+        timeout_seconds=timeout_seconds,
+    )
     return parse_orderbook(payload)
 
 

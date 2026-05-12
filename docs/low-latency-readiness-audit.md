@@ -52,7 +52,7 @@ The live log endpoint at `http://192.168.1.49:8765/` was retried on 2026-05-11 H
 - `OrderBookCache` applies `book`, `price_change`, `best_bid_ask`, and `last_trade_price`.
 - Cache writes append-only SQLite snapshots with WebSocket metadata.
 - Active token/condition subscription helpers support runtime resubscribe planning.
-- Live tick receives a scheduler-owned cache and live buys reject missing/stale cache books when a cache is configured.
+- Live tick receives a scheduler-owned cache; live buys use fresh cache books and perform a bounded targeted CLOB `/book` refresh when only the candidate token book is missing or stale.
 - `live-network-smoke --live --require-connected` starts and stops the scheduler-owned market/user WebSocket runtime without running trading decisions, reports per-client connection attempts, connected-once state, applied messages, and last error, and exits nonzero if fewer than the market/user clients are reported or any client never connected.
 - `live-network-smoke --live --require-connected` records `live_network_smoke_ok`/`live_network_smoke_failed` evidence, and `low-latency-readiness-report --require-evidence` requires the latest network smoke event to be OK with both required WebSocket clients running and connected at least once.
 - `low-latency-readiness-report --require-evidence` and `low-latency-readiness-db-audit` require at least one persisted orderbook snapshot with `polymarket_market_websocket` metadata, usable bid/ask/mid prices, and non-empty bid/ask depth, so production evidence cannot pass on connection liveness or placeholder snapshots alone.
@@ -98,7 +98,7 @@ The live log endpoint at `http://192.168.1.49:8765/` was retried on 2026-05-11 H
 - HKO source timing is persisted for audit.
 - `hko-source-timing-report` summarizes persisted HKO raw snapshot timings, explicitly prints `timed_response_rows`, response latency percentiles, fetch-second offsets, HTTP `Last-Modified` minute offsets, and fetch-to-public-availability offsets for live dry-run evidence; `low-latency-readiness-report --require-evidence` only counts HKO source-timing rows that include explicit fetch-start timing and response elapsed milliseconds.
 - `low-latency-readiness-report --require-evidence` requires at least two HKO fetches within the configured burst window around observed public availability, so the production report cannot pass with arbitrary background timing rows alone.
-- Live hot-path buys fail closed when configured WebSocket book cache is stale or missing.
+- Live hot-path buys fail closed when the WebSocket runtime is unhealthy or a bounded targeted refresh cannot produce executable candidate depth under the entry caps.
 - Evidence: `src/whenitrains/scheduler.py`, `src/whenitrains/hko.py`, `src/whenitrains/storage.py`, `src/whenitrains/runner.py`.
 - Tests: `tests.test_scheduler`, `tests.test_storage`, focused live runner tests.
 - Missing: captured live dry-run report output from the production DB showing the public-availability clustering gate passed and HKO fetch attempts were not blocked by orderbook work.

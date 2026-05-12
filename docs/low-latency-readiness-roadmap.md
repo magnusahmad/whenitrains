@@ -12,7 +12,7 @@ The local roadmap implementation is substantially complete. See `docs/low-latenc
 
 - HKO and Polymarket storage commits can enqueue narrow low-latency events for AWS actual transitions, OCF forecast-sample changes, and market-resolution status changes.
 - Paper scheduler starts a blocking `FastDecisionWorker`; live scheduler drains the shared fast-event queue before watchdog ticks, and scheduler sleep is interrupted by new queue arrivals while live-client ownership stays inside the scheduler thread.
-- Live execution can use a scheduler-owned Polymarket WebSocket orderbook cache and fails closed when a configured cache is stale or missing.
+- Live execution can use a scheduler-owned Polymarket WebSocket orderbook cache, and falls back to a bounded targeted CLOB `/book` refresh when only the candidate token cache is stale or missing.
 - Market and user WebSocket clients, live runtime ownership, authenticated user-event storage/application, pending-order reconciliation, sellable-balance drift repair/freeze, and resolved-market local settlement are implemented with fixture and scheduler tests.
 - Candidate planning, ladder metadata, and execution scheduling are wired into actual-cross, lowest-temperature actual-cross, forecast-change, forecast-value, forecast-exit, and open-position exit paths.
 - Operational safeguards now include a DB-specific live scheduler lock, startup health freeze, stale submitted-order freeze, persistent kill-switch exit enforcement, alerts, stalled-WebSocket freeze, source-freshness alerts, and a live runbook.
@@ -98,8 +98,8 @@ Deliverables:
 - Add a market WebSocket client that subscribes to all active YES/NO token IDs with `custom_feature_enabled: true`.
 - Maintain an in-memory book cache plus append-only SQLite snapshots for `book`, `price_change`, `best_bid_ask`, and `last_trade_price`.
 - On market discovery changes, resubscribe without restarting the scheduler.
-- REST `/books` or `/book` becomes startup snapshot/backfill and reconnect recovery only.
-- Decisioning reads the in-memory book first and rejects or refreshes only when the book age exceeds a tight threshold.
+- REST `/books` or `/book` becomes startup snapshot/backfill, reconnect recovery, and bounded targeted refresh for candidate tokens whose WebSocket book is stale at the decision instant.
+- Decisioning reads the in-memory book first and only refreshes the candidate token when book age exceeds a tight threshold.
 
 Verification:
 
@@ -164,7 +164,7 @@ Deliverables:
 - Record HTTP response timing and header timings for every HKO source.
 - Report fetch-to-public-availability offsets and fail readiness evidence when the production DB lacks clustered AWS actual fetches inside the configured burst window.
 - Add backoff state that slows non-critical sources without slowing the actual worker.
-- Add freshness gates per signal type: if HKO source fresh but Polymarket cache stale, skip trading; if Polymarket fresh but HKO stale, do not infer a signal.
+- Add freshness gates per signal type: if HKO source is fresh but candidate Polymarket cache is stale, perform one bounded targeted book refresh before deciding; if Polymarket refresh fails or HKO is stale, do not infer a signal.
 
 Verification:
 

@@ -144,7 +144,7 @@ PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3
 - `live_order_submit_failed` with severity `critical`.
 - `live_stale_submitted_orders`.
 - Stalled market WebSocket or user WebSocket.
-- Polymarket book cache stale during a live hot-path entry.
+- Targeted Polymarket book refresh failure during a live hot-path entry.
 - Local/CLOB position or sellable-balance drift.
 - HKO source freshness breach during a learned AWS actual publish window.
 
