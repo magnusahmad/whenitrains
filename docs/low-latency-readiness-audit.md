@@ -1,6 +1,6 @@
 # Low-Latency Readiness Audit
 
-Last updated: 2026-05-11 HKT
+Last updated: 2026-05-12 HKT
 
 ## Objective
 
@@ -122,6 +122,8 @@ The live log endpoint at `http://192.168.1.49:8765/` was retried on 2026-05-11 H
 - Missing: manual live-auth smoke, minimum-size manual buy/sell, scheduler dry-run, capped live scheduler, and real-account kill-switch verification.
 
 ## Latest Verification
+
+2026-05-12 HKT session update: live scheduler startup now recomputes stale submitted-order health after startup reconciliation, so rows moved out of `submitted`/`unknown_fill` by reconcile no longer force a startup-health freeze after a clear CLOB drift scan. Added `test_live_scheduler_uses_post_reconcile_stale_submitted_count_for_startup_health` and verified the focused CLI/live/operational suites.
 
 Combined verification after the latest local changes:
 

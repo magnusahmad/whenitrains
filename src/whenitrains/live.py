@@ -1359,28 +1359,11 @@ def freeze_new_entries_for_stale_submitted_orders(
     now: datetime | None = None,
     max_age_seconds: float = Settings.live_submitted_order_stale_seconds,
 ) -> int:
-    now = now or datetime.now(timezone.utc)
-    stale_rows = []
-    rows = db.execute(
-        """
-        select id, clob_order_id, outcome_id, status, submitted_at_utc
-        from live_orders
-        where status in ('submitted', 'unknown_fill')
-          and submitted_at_utc is not null
-        order by submitted_at_utc asc, id asc
-        """
-    ).fetchall()
-    for row in rows:
-        try:
-            submitted_at = datetime.fromisoformat(row["submitted_at_utc"])
-        except (TypeError, ValueError):
-            stale_rows.append(row)
-            continue
-        if submitted_at.tzinfo is None:
-            submitted_at = submitted_at.replace(tzinfo=timezone.utc)
-        age_seconds = (now - submitted_at.astimezone(timezone.utc)).total_seconds()
-        if age_seconds >= max_age_seconds:
-            stale_rows.append(row)
+    stale_rows = list_stale_submitted_live_orders(
+        db,
+        now=now,
+        max_age_seconds=max_age_seconds,
+    )
     if not stale_rows:
         return 0
     set_live_setting(db, "block_new_entries", True)
@@ -1404,6 +1387,37 @@ def freeze_new_entries_for_stale_submitted_orders(
         },
     )
     return len(stale_rows)
+
+
+def list_stale_submitted_live_orders(
+    db: sqlite3.Connection,
+    *,
+    now: datetime | None = None,
+    max_age_seconds: float = Settings.live_submitted_order_stale_seconds,
+) -> list[sqlite3.Row]:
+    now = now or datetime.now(timezone.utc)
+    stale_rows = []
+    rows = db.execute(
+        """
+        select id, clob_order_id, outcome_id, status, submitted_at_utc
+        from live_orders
+        where status in ('submitted', 'unknown_fill')
+          and submitted_at_utc is not null
+        order by submitted_at_utc asc, id asc
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            submitted_at = datetime.fromisoformat(row["submitted_at_utc"])
+        except (TypeError, ValueError):
+            stale_rows.append(row)
+            continue
+        if submitted_at.tzinfo is None:
+            submitted_at = submitted_at.replace(tzinfo=timezone.utc)
+        age_seconds = (now - submitted_at.astimezone(timezone.utc)).total_seconds()
+        if age_seconds >= max_age_seconds:
+            stale_rows.append(row)
+    return stale_rows
 
 
 def maybe_clear_block_new_entries_after_reconcile(

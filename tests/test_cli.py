@@ -1697,6 +1697,126 @@ class CliDiscoveryTests(unittest.TestCase):
             finally:
                 db.close()
 
+    def test_live_scheduler_uses_post_reconcile_stale_submitted_count_for_startup_health(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            db = connect(db_path)
+            try:
+                migrate(db)
+                order_id = store_live_order(
+                    db,
+                    outcome_id="yes25",
+                    label="25C",
+                    side="BUY_YES",
+                    action="BUY",
+                    status="submitted",
+                    clob_order_id="order-1",
+                    order_type="FAK",
+                    requested_size_usd=5.0,
+                    limit_price=0.40,
+                    reason="stale startup order",
+                    raw_response={"orderID": "order-1", "status": "submitted"},
+                )
+                db.execute(
+                    """
+                    update live_orders
+                    set submitted_at_utc = '2026-05-08T01:00:00+00:00'
+                    where id = ?
+                    """,
+                    (order_id,),
+                )
+                db.commit()
+            finally:
+                db.close()
+
+            class ReconcilesOpenClient:
+                def reconcile_order(self, order_id, token_id):
+                    return {
+                        "order_id": order_id,
+                        "token_id": token_id,
+                        "status": "open",
+                    }
+
+                def trades_for_order(self, order_id, token_id):
+                    return []
+
+            class FakeRuntime:
+                book_cache = object()
+                all_running = True
+
+                def start(self):
+                    return None
+
+                def stop(self, timeout=None):
+                    return None
+
+            def run_loop(*args, **kwargs):
+                return SimpleNamespace(
+                    buys_filled=0,
+                    buys_missed=0,
+                    sells_filled=0,
+                    sells_missed=0,
+                    ticks_run=0,
+                    notes=(),
+                )
+
+            stdout = StringIO()
+            with (
+                patch("whenitrains.cli.load_live_config", return_value=object()),
+                patch("whenitrains.cli.PolymarketClobClient", return_value=ReconcilesOpenClient()),
+                patch(
+                    "whenitrains.cli.preflight_live",
+                    return_value=SimpleNamespace(ok=True, reason="ok"),
+                ),
+                patch("whenitrains.cli.find_live_position_drifts", return_value=[]),
+                patch(
+                    "whenitrains.cli.LiveWebSocketRuntime.for_live_scheduler",
+                    return_value=FakeRuntime(),
+                ),
+                patch("whenitrains.cli.run_scheduled_paper_loop", side_effect=run_loop),
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "live-scheduler",
+                        "--live",
+                        "--ticks",
+                        "0",
+                        "--no-startup-backup",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            output = stdout.getvalue()
+            self.assertIn("blocked new entries: 1 stale submitted live orders", output)
+            self.assertIn(
+                "live reconcile checked=1 filled=0 open=1 errors=0 rebuilt_positions=0",
+                output,
+            )
+            self.assertIn(
+                "live entry block auto-cleared after startup health recovery",
+                output,
+            )
+            self.assertNotIn("live startup health failed", output)
+            db = connect(db_path)
+            try:
+                self.assertFalse(live_setting_enabled(db, "block_new_entries"))
+                row = db.execute(
+                    "select status from live_orders where clob_order_id = 'order-1'"
+                ).fetchone()
+                self.assertEqual(row["status"], "open")
+                startup_health_failures = db.execute(
+                    """
+                    select count(*) from risk_events
+                    where event_type = 'live_startup_health_failed'
+                    """
+                ).fetchone()[0]
+                self.assertEqual(startup_health_failures, 0)
+            finally:
+                db.close()
+
     def test_live_scheduler_reconcile_watchdog_freezes_entries_when_drift_appears(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"

@@ -73,6 +73,7 @@ from .live import (
     execute_live_sell,
     find_live_position_drifts,
     freeze_new_entries_for_stale_submitted_orders,
+    list_stale_submitted_live_orders,
     load_live_config,
     maybe_clear_block_new_entries_after_reconcile,
     preflight_live,
@@ -1063,6 +1064,7 @@ def main(argv: list[str] | None = None) -> int:
                         f"rebuilt_positions={reconcile_result.rebuilt_positions}",
                         flush=True,
                     )
+                stale_submitted = len(list_stale_submitted_live_orders(db))
                 drift_scan_started = time.monotonic()
                 drifts = find_live_position_drifts(db, client)
                 startup_repaired = 0
