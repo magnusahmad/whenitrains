@@ -1265,6 +1265,43 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(adjustment["event_type"], "live_position_drift_repair")
             self.assertEqual(adjustment["event_key"], "watchdog")
 
+    def test_reconcile_pending_live_orders_does_not_reprocess_drift_repairs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_live_order(
+                db,
+                outcome_id="yes25",
+                side="BUY_YES",
+                action="BUY",
+                status="filled",
+                clob_order_id="order-1",
+                fill_price=0.40,
+                fill_size_usd=5.0,
+                fill_shares=12.5,
+            )
+            rebuild_live_positions_from_filled_orders(db)
+            client = FakeClobClient(token_balances={"yes25": 7.0})
+            drifts = find_live_position_drifts(db, client, tolerance_shares=0.01)
+            repair_live_position_drifts(db, drifts, event_key="watchdog")
+
+            result = reconcile_pending_live_orders(db, client)
+
+            self.assertEqual(result.orders_checked, 0)
+            position = get_live_position(db, "yes25")
+            self.assertAlmostEqual(position["net_shares"], 7.0)
+            adjustment = db.execute(
+                """
+                select status, fill_shares, raw_reconcile_json
+                from live_orders
+                where event_type = 'live_position_drift_repair'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(adjustment["status"], "filled")
+            self.assertAlmostEqual(adjustment["fill_shares"], 5.5)
+            self.assertIn('"missing_shares": 5.5', adjustment["raw_reconcile_json"])
+
     def test_reconcile_pending_live_orders_applies_fills_and_rebuilds_positions(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

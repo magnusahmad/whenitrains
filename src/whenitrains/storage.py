@@ -1403,6 +1403,7 @@ def list_live_orders_for_reconcile(db: sqlite3.Connection) -> list[sqlite3.Row]:
             where status in ('submitted', 'unknown_fill')
                or (
                    status = 'filled'
+                   and clob_order_id is not null
                    and (
                        coalesce(fill_shares, 0) <= 0
                        or coalesce(fill_size_usd, 0) <= 0
