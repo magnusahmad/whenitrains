@@ -1694,6 +1694,40 @@ class RunnerTests(unittest.TestCase):
                 ],
             )
 
+    def test_actual_cross_forecast_boundary_guard_skips_exact_yes_near_upper_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=[
+                    Outcome(
+                        market_id="m26",
+                        label="26°C",
+                        predicate=parse_outcome_label("26°C"),
+                        yes_token_id="yes26",
+                        no_token_id="no26",
+                    )
+                ],
+            )
+            _store_forecast(db, 26.8, "2026-05-04T00:45:00+08:00")
+            _store_observation(db, 25.8)
+            _store_observation(db, 26.1)
+            _store_book_pair(db, "yes26", old_ask=0.40, new_ask=0.405)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(result.buys_missed, 1)
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'actual_cross' and action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "missed")
+            self.assertEqual(decision["reason"], "forecast signal too close to crossed bucket boundary")
+
     def test_actual_cross_falls_back_to_csdi_when_aws_has_no_max_transition(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
@@ -2868,7 +2902,7 @@ class RunnerTests(unittest.TestCase):
                     )
                 ],
             )
-            _store_forecast_range(db, low=29, high=33, update_time="2026-05-04T09:00:00+08:00")
+            _store_forecast_range(db, low=29.4, high=33, update_time="2026-05-04T09:00:00+08:00")
             _store_min_observation(db, low=30.2, hour=7)
             _store_min_observation(db, low=29.4, hour=8)
             _store_book_pair(db, "yes-low29", old_ask=0.25, new_ask=0.25)
@@ -2902,7 +2936,7 @@ class RunnerTests(unittest.TestCase):
                     )
                 ],
             )
-            _store_forecast_range(db, low=29, high=33, update_time="2026-05-04T09:00:00+08:00")
+            _store_forecast_range(db, low=29.4, high=33, update_time="2026-05-04T09:00:00+08:00")
             _store_min_observation(db, low=30.2, hour=7)
             _store_min_observation(db, low=29.4, hour=8)
             _store_book_pair(db, "yes-low29", old_ask=0.25, new_ask=0.25)
@@ -2947,7 +2981,7 @@ class RunnerTests(unittest.TestCase):
                     )
                 ],
             )
-            _store_forecast_range(db, low=29, high=33, update_time="2026-05-04T09:00:00+08:00")
+            _store_forecast_range(db, low=29.4, high=33, update_time="2026-05-04T09:00:00+08:00")
             _store_min_observation(db, low=30.2, hour=7)
             _store_min_observation(db, low=29.4, hour=8)
 
@@ -2968,6 +3002,41 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(first.buys_filled, 0)
             self.assertEqual(processed_count, 0)
             self.assertEqual(second.buys_filled, 1)
+
+    def test_actual_low_cross_forecast_boundary_guard_skips_exact_yes_near_lower_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_lowest_market(
+                db,
+                [
+                    Outcome(
+                        market_id="low26",
+                        label="26°C",
+                        predicate=parse_outcome_label("26°C"),
+                        yes_token_id="yes-low26",
+                        no_token_id="no-low26",
+                    )
+                ],
+            )
+            _store_forecast_range(db, low=26.1, high=33, update_time="2026-05-04T09:00:00+08:00")
+            _store_min_observation(db, low=27.0, hour=7)
+            _store_min_observation(db, low=26.8, hour=8)
+            _store_book_pair(db, "yes-low26", old_ask=0.58, new_ask=0.58)
+
+            result = process_actual_entries(db, date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(result.buys_missed, 1)
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'actual_low_cross' and action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "missed")
+            self.assertEqual(decision["reason"], "forecast signal too close to crossed bucket boundary")
 
     def test_forecast_value_buy_only_sweeps_depth_up_to_threshold(self):
         with tempfile.TemporaryDirectory() as tmp:

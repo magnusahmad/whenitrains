@@ -843,6 +843,30 @@ def _process_actual_min_transition(
             continue
         token_id = row["yes_token_id"] if side == "YES" else row["no_token_id"]
         signals += 1
+        if _actual_low_cross_guarded_by_forecast(predicate, side, forecast_min):
+            if not event_marked:
+                _mark_event_processed(
+                    db,
+                    event_type="actual_low_cross",
+                    event_key=event_key,
+                    reason=f"observed min changed {old_min} -> {new_min}",
+                    details={"old_min": old_min, "new_min": new_min, "forecast_min": forecast_min},
+                )
+                event_marked = True
+            store_trading_decision(
+                db,
+                "actual_low_cross",
+                token_id,
+                row["label"],
+                side,
+                "BUY",
+                "missed",
+                "forecast signal too close to crossed bucket boundary",
+                {"old_min": old_min, "new_min": new_min, "forecast_min": forecast_min},
+                event_key=event_key,
+            )
+            buys_missed += 1
+            continue
         prices = latest_two_orderbook_prices(db, token_id)
         if len(prices) < 2 or prices[0]["best_ask"] is None or prices[1]["best_ask"] is None:
             store_trading_decision(
@@ -1045,6 +1069,31 @@ def _process_actual_transition(
             )
             buys_missed += 1
             continue
+        if _actual_cross_near_boundary_guarded_by_forecast(predicate, side, forecast_max):
+            flush_pending_executions()
+            if not event_marked:
+                _mark_event_processed(
+                    db,
+                    event_type="actual_cross",
+                    event_key=event_key,
+                    reason=f"observed max changed {old_max} -> {new_max}",
+                    details=actual_details,
+                )
+                event_marked = True
+            store_trading_decision(
+                db,
+                "actual_cross",
+                token_id,
+                row["label"],
+                side,
+                "BUY",
+                "missed",
+                "forecast signal too close to crossed bucket boundary",
+                actual_details,
+                event_key=event_key,
+            )
+            buys_missed += 1
+            continue
         exact_fast_lane = side == "YES" and predicate.type == PredicateType.EXACT_C
         peak_hour_sure_bet = _actual_cross_is_peak_hour_sure_bet(
             db, today_hkt.isoformat(), new["observed_at_hkt"], new_max
@@ -1214,6 +1263,20 @@ def _actual_cross_guarded_by_forecast(
     return forecast_max >= predicate.value_c + 1
 
 
+def _actual_cross_near_boundary_guarded_by_forecast(
+    predicate, side: str, forecast_max: float | None
+) -> bool:
+    if (
+        side != "YES"
+        or predicate.type != PredicateType.EXACT_C
+        or predicate.value_c is None
+        or forecast_max is None
+    ):
+        return False
+    upper_boundary = predicate.value_c + 1
+    return upper_boundary - forecast_max <= Settings.near_boundary_peak_take_profit_c + 1e-9
+
+
 def _actual_cross_is_peak_hour_sure_bet(
     db: sqlite3.Connection,
     target_date_hkt: str,
@@ -1269,6 +1332,20 @@ def _actual_low_cross_side(predicate, old_min: float, new_min: float) -> str | N
         if old_min >= lower > new_min:
             return "NO"
     return None
+
+
+def _actual_low_cross_guarded_by_forecast(
+    predicate, side: str, forecast_min: float | None
+) -> bool:
+    if (
+        side != "YES"
+        or predicate.type != PredicateType.EXACT_C
+        or predicate.value_c is None
+        or forecast_min is None
+    ):
+        return False
+    lower_boundary = predicate.value_c
+    return forecast_min - lower_boundary <= Settings.near_boundary_peak_take_profit_c + 1e-9
 
 
 
