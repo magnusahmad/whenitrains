@@ -24,6 +24,7 @@ AWS_ACTUAL_BURST_WINDOW_SECONDS = 10
 AWS_ACTUAL_BURST_CADENCE_SECONDS = 0.5
 FORECAST_POLL_MINUTES = tuple(range(0, 60, 10))
 FORECAST_CATCHUP_MINUTES = 50
+ORDERBOOK_REFRESH_INTERVAL_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -83,7 +84,7 @@ def scheduler_actions(
     state: SchedulerState,
     learned_forecast_times: list[day_time] | tuple[day_time, ...] = (),
     learned_actual_times: list[day_time] | tuple[day_time, ...] = (),
-    orderbook_interval_seconds: int = 15,
+    orderbook_interval_seconds: int = ORDERBOOK_REFRESH_INTERVAL_SECONDS,
     market_discovery_interval_seconds: int = 300,
 ) -> SchedulerActions:
     sources = {

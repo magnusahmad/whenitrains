@@ -1,4 +1,5 @@
 import tempfile
+import sqlite3
 import unittest
 from datetime import date, datetime
 from pathlib import Path
@@ -7,6 +8,7 @@ from whenitrains.dashboard_server import (
     HISTORICALS_HTML,
     INDEX_HTML,
     LIVE_HTML,
+    _bucketed_orderbook_bid_rows,
     bucketed_orderbook_ask_points,
     dashboard_stats,
     forecast_series,
@@ -26,6 +28,7 @@ from whenitrains.dashboard_server import (
     live_pnl_series,
     reconcile_live_dashboard_orders,
     live_trade_rows,
+    _cached_dashboard_payload,
 )
 from whenitrains.hko import (
     HKT,
@@ -259,6 +262,128 @@ class DashboardServerTests(unittest.TestCase):
             self.assertEqual(series[0]["latest_price"], 0.60)
             self.assertEqual(series[0]["markers"][0]["text"], "B")
             self.assertEqual(series[0]["markers"][0]["price"], 0.60)
+
+    def test_top_token_price_series_can_scope_points_to_hkt_day(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            _set_latest_orderbook_time(
+                db, "yes25", "2026-05-05T15:30:00+00:00", 0.40
+            )
+            _set_latest_orderbook_time(
+                db, "yes25", "2026-05-06T02:30:00+00:00", 0.50
+            )
+
+            series = top_token_price_series(
+                db, "2026-05-06", "YES", points_date_hkt="2026-05-06"
+            )
+
+            token = [item for item in series if item["token_id"] == "yes25"][0]
+            self.assertEqual([point["value"] for point in token["points"]], [0.50])
+
+    def test_dashboard_stats_hko_count_uses_covering_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+
+            plan = _query_plan(
+                db,
+                """
+                select count(*) from (
+                    select distinct forecast_date_hkt, forecast_max_c, update_time
+                    from hko_forecasts
+                    where source_type in ('ocf_station', 'flw_page')
+                )
+                """,
+            )
+
+            self.assertIn("idx_hko_forecasts_dashboard_count", plan)
+            self.assertIn("COVERING INDEX", plan)
+
+    def test_forecast_sample_dedupe_uses_update_key_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+
+            plan = _query_plan(
+                db,
+                """
+                with latest_by_update as (
+                    select max(id) as id
+                    from ocf_forecast_samples
+                    where forecast_date_hkt = ?
+                    group by coalesce(json_extract(raw_daily_forecast, '$.LastModified'), fetched_at_utc)
+                )
+                select forecast_date_hkt, fetched_at_utc, raw_min_c, raw_max_c,
+                       hourly_temperatures_json, raw_daily_forecast
+                from ocf_forecast_samples
+                where id in (select id from latest_by_update)
+                order by fetched_at_utc asc, id asc
+                """,
+                ("2026-05-06",),
+            )
+
+            self.assertIn("idx_ocf_forecast_samples_update_key", plan)
+
+    def test_orderbook_chart_queries_use_covering_indexes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            _set_latest_orderbook_time(
+                db, "yes25", "2026-05-06T02:30:00+00:00", 0.50
+            )
+
+            ask_plan = _query_plan(
+                db,
+                """
+                with bucketed as (
+                    select
+                        ((cast(strftime('%s', fetched_at_utc) as integer) / ?) * ?) as bucket,
+                        max(id) as latest_id
+                    from orderbook_snapshots
+                    where outcome_id = ?
+                      and best_ask is not null
+                      and strftime('%s', fetched_at_utc) is not null
+                      and fetched_at_utc >= ?
+                      and fetched_at_utc < ?
+                    group by bucket
+                )
+                select b.bucket, s.best_ask
+                from bucketed b
+                join orderbook_snapshots s on s.id = b.latest_id
+                order by b.bucket asc
+                """,
+                (
+                    60,
+                    60,
+                    "yes25",
+                    "2026-05-05T16:00:00+00:00",
+                    "2026-05-06T16:00:00+00:00",
+                ),
+            )
+            bid_plan = _query_plan(
+                db,
+                """
+                with bucketed as (
+                    select
+                        outcome_id,
+                        ((cast(strftime('%s', fetched_at_utc) as integer) / ?) * ?) as bucket,
+                        max(id) as latest_id
+                    from orderbook_snapshots
+                    where best_bid is not null
+                      and outcome_id in (?)
+                      and fetched_at_utc >= ?
+                      and strftime('%s', fetched_at_utc) is not null
+                    group by outcome_id, bucket
+                )
+                select b.bucket, s.fetched_at_utc, s.outcome_id, s.best_bid
+                from bucketed b
+                join orderbook_snapshots s on s.id = b.latest_id
+                order by b.bucket asc, s.id asc
+                """,
+                (60, 60, "yes25", "2026-05-05T16:00:00+00:00"),
+            )
+
+            self.assertIn("idx_orderbook_snapshots_ask_chart", ask_plan)
+            self.assertIn("COVERING INDEX", ask_plan)
+            self.assertIn("idx_orderbook_snapshots_bid_chart", bid_plan)
+            self.assertIn("COVERING INDEX", bid_plan)
 
     def test_forecast_panels_split_d0_d1_d2(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -672,7 +797,8 @@ class DashboardServerTests(unittest.TestCase):
                     ("yes25",),
                 ).fetchall()
             )
-            self.assertIn("idx_orderbook_snapshots_latest", plan)
+            self.assertIn("outcome_id=?", plan)
+            self.assertNotIn("SCAN orderbook_snapshots", plan)
 
     def test_bucketed_orderbook_ask_points_collapses_raw_snapshots_in_sql(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -707,6 +833,58 @@ class DashboardServerTests(unittest.TestCase):
 
             self.assertEqual([point["value"] for point in points], [0.30, 0.40])
             self.assertEqual(len(points), 2)
+
+    def test_bucketed_orderbook_ask_points_materializes_only_bucketed_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            for idx in range(20):
+                _set_latest_orderbook_time(
+                    db,
+                    "yes25",
+                    f"2026-05-06T01:00:{idx:02d}+00:00",
+                    0.20 + idx / 100,
+                )
+
+            materialized = 0
+
+            def counting_row_factory(cursor, row):
+                nonlocal materialized
+                materialized += 1
+                return sqlite3.Row(cursor, row)
+
+            db.row_factory = counting_row_factory
+
+            points = bucketed_orderbook_ask_points(db, "yes25", bucket_seconds=60)
+
+            self.assertEqual([point["value"] for point in points], [0.39])
+            self.assertEqual(materialized, 1)
+
+    def test_bucketed_orderbook_bid_rows_materializes_only_bucketed_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            for idx in range(20):
+                _set_latest_orderbook_time(
+                    db,
+                    "yes25",
+                    f"2026-05-06T01:00:{idx:02d}+00:00",
+                    0.20 + idx / 100,
+                )
+
+            materialized = 0
+
+            def counting_row_factory(cursor, row):
+                nonlocal materialized
+                materialized += 1
+                return sqlite3.Row(cursor, row)
+
+            db.row_factory = counting_row_factory
+
+            rows = _bucketed_orderbook_bid_rows(
+                db, {"yes25"}, "2026-05-06T01:00:00+00:00", 60
+            )
+
+            self.assertEqual([row["best_bid"] for row in rows], [0.37])
+            self.assertEqual(materialized, 1)
 
     def test_paper_order_markers_include_decision_signal_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1155,6 +1333,86 @@ class DashboardServerTests(unittest.TestCase):
             self.assertTrue(pnl["realized"])
             self.assertEqual(panel["top_tokens"][0]["markers"][0]["text"], "B")
 
+    def test_live_pnl_series_uses_latest_bid_within_each_minute_bucket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            db.execute(
+                """
+                insert into live_orders (
+                    created_at_utc, outcome_id, label, side, action, clob_order_id,
+                    order_type, status, requested_size_usd, limit_price, fill_price,
+                    fill_size_usd, fill_shares, reason
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "2026-05-06T00:00:05+00:00",
+                    "yes25",
+                    "25°C",
+                    "BUY_YES",
+                    "BUY",
+                    "0xorder",
+                    "FAK",
+                    "filled",
+                    5.0,
+                    0.40,
+                    0.40,
+                    4.0,
+                    10.0,
+                    "test live buy",
+                ),
+            )
+            db.commit()
+            _set_latest_orderbook_time(
+                db, "yes25", "2026-05-06T00:01:05+00:00", 0.47
+            )
+            _set_latest_orderbook_time(
+                db, "yes25", "2026-05-06T00:01:40+00:00", 0.57
+            )
+
+            pnl = live_pnl_series(db)
+
+            self.assertAlmostEqual(pnl["unrealized"][-1]["value"], 1.5)
+
+    def test_live_order_markers_use_filled_token_created_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+
+            plan = _query_plan(
+                db,
+                """
+                select created_at_utc, side, fill_price, fill_size_usd, fill_shares,
+                       status, reason, event_type, event_key
+                from live_orders
+                where outcome_id = ?
+                  and status = 'filled'
+                  and fill_price is not null
+                  and created_at_utc is not null
+                order by created_at_utc asc, id asc
+                """,
+                ("yes25",),
+            )
+
+            self.assertIn("idx_live_orders_filled_token_created", plan)
+
+    def test_dashboard_payload_cache_coalesces_repeated_builds(self):
+        calls = []
+
+        def build():
+            calls.append("called")
+            return {"value": len(calls)}
+
+        first = _cached_dashboard_payload(
+            "test-dashboard-cache", build, ttl_seconds=60
+        )
+        second = _cached_dashboard_payload(
+            "test-dashboard-cache", build, ttl_seconds=60
+        )
+
+        self.assertEqual(first, {"value": 1})
+        self.assertEqual(second, {"value": 1})
+        self.assertEqual(calls, ["called"])
+
     def test_live_dashboard_reconcile_makes_submitted_fill_visible(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_dashboard_db(Path(tmp) / "test.db")
@@ -1496,6 +1754,12 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("subscribeVisibleTimeRangeChange(renderAllTradeBubbles)", INDEX_HTML)
         self.assertIn("nearestTrade(d.markers, param.time)", INDEX_HTML)
         self.assertIn('/api/forecast-panels?side=${encodeURIComponent(tokenSide)}', INDEX_HTML)
+        self.assertIn("const DASHBOARD_FETCH_TIMEOUT_MS = 20000", INDEX_HTML)
+        self.assertIn("let loadAllPromise = null", INDEX_HTML)
+        self.assertIn("if (loadAllPromise) return loadAllPromise", INDEX_HTML)
+        self.assertIn("loadAllPromise = loadAllOnce()", INDEX_HTML)
+        self.assertIn("controller.abort()", INDEX_HTML)
+        self.assertIn("dashboard load failed", INDEX_HTML)
         self.assertIn('"#ffb74d", "#4dd0e1"', INDEX_HTML)
         self.assertIn("Latest hourly forecast", INDEX_HTML)
         self.assertNotIn("OCF forecast high", INDEX_HTML)
@@ -1575,6 +1839,8 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("whenitrains · HK temperature live desk", LIVE_HTML)
         self.assertIn('/api/live/trades?view=${encodeURIComponent(view)}', LIVE_HTML)
         self.assertIn('fetchJSON("/api/live/stats")', LIVE_HTML)
+        self.assertIn("if (loadAllPromise) return loadAllPromise", LIVE_HTML)
+        self.assertIn("dashboard load failed", LIVE_HTML)
 
     def test_historicals_html_contains_route_specific_api_and_charts(self):
         self.assertIn("HKO historical accuracy", HISTORICALS_HTML)
@@ -1702,6 +1968,11 @@ def _set_latest_orderbook_time(db, token_id: str, fetched_at: str, price: float)
         (fetched_at,),
     )
     db.commit()
+
+
+def _query_plan(db, sql: str, params: tuple = ()) -> str:
+    rows = db.execute(f"explain query plan {sql}", params).fetchall()
+    return "\n".join(str(row["detail"]) for row in rows)
 
 
 def _insert_historical_order(

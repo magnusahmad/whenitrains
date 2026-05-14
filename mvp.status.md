@@ -1,6 +1,6 @@
 # Live Trading Status
 
-Last updated: 2026-05-10 HKT
+Last updated: 2026-05-14 HKT
 
 ## Current State
 
@@ -23,6 +23,8 @@ Live dashboard trade rows now normalize filled order notional from `fill_price *
 Live invalidation exits now cap submitted sell shares to the CLOB-reported conditional token balance when that balance is lower than local live position shares. This avoids rejected all-or-nothing FAK exits when the local live replay overstates sellable shares, while recording a `live_position_balance_mismatch` warning risk event so the accounting mismatch remains visible.
 
 Live entries now refresh the CLOB orderbook immediately before submitting a live buy, persist that fresh quote, and re-apply the entry cap/slippage rule against it. If the fresh quote has moved beyond the executable rule that produced the candidate, the buy is recorded as missed instead of sending a stale-price FAK order.
+
+Live buys now size down to available visible ask depth within the slippage cap instead of requiring enough depth for the full requested order. A scheduler buy that requests 20 USD can submit a smaller FAK, such as 3 USD, when only that much depth is executable, while still enforcing a 1 USD minimum live entry fill.
 
 Live sell misses now signpost their reason in scheduler notes, including the label, side, trigger, and bid. Open-position exits also check whether a position is actually invalidated before counting missing bid depth as a sell miss, so `sells=0/N` no longer includes non-actionable held positions with thin books.
 
@@ -73,6 +75,15 @@ Session verification on 2026-05-10 HKT:
 - Browser visual check completed against `http://127.0.0.1:8788/live` using a temporary `/private/tmp` SQLite DB.
 - Browser visual check completed against `http://127.0.0.1:8789/live` using a temporary `/private/tmp` SQLite DB with a marker-only live trade; one visible `B` bubble rendered with the expected title.
 - `curl -L http://127.0.0.1:8788/api/live/stats` returned a valid live payload.
+
+Session verification on 2026-05-14 HKT:
+
+- Red/green test added: `test_execute_live_buy_sizes_down_to_visible_depth`.
+- Red/green test added: `test_execute_live_buy_rejects_depth_below_live_minimum_after_sizing_down`.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_live.py'` passes.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_paper.py'` passes.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_runner.py' -k 'forecast_value' -k 'actual_cross'` passes.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passes: 498 tests.
 
 ## Decisions
 

@@ -270,6 +270,64 @@ class LiveTests(unittest.TestCase):
             self.assertAlmostEqual(pos["net_shares"], 12.5)
             self.assertAlmostEqual(live_total_open_exposure(db), 5.0)
 
+    def test_execute_live_buy_sizes_down_to_visible_depth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            client = FakeClobClient()
+
+            result = execute_live_buy(
+                db,
+                client,
+                token_id="yes23",
+                side="YES",
+                size_usd=20,
+                asks=[(0.30, 10), (0.60, 1000)],
+                reason="low forecast value",
+                max_price=0.30,
+                min_fill_usd=20,
+                order_cap_usd=20,
+                label="23C",
+            )
+
+            self.assertEqual(result.status, "filled")
+            self.assertEqual(client.buys, [("yes23", 0.30, 3.0)])
+            order = db.execute(
+                """
+                select requested_size_usd, limit_price, fill_size_usd
+                from live_orders
+                order by id desc
+                limit 1
+                """
+            ).fetchone()
+            self.assertAlmostEqual(order["requested_size_usd"], 20.0)
+            self.assertAlmostEqual(order["limit_price"], 0.30)
+            self.assertAlmostEqual(order["fill_size_usd"], 3.0)
+
+    def test_execute_live_buy_rejects_depth_below_live_minimum_after_sizing_down(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            client = FakeClobClient()
+
+            result = execute_live_buy(
+                db,
+                client,
+                token_id="yes23",
+                side="YES",
+                size_usd=20,
+                asks=[(0.30, 3), (0.60, 1000)],
+                reason="low forecast value",
+                max_price=0.30,
+                min_fill_usd=20,
+                order_cap_usd=20,
+                label="23C",
+            )
+
+            self.assertEqual(result.status, "rejected")
+            self.assertEqual(result.reason, "insufficient ask depth within slippage cap")
+            self.assertEqual(client.buys, [])
+
     def test_execute_live_buy_marks_unknown_fill_when_matched_response_omits_amounts(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")

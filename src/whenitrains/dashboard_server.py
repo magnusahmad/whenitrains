@@ -4,8 +4,9 @@ import json
 import math
 import sqlite3
 import threading
+import time as time_module
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
@@ -26,6 +27,8 @@ not exists (
 """
 
 _LIVE_DASHBOARD_RECONCILE_LOCK = threading.Lock()
+_DASHBOARD_API_CACHE_LOCK = threading.Lock()
+_DASHBOARD_API_CACHE: dict[str, tuple[float, dict | list]] = {}
 
 
 def _to_unix(iso_ts: str | None) -> int | None:
@@ -42,6 +45,24 @@ def _to_unix(iso_ts: str | None) -> int | None:
         return int(datetime.fromisoformat(text).timestamp())
     except ValueError:
         return None
+
+
+def _cached_dashboard_payload(
+    key: str,
+    build_payload: Callable[[], dict | list],
+    *,
+    ttl_seconds: float = 5.0,
+) -> dict | list:
+    now = time_module.monotonic()
+    with _DASHBOARD_API_CACHE_LOCK:
+        cached = _DASHBOARD_API_CACHE.get(key)
+        if cached is not None:
+            expires_at, payload = cached
+            if expires_at > now:
+                return payload
+        payload = build_payload()
+        _DASHBOARD_API_CACHE[key] = (time_module.monotonic() + ttl_seconds, payload)
+        return payload
 
 
 def _to_hkt_display(iso_ts: str | None) -> str | None:
@@ -235,7 +256,7 @@ def dashboard_stats(db: sqlite3.Connection) -> dict:
         ).fetchone()[0],
         "markets": db.execute("select count(*) from markets").fetchone()[0],
         "outcomes": db.execute("select count(*) from outcomes").fetchone()[0],
-        "orderbooks": db.execute("select count(*) from orderbook_snapshots").fetchone()[0],
+        "orderbooks": _orderbook_snapshot_count(db),
         "buy_filled": db.execute(
             f"""
             select count(*)
@@ -731,6 +752,25 @@ def _live_fill_notional_usd(
     return shares * price
 
 
+def _hkt_day_utc_bounds(date_text: str) -> tuple[str, str] | None:
+    try:
+        day = date.fromisoformat(date_text)
+    except ValueError:
+        return None
+    start = datetime.combine(day, time.min, tzinfo=HKT).astimezone(timezone.utc)
+    end = start + timedelta(days=1)
+    return start.isoformat(), end.isoformat()
+
+
+def _orderbook_snapshot_count(db: sqlite3.Connection) -> int:
+    row = db.execute(
+        "select seq from sqlite_sequence where name = 'orderbook_snapshots'"
+    ).fetchone()
+    if row is not None and row["seq"] is not None:
+        return int(row["seq"])
+    return int(db.execute("select count(*) from orderbook_snapshots").fetchone()[0])
+
+
 def top_token_price_series(
     db: sqlite3.Connection,
     target_date_hkt: str,
@@ -741,6 +781,7 @@ def top_token_price_series(
     include_trade_tokens: bool = False,
     market_kind: str = "highest",
     marker_source: str = "paper",
+    points_date_hkt: str | None = None,
 ) -> list[dict]:
     side = side.upper()
     if side not in {"YES", "NO"}:
@@ -809,11 +850,15 @@ def top_token_price_series(
         )
 
     series = []
+    point_bounds = _hkt_day_utc_bounds(points_date_hkt) if points_date_hkt else None
     for record in row_records:
         row = record["row"]
-        points = []
         points = bucketed_orderbook_ask_points(
-            db, row["token_id"], bucket_seconds=bucket_seconds
+            db,
+            row["token_id"],
+            bucket_seconds=bucket_seconds,
+            start_utc=point_bounds[0] if point_bounds else None,
+            end_utc=point_bounds[1] if point_bounds else None,
         )
         series.append(
             {
@@ -1034,18 +1079,33 @@ def latest_market_token_price_rows(
 
 
 def bucketed_orderbook_ask_points(
-    db: sqlite3.Connection, token_id: str, bucket_seconds: int = 60
+    db: sqlite3.Connection,
+    token_id: str,
+    bucket_seconds: int = 60,
+    start_utc: str | None = None,
+    end_utc: str | None = None,
 ) -> list[dict]:
     bucket_size = max(1, int(bucket_seconds))
+    predicates = [
+        "outcome_id = ?",
+        "best_ask is not null",
+    ]
+    params: list[object] = [token_id]
+    if start_utc is not None:
+        predicates.append("fetched_at_utc >= ?")
+        params.append(start_utc)
+    if end_utc is not None:
+        predicates.append("fetched_at_utc < ?")
+        params.append(end_utc)
+    where_clause = "\n              and ".join(predicates)
     rows = db.execute(
-        """
+        f"""
         with bucketed as (
             select
                 ((cast(strftime('%s', fetched_at_utc) as integer) / ?) * ?) as bucket,
                 max(id) as latest_id
             from orderbook_snapshots
-            where outcome_id = ?
-              and best_ask is not null
+            where {where_clause}
               and strftime('%s', fetched_at_utc) is not null
             group by bucket
         )
@@ -1054,7 +1114,7 @@ def bucketed_orderbook_ask_points(
         join orderbook_snapshots s on s.id = b.latest_id
         order by b.bucket asc
         """,
-        (bucket_size, bucket_size, token_id),
+        (bucket_size, bucket_size, *params),
     ).fetchall()
     return [
         {"time": int(row["bucket"]), "value": float(row["best_ask"])}
@@ -1307,6 +1367,7 @@ def forecast_panel(
     lead_days: int,
     token_side: str = "YES",
     marker_source: str = "paper",
+    points_date_hkt: str | None = None,
 ) -> dict:
     target_text = target_date.isoformat()
     actual_min, actual_max, current = observation_series(db, target_text)
@@ -1319,6 +1380,7 @@ def forecast_panel(
         limit=None,
         include_trade_tokens=True,
         marker_source=marker_source,
+        points_date_hkt=points_date_hkt,
     )
     low_tokens = top_token_price_series(
         db,
@@ -1328,6 +1390,7 @@ def forecast_panel(
         include_trade_tokens=True,
         market_kind="lowest",
         marker_source=marker_source,
+        points_date_hkt=points_date_hkt,
     )
     forecast_high, forecast_low = _forecast_extreme_series(
         db, target_text, exact_raw=lead_days == 0
@@ -1371,10 +1434,16 @@ def forecast_panels(
     marker_source: str = "paper",
 ) -> dict:
     base = today or datetime.now(HKT).date()
+    points_date_hkt = None if today is not None else base.isoformat()
     return {
         "panels": [
             forecast_panel(
-                db, base + timedelta(days=lead), lead, token_side, marker_source
+                db,
+                base + timedelta(days=lead),
+                lead,
+                token_side,
+                marker_source,
+                points_date_hkt=points_date_hkt,
             )
             for lead in (0, 1, 2)
         ],
@@ -1396,6 +1465,49 @@ def available_forecast_dates(db: sqlite3.Connection) -> list[str]:
         """
     ).fetchall()
     return [r["forecast_date_hkt"] for r in rows]
+
+
+def _bucketed_orderbook_bid_rows(
+    db: sqlite3.Connection,
+    tokens: set[str],
+    first_order_at_utc: str,
+    bucket_seconds: int,
+) -> list[dict]:
+    if not tokens:
+        return []
+    bucket_size = max(1, int(bucket_seconds))
+    ordered_tokens = sorted(tokens)
+    placeholders = ",".join("?" for _ in ordered_tokens)
+    rows = db.execute(
+        f"""
+        with bucketed as (
+            select
+                outcome_id,
+                ((cast(strftime('%s', fetched_at_utc) as integer) / ?) * ?) as bucket,
+                max(id) as latest_id
+            from orderbook_snapshots
+            where best_bid is not null
+              and outcome_id in ({placeholders})
+              and fetched_at_utc >= ?
+              and strftime('%s', fetched_at_utc) is not null
+            group by outcome_id, bucket
+        )
+        select b.bucket, s.fetched_at_utc, s.outcome_id, s.best_bid
+        from bucketed b
+        join orderbook_snapshots s on s.id = b.latest_id
+        order by b.bucket asc, s.outcome_id asc
+        """,
+        (bucket_size, bucket_size, *ordered_tokens, first_order_at_utc),
+    ).fetchall()
+    return [
+        {
+            "bucket": int(row["bucket"]),
+            "fetched_at_utc": row["fetched_at_utc"],
+            "outcome_id": row["outcome_id"],
+            "best_bid": row["best_bid"],
+        }
+        for row in rows
+    ]
 
 
 def pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
@@ -1423,17 +1535,9 @@ def pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
         return {"realized": [], "unrealized": [], "total": []}
 
     held_outcomes = {row["outcome_id"] for row in orders}
-    placeholders = ",".join("?" for _ in held_outcomes)
-    snapshots = db.execute(
-        f"""
-        select fetched_at_utc, outcome_id, best_bid
-        from orderbook_snapshots
-        where best_bid is not null
-          and outcome_id in ({placeholders})
-        order by fetched_at_utc asc, id asc
-        """,
-        tuple(held_outcomes),
-    ).fetchall()
+    snapshots = _bucketed_orderbook_bid_rows(
+        db, held_outcomes, orders[0]["created_at_utc"], bucket_seconds
+    )
 
     events: list[tuple[int, str, sqlite3.Row]] = []
     for row in orders:
@@ -1443,9 +1547,8 @@ def pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
         events.append((ts, "order", row))
     for row in snapshots:
         ts = _to_unix(row["fetched_at_utc"])
-        if ts is None or ts < first_order_ts:
-            continue
-        events.append((ts, "book", row))
+        if ts is not None and ts >= first_order_ts:
+            events.append((ts, "book", row))
     events.sort(key=lambda e: (e[0], 0 if e[1] == "order" else 1))
 
     positions: dict[str, tuple[float, float]] = {}
@@ -1530,17 +1633,9 @@ def live_pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
         return {"realized": [], "unrealized": [], "total": []}
 
     held_outcomes = {row["outcome_id"] for row in orders}
-    placeholders = ",".join("?" for _ in held_outcomes)
-    snapshots = db.execute(
-        f"""
-        select fetched_at_utc, outcome_id, best_bid
-        from orderbook_snapshots
-        where best_bid is not null
-          and outcome_id in ({placeholders})
-        order by fetched_at_utc asc, id asc
-        """,
-        tuple(held_outcomes),
-    ).fetchall()
+    snapshots = _bucketed_orderbook_bid_rows(
+        db, held_outcomes, orders[0]["created_at_utc"], bucket_seconds
+    )
 
     events: list[tuple[int, str, sqlite3.Row]] = []
     for row in orders:
@@ -3059,10 +3154,18 @@ function renderStats(stats) {
   bindDrilldownTiles();
 }
 
+const DASHBOARD_FETCH_TIMEOUT_MS = 20000;
+
 async function fetchJSON(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(url + " " + res.status);
-  return res.json();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DASHBOARD_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { cache: "no-store", signal: controller.signal });
+    if (!res.ok) throw new Error(url + " " + res.status);
+    return await res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 let activeDrilldown = null;
@@ -3811,7 +3914,7 @@ function renderLeadPanel(panel) {
   ]);
 }
 
-async function loadAll() {
+async function loadAllOnce() {
   const [stats, temp, pnl] = await Promise.all([
     fetchJSON("/api/stats"),
     fetchJSON(`/api/forecast-panels?side=${encodeURIComponent(tokenSide)}`),
@@ -3835,6 +3938,23 @@ async function loadAll() {
   if (activeDrilldown) {
     showTradeDrilldown(activeDrilldown);
   }
+}
+
+let loadAllPromise = null;
+function loadAll() {
+  if (loadAllPromise) return loadAllPromise;
+  loadAllPromise = loadAllOnce()
+    .catch((error) => {
+      const message = error && error.name === "AbortError"
+        ? "request timed out"
+        : (error && error.message) || String(error);
+      document.getElementById("last-update").textContent = "load failed: " + message;
+      console.error("dashboard load failed", error);
+    })
+    .finally(() => {
+      loadAllPromise = null;
+    });
+  return loadAllPromise;
 }
 
 document.getElementById("refresh-btn").addEventListener("click", () => {
@@ -4348,8 +4468,15 @@ def _build_handler(db_path: Path):
                         self._send_json(dashboard_stats(db))
                         return
                     if path == "/api/live/stats":
-                        _maybe_reconcile_live_dashboard_orders(db)
-                        self._send_json(live_dashboard_payload(db))
+                        self._send_json(
+                            _cached_dashboard_payload(
+                                "live:stats",
+                                lambda: (
+                                    _maybe_reconcile_live_dashboard_orders(db),
+                                    live_dashboard_payload(db),
+                                )[1],
+                            )
+                        )
                         return
                     if path == "/api/historicals":
                         self._send_json(historicals_payload(db))
@@ -4376,11 +4503,18 @@ def _build_handler(db_path: Path):
                         self._send_json(forecast_panels(db, token_side=token_side))
                         return
                     if path == "/api/live/forecast-panels":
-                        _maybe_reconcile_live_dashboard_orders(db)
                         token_side = query.get("side", ["YES"])[0]
                         self._send_json(
-                            forecast_panels(
-                                db, token_side=token_side, marker_source="live"
+                            _cached_dashboard_payload(
+                                f"live:forecast-panels:{token_side.upper()}",
+                                lambda: (
+                                    _maybe_reconcile_live_dashboard_orders(db),
+                                    forecast_panels(
+                                        db,
+                                        token_side=token_side,
+                                        marker_source="live",
+                                    ),
+                                )[1],
                             )
                         )
                         return
@@ -4388,17 +4522,31 @@ def _build_handler(db_path: Path):
                         self._send_json(pnl_series(db))
                         return
                     if path == "/api/live/pnl":
-                        _maybe_reconcile_live_dashboard_orders(db)
-                        self._send_json(live_pnl_series(db))
+                        self._send_json(
+                            _cached_dashboard_payload(
+                                "live:pnl",
+                                lambda: (
+                                    _maybe_reconcile_live_dashboard_orders(db),
+                                    live_pnl_series(db),
+                                )[1],
+                            )
+                        )
                         return
                     if path == "/api/paper-trades":
                         view = query.get("view", ["open"])[0]
                         self._send_json(paper_trade_rows(db, view))
                         return
                     if path == "/api/live/trades":
-                        _maybe_reconcile_live_dashboard_orders(db)
                         view = query.get("view", ["open"])[0]
-                        self._send_json(live_trade_rows(db, view))
+                        self._send_json(
+                            _cached_dashboard_payload(
+                                f"live:trades:{view}",
+                                lambda: (
+                                    _maybe_reconcile_live_dashboard_orders(db),
+                                    live_trade_rows(db, view),
+                                )[1],
+                            )
+                        )
                         return
                     self.send_error(404, "not found")
                 finally:

@@ -386,14 +386,35 @@ def migrate(db: sqlite3.Connection) -> None:
         create index if not exists idx_orderbook_snapshots_latest
         on orderbook_snapshots(outcome_id, fetched_at_utc desc, id desc);
 
+        create index if not exists idx_orderbook_snapshots_ask_chart
+        on orderbook_snapshots(outcome_id, fetched_at_utc, id, best_ask)
+        where best_ask is not null;
+
+        create index if not exists idx_orderbook_snapshots_bid_chart
+        on orderbook_snapshots(outcome_id, fetched_at_utc, id, best_bid)
+        where best_bid is not null;
+
         create index if not exists idx_ocf_forecast_samples_latest
         on ocf_forecast_samples(forecast_date_hkt, fetched_at_utc desc, id desc);
+
+        create index if not exists idx_ocf_forecast_samples_update_key
+        on ocf_forecast_samples(
+            forecast_date_hkt,
+            coalesce(json_extract(raw_daily_forecast, '$.LastModified'), fetched_at_utc),
+            id
+        );
 
         create index if not exists idx_hko_forecasts_latest
         on hko_forecasts(source_type, forecast_date_hkt, id desc);
 
+        create index if not exists idx_hko_forecasts_dashboard_count
+        on hko_forecasts(source_type, forecast_date_hkt, forecast_max_c, update_time);
+
         create index if not exists idx_hko_current_observations_latest
         on hko_current_observations(observed_at_hkt, id desc);
+
+        create index if not exists idx_live_orders_filled_token_created
+        on live_orders(outcome_id, status, created_at_utc, id);
 
         create index if not exists idx_latency_trace_events_key
         on latency_trace_events(event_key, id);

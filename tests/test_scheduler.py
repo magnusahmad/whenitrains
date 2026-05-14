@@ -251,7 +251,7 @@ class SchedulerTests(unittest.TestCase):
             {item.source for item in due_hko_sources(now + timedelta(seconds=61), state)},
         )
 
-    def test_orderbooks_and_market_discovery_have_separate_cadence(self):
+    def test_orderbooks_default_to_two_minute_cadence(self):
         now = datetime(2026, 5, 4, 12, 5, tzinfo=HKT)
         state = SchedulerState()
         actions = scheduler_actions(now, state, learned_actual_times=[time(12, 9)])
@@ -267,12 +267,16 @@ class SchedulerTests(unittest.TestCase):
         self.assertFalse(actions.discover_market)
         self.assertFalse(actions.fetch_orderbooks)
         self.assertTrue(actions.fetch_current_temperature)
+        actions = scheduler_actions(now + timedelta(seconds=119), state)
+        self.assertFalse(actions.fetch_orderbooks)
+        actions = scheduler_actions(now + timedelta(seconds=120), state)
+        self.assertTrue(actions.fetch_orderbooks)
 
     def test_current_temperature_collection_can_run_with_orderbook_work(self):
         now = datetime(2026, 5, 4, 12, 5, 0, tzinfo=HKT)
         state = SchedulerState(
             last_market_discovery_at=now,
-            last_orderbook_fetch_at=now - timedelta(seconds=15),
+            last_orderbook_fetch_at=now - timedelta(seconds=120),
             last_current_temperature_fetch_at=now - timedelta(seconds=600),
         )
 
@@ -581,7 +585,7 @@ HKO,27.3,28.5,24.0
             times = iter(
                 [
                     datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT),
-                    datetime(2026, 5, 4, 12, 0, 16, tzinfo=HKT),
+                    datetime(2026, 5, 4, 12, 2, 0, tzinfo=HKT),
                 ]
             )
             orderbook_calls = 0
@@ -618,7 +622,7 @@ HKO,27.3,28.5,24.0
             times = iter(
                 [
                     datetime(2026, 5, 4, 12, 0, 0, tzinfo=HKT),
-                    datetime(2026, 5, 4, 12, 0, 16, tzinfo=HKT),
+                    datetime(2026, 5, 4, 12, 2, 0, tzinfo=HKT),
                 ]
             )
             orderbook_calls = 0

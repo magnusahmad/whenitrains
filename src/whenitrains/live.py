@@ -716,7 +716,7 @@ def execute_live_buy(
         asks,
         max_order_usd=order_cap_usd,
         max_price=max_price,
-        min_fill_usd=min_fill_usd,
+        min_fill_usd=max(Settings.live_min_entry_fill_usd, Settings.dust_order_epsilon_usd),
     )
     if quote.status != "fillable":
         store_live_order(
