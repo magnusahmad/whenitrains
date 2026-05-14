@@ -307,7 +307,7 @@ Live mode must include these hard gates before the first real order:
 - `WHENITRAINS_TRADING_MODE=live`.
 - Authenticated CLOB client initialization succeeds.
 - Balance and allowance checks pass.
-- Startup DB backup succeeds.
+- Startup DB backup freshness check succeeds, creating a backup when the newest one is too old.
 - No critical unresolved `risk_events` for resolution rules, parser mismatch, or reconciliation mismatch.
 - Single-process DB lock prevents duplicate schedulers.
 - Market allowlist matches the HK highest-temperature slug family.

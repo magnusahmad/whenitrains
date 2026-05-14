@@ -16,6 +16,8 @@ Dashboard forecast charts now initialize each high/low lead panel to the same HK
 
 The root-level `useful-commands.md` now collects frequently needed CLI, DB inspection, dashboard, paper-trading, live-order, kill-switch, live-log, and process-check commands. It keeps production-like DB safety rules and backup/reset guidance close to the operational examples.
 
+Scheduler startup backups now use a freshness gate instead of always creating a full SQLite copy. Paper and live schedulers ensure a backup newer than 6 hours by default, reuse a fresh existing backup when available, and still allow `--startup-backup-min-interval-minutes 0` to force the previous fresh-copy behavior. The explicit `backup-db` command remains fresh-by-default and adds `--if-older-than-minutes` for opt-in recent-backup reuse.
+
 Spec and milestone-file governance is now documented in `docs/specs.md` and `docs/milestone-files.md`, and `AGENTS.md` points future agents at those files for spec location, status-file discipline, milestone structure, and session-end updates.
 
 Live dashboard trade rows now normalize filled order notional from `fill_price * fill_shares` whenever CLOB/API storage has a zero or missing `fill_size_usd`, so the USD column, realized PnL, unrealized PnL, and chart markers use the same cash-flow basis. Live dashboard open-position reporting now replays filled live orders instead of trusting persisted `live_positions.avg_price`, and open trade drilldowns show only remaining open buy-lot shares so table uPnL adds up to the summary.
@@ -80,10 +82,15 @@ Session verification on 2026-05-14 HKT:
 
 - Red/green test added: `test_execute_live_buy_sizes_down_to_visible_depth`.
 - Red/green test added: `test_execute_live_buy_rejects_depth_below_live_minimum_after_sizing_down`.
+- Red/green tests added: `test_ensure_recent_sqlite_backup_reuses_fresh_backup`, `test_ensure_recent_sqlite_backup_creates_when_backup_is_too_old`, `test_backup_db_if_older_reuses_recent_backup`, `test_paper_scheduler_reuses_fresh_startup_backup_by_default`, and `test_paper_scheduler_zero_startup_backup_interval_forces_backup`.
 - `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_live.py'` passes.
 - `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_paper.py'` passes.
 - `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_runner.py' -k 'forecast_value' -k 'actual_cross'` passes.
-- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passes: 498 tests.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_storage.py' -k 'ensure_recent_sqlite_backup'` passes.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py' -k 'backup_db_if_older' -k 'paper_scheduler_reuses' -k 'paper_scheduler_zero'` passes.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_storage.py'` passes: 15 tests.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py'` passes: 43 tests.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passes: 512 tests.
 
 ## Decisions
 
@@ -329,7 +336,7 @@ Deliverables:
 Tests:
 
 - Scheduler fails closed without env gate.
-- Scheduler fails closed without startup backup on production-like DB.
+- Scheduler fails closed without a usable startup backup on production-like DB.
 - Scheduler fails closed on lock contention.
 - Scheduler fake-client trial places no duplicate orders.
 

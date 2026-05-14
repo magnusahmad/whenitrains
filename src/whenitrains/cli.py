@@ -86,6 +86,7 @@ from .live import (
 from .storage import (
     backup_sqlite_database,
     connect,
+    ensure_recent_sqlite_backup,
     find_outcome_by_label,
     find_outcome_by_label_and_filters,
     latest_orderbook,
@@ -114,6 +115,7 @@ from .storage import (
 
 HKO_PUBLIC_AVAILABILITY_CLUSTER_SECONDS = 20.0
 HKO_PUBLIC_AVAILABILITY_MIN_CLUSTERED_FETCHES = 2
+STARTUP_BACKUP_MIN_INTERVAL = timedelta(hours=6)
 LOW_LATENCY_READINESS_LATENCY_PAIRS = [
     ("db_committed", "decision_started"),
     ("decision_started", "order_submitted"),
@@ -154,6 +156,11 @@ LOW_LATENCY_READINESS_GATE_NAMES = [
 ]
 
 
+def _print_backup_result(label: str, backup, flush: bool = False) -> None:
+    action = "created" if backup.created else "using recent"
+    print(f"{action} {label} {backup.path}", flush=flush)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="whenitrains")
     parser.add_argument("--db", default=str(Settings.database_path))
@@ -190,6 +197,12 @@ def main(argv: list[str] | None = None) -> int:
     scheduled_loop.add_argument("--ticks", type=int)
     scheduled_loop.add_argument("--verbose", action="store_true")
     scheduled_loop.add_argument("--no-startup-backup", action="store_true")
+    scheduled_loop.add_argument(
+        "--startup-backup-min-interval-minutes",
+        type=float,
+        default=STARTUP_BACKUP_MIN_INTERVAL.total_seconds() / 60.0,
+        help="reuse a startup backup newer than this many minutes; use 0 to force a fresh backup",
+    )
     ocf_sample = sub.add_parser("sample-ocf")
     ocf_sample.add_argument("--interval-minutes", type=float, default=10.0)
     ocf_sample.add_argument("--hours", type=float, default=24.0)
@@ -200,6 +213,11 @@ def main(argv: list[str] | None = None) -> int:
     backup_db = sub.add_parser("backup-db")
     backup_db.add_argument("--backup-dir")
     backup_db.add_argument("--keep", type=int, default=5)
+    backup_db.add_argument(
+        "--if-older-than-minutes",
+        type=float,
+        help="reuse the newest backup when it is newer than this many minutes",
+    )
     latency_report = sub.add_parser("latency-report")
     latency_report.add_argument("start_stage")
     latency_report.add_argument("end_stage")
@@ -318,6 +336,12 @@ def main(argv: list[str] | None = None) -> int:
     live_scheduled.add_argument("--ticks", type=int)
     live_scheduled.add_argument("--verbose", action="store_true")
     live_scheduled.add_argument("--no-startup-backup", action="store_true")
+    live_scheduled.add_argument(
+        "--startup-backup-min-interval-minutes",
+        type=float,
+        default=STARTUP_BACKUP_MIN_INTERVAL.total_seconds() / 60.0,
+        help="reuse a startup backup newer than this many minutes; use 0 to force a fresh backup",
+    )
     live_scheduled.add_argument("--no-websockets", action="store_true")
     live_kill = sub.add_parser("live-kill-switch")
     live_kill.add_argument("--block-new-entries", action="store_true")
@@ -342,12 +366,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "backup-db":
-        backup_path = backup_sqlite_database(
-            db_path,
-            backup_dir=Path(args.backup_dir) if args.backup_dir else None,
-            keep=args.keep,
-        )
-        print(f"created backup {backup_path}")
+        backup_dir = Path(args.backup_dir) if args.backup_dir else None
+        if args.if_older_than_minutes is None:
+            backup_path = backup_sqlite_database(
+                db_path,
+                backup_dir=backup_dir,
+                keep=args.keep,
+            )
+            print(f"created backup {backup_path}")
+        else:
+            backup = ensure_recent_sqlite_backup(
+                db_path,
+                backup_dir=backup_dir,
+                keep=args.keep,
+                min_interval=timedelta(minutes=args.if_older_than_minutes),
+            )
+            _print_backup_result("backup", backup)
         return 0
     if args.command == "live-readiness-checklist":
         print(_render_live_readiness_checklist(args, db_path))
@@ -1002,9 +1036,14 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             print("LIVE TRADING scheduler starting", flush=True)
             if not args.no_startup_backup:
-                print("creating startup backup...", flush=True)
-                backup_path = backup_sqlite_database(db_path)
-                print(f"created startup backup {backup_path}", flush=True)
+                print("checking startup backup...", flush=True)
+                backup = ensure_recent_sqlite_backup(
+                    db_path,
+                    min_interval=timedelta(
+                        minutes=args.startup_backup_min_interval_minutes
+                    ),
+                )
+                _print_backup_result("startup backup", backup, flush=True)
             stale_submitted = freeze_new_entries_for_stale_submitted_orders(db)
             if stale_submitted:
                 print(
@@ -1370,8 +1409,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "paper-scheduler":
             migrate(db)
             if not args.no_startup_backup:
-                backup_path = backup_sqlite_database(db_path)
-                print(f"created startup backup {backup_path}")
+                backup = ensure_recent_sqlite_backup(
+                    db_path,
+                    min_interval=timedelta(
+                        minutes=args.startup_backup_min_interval_minutes
+                    ),
+                )
+                _print_backup_result("startup backup", backup)
             low_latency_queue = LowLatencyEventQueue()
             aws_actual_poll_fetch = lambda: _fetch_current_temperature_for_path(
                 db_path, event_queue=low_latency_queue

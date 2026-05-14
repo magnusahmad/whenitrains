@@ -1,6 +1,7 @@
+import os
 import tempfile
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from sqlite3 import ProgrammingError
 from unittest.mock import patch
@@ -15,8 +16,10 @@ from whenitrains.hko import (
 from whenitrains.markets import parse_outcome_label
 from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
 from whenitrains.storage import (
+    BackupResult,
     backup_sqlite_database,
     connect,
+    ensure_recent_sqlite_backup,
     list_hko_update_times,
     find_outcome_by_label_and_filters,
     list_outcomes_from_date,
@@ -164,6 +167,56 @@ class StorageTests(unittest.TestCase):
             restored = connect(third)
             count = restored.execute("select count(*) from risk_events").fetchone()[0]
             self.assertEqual(count, 1)
+
+    def test_ensure_recent_sqlite_backup_reuses_fresh_backup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "live.sqlite3"
+            backup_dir = Path(tmp) / "backups"
+            db = connect(db_path)
+            migrate(db)
+            db.close()
+
+            first = ensure_recent_sqlite_backup(
+                db_path,
+                backup_dir=backup_dir,
+                min_interval=timedelta(hours=6),
+            )
+            second = ensure_recent_sqlite_backup(
+                db_path,
+                backup_dir=backup_dir,
+                min_interval=timedelta(hours=6),
+            )
+
+            self.assertIsInstance(first, BackupResult)
+            self.assertTrue(first.created)
+            self.assertFalse(second.created)
+            self.assertEqual(second.path, first.path)
+            self.assertEqual(list(backup_dir.glob("live-*.sqlite3")), [first.path])
+
+    def test_ensure_recent_sqlite_backup_creates_when_backup_is_too_old(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "live.sqlite3"
+            backup_dir = Path(tmp) / "backups"
+            db = connect(db_path)
+            migrate(db)
+            db.close()
+            first = ensure_recent_sqlite_backup(
+                db_path,
+                backup_dir=backup_dir,
+                min_interval=timedelta(hours=6),
+            )
+            old_mtime = (datetime.now(timezone.utc) - timedelta(hours=7)).timestamp()
+            os.utime(first.path, (old_mtime, old_mtime))
+
+            second = ensure_recent_sqlite_backup(
+                db_path,
+                backup_dir=backup_dir,
+                min_interval=timedelta(hours=6),
+            )
+
+            self.assertTrue(second.created)
+            self.assertNotEqual(second.path, first.path)
+            self.assertEqual(len(list(backup_dir.glob("live-*.sqlite3"))), 2)
 
     def test_store_raw_snapshot_keeps_every_fetch_with_headers(self):
         with tempfile.TemporaryDirectory() as tmp:

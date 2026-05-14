@@ -40,6 +40,12 @@ Keep more or fewer backups:
 PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db --keep 10
 ```
 
+Reuse a recent backup instead of creating another full copy:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m whenitrains.cli --db data/whenitrains.sqlite3 backup-db --if-older-than-minutes 360
+```
+
 Write backups somewhere else:
 
 ```bash
@@ -558,6 +564,10 @@ Run the guarded live scheduler:
 ```bash
 PYTHONUNBUFFERED=1 PYTHONPATH=src .venv/bin/python -u -m whenitrains.cli --db data/whenitrains.sqlite3 live-scheduler --live
 ```
+
+Scheduler startup ensures there is a backup newer than 6 hours by default.
+Use `--startup-backup-min-interval-minutes 0` when you need to force a fresh
+startup backup.
 
 Bounded live scheduler trial:
 

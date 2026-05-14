@@ -5,7 +5,7 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import datetime, time as day_time, timezone
+from datetime import datetime, timedelta, time as day_time, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -18,6 +18,12 @@ from .polymarket import OrderBook, TemperatureMarket
 class RawSnapshotRecord:
     id: int
     content_hash: str
+
+
+@dataclass(frozen=True)
+class BackupResult:
+    path: Path
+    created: bool
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -54,6 +60,45 @@ def backup_sqlite_database(
     if keep is not None and keep > 0:
         _prune_old_backups(backup_dir, db_path.stem, keep)
     return backup_path
+
+
+def ensure_recent_sqlite_backup(
+    db_path: Path,
+    backup_dir: Path | None = None,
+    keep: int | None = 5,
+    min_interval: timedelta | None = None,
+    now: datetime | None = None,
+) -> BackupResult:
+    if not db_path.exists():
+        raise FileNotFoundError(f"database does not exist: {db_path}")
+    if min_interval is None or min_interval.total_seconds() <= 0:
+        return BackupResult(
+            path=backup_sqlite_database(db_path, backup_dir=backup_dir, keep=keep),
+            created=True,
+        )
+    if backup_dir is None:
+        backup_dir = db_path.parent / "backups"
+    latest = _latest_sqlite_backup(backup_dir, db_path.stem)
+    if latest is not None:
+        current_time = now or datetime.now(timezone.utc)
+        latest_time = datetime.fromtimestamp(latest.stat().st_mtime, timezone.utc)
+        if current_time - latest_time < min_interval:
+            return BackupResult(path=latest, created=False)
+    return BackupResult(
+        path=backup_sqlite_database(db_path, backup_dir=backup_dir, keep=keep),
+        created=True,
+    )
+
+
+def _latest_sqlite_backup(backup_dir: Path, db_stem: str) -> Path | None:
+    if not backup_dir.exists():
+        return None
+    backups = sorted(
+        backup_dir.glob(f"{db_stem}-*.sqlite3"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return backups[0] if backups else None
 
 
 def _assert_sqlite_backup_ok(backup_path: Path) -> None:

@@ -71,7 +71,11 @@ Run the polling-window scheduler:
 PYTHONUNBUFFERED=1 PYTHONPATH=src .venv/bin/python -u -m whenitrains.cli --db data/whenitrains.sqlite3 paper-scheduler
 ```
 
-The scheduler creates a startup DB backup by default. Use `--no-startup-backup` only for disposable test databases.
+The scheduler ensures a recent startup DB backup by default. If a backup newer
+than 6 hours already exists in `data/backups/`, startup reuses it instead of
+creating another full copy. Use `--startup-backup-min-interval-minutes 0` to
+force a fresh startup backup, and use `--no-startup-backup` only for disposable
+test databases.
 It polls learned HKO update windows, refreshes active Polymarket orderbooks, discovers current/future HK highest-temperature markets, and runs the paper decision pass every loop. AWS GIS latest readings are the priority actual source: HKO `TEMP`, `MAXTEMP`, and `MINTEMP` are stored as decimal current, since-midnight max, and since-midnight min observations. A dedicated AWS actual worker covers both the regular 5-minute reading timestamps and learned publish/fetchable minutes from HTTP `Last-Modified`; learned publish minutes are expanded into the matching 10-minute pattern and use a 2-minute buffer on each side at 10-second cadence, independent of orderbook and decision work. AWS GIS station forecast (`forecast/HKO.xml`) is the priority forecast source: the bot uses its full decimal hourly path first, then daily decimal max/min, and falls back to the older OCF station URL only if the AWS GIS forecast fetch fails. CSDI since-midnight and `rhrread` current weather are retained for observation/fallback evidence only and must not silently replace AWS GIS trading signals. Trading decisions use decimal signals only; rounded/display daily max values are display/audit data only.
 
 Use verbose mode to print every scheduler tick and all orderbook bid/ask lines:

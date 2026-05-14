@@ -4,7 +4,7 @@ import time
 import sqlite3
 import unittest
 from contextlib import redirect_stdout
-from datetime import date
+from datetime import date, timedelta
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,6 +62,40 @@ class FakeManualClobClient:
 
 
 class CliDiscoveryTests(unittest.TestCase):
+    def test_backup_db_if_older_reuses_recent_backup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            backup_path = Path(tmp) / "backups" / "test-recent.sqlite3"
+            result = SimpleNamespace(path=backup_path, created=False)
+            stdout = StringIO()
+
+            with (
+                patch(
+                    "whenitrains.cli.ensure_recent_sqlite_backup",
+                    return_value=result,
+                ) as ensure_backup,
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "backup-db",
+                        "--if-older-than-minutes",
+                        "360",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            ensure_backup.assert_called_once_with(
+                db_path,
+                backup_dir=None,
+                keep=5,
+                min_interval=timedelta(minutes=360),
+            )
+            self.assertIn("using recent backup", stdout.getvalue())
+            self.assertIn(str(backup_path), stdout.getvalue())
+
     def test_paper_scheduler_starts_blocking_fast_worker(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"
@@ -97,6 +131,96 @@ class CliDiscoveryTests(unittest.TestCase):
             self.assertEqual(worker_events[0][0], "init")
             self.assertEqual(worker_events[0][1], db_path)
             self.assertEqual(worker_events[1:], ["start", ("stop", 5)])
+            run_loop.assert_called_once()
+
+    def test_paper_scheduler_reuses_fresh_startup_backup_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            backup_path = Path(tmp) / "backups" / "test-recent.sqlite3"
+            result = SimpleNamespace(path=backup_path, created=False)
+
+            class FakeWorker:
+                def __init__(self, **kwargs):
+                    pass
+
+                def start(self):
+                    pass
+
+                def stop(self, timeout=None):
+                    pass
+
+            stdout = StringIO()
+            with (
+                patch(
+                    "whenitrains.cli.ensure_recent_sqlite_backup",
+                    return_value=result,
+                ) as ensure_backup,
+                patch("whenitrains.cli.FastDecisionWorker", FakeWorker),
+                patch("whenitrains.cli.run_scheduled_paper_loop") as run_loop,
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "paper-scheduler",
+                        "--ticks",
+                        "0",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            ensure_backup.assert_called_once_with(
+                db_path,
+                min_interval=timedelta(hours=6),
+            )
+            self.assertIn("using recent startup backup", stdout.getvalue())
+            run_loop.assert_called_once()
+
+    def test_paper_scheduler_zero_startup_backup_interval_forces_backup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            backup_path = Path(tmp) / "backups" / "test-new.sqlite3"
+            result = SimpleNamespace(path=backup_path, created=True)
+
+            class FakeWorker:
+                def __init__(self, **kwargs):
+                    pass
+
+                def start(self):
+                    pass
+
+                def stop(self, timeout=None):
+                    pass
+
+            stdout = StringIO()
+            with (
+                patch(
+                    "whenitrains.cli.ensure_recent_sqlite_backup",
+                    return_value=result,
+                ) as ensure_backup,
+                patch("whenitrains.cli.FastDecisionWorker", FakeWorker),
+                patch("whenitrains.cli.run_scheduled_paper_loop") as run_loop,
+                redirect_stdout(stdout),
+            ):
+                exit_code = main(
+                    [
+                        "--db",
+                        str(db_path),
+                        "paper-scheduler",
+                        "--ticks",
+                        "0",
+                        "--startup-backup-min-interval-minutes",
+                        "0",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            ensure_backup.assert_called_once_with(
+                db_path,
+                min_interval=timedelta(0),
+            )
+            self.assertIn("created startup backup", stdout.getvalue())
             run_loop.assert_called_once()
 
     def test_fetch_orderbooks_fetches_tokens_concurrently_and_stores_snapshots(self):
