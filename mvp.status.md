@@ -1,6 +1,6 @@
 # Live Trading Status
 
-Last updated: 2026-05-14 HKT
+Last updated: 2026-05-16 HKT
 
 ## Current State
 
@@ -16,6 +16,10 @@ Dashboard forecast charts now initialize each high/low lead panel to the same HK
 
 The root-level `useful-commands.md` now collects frequently needed CLI, DB inspection, dashboard, paper-trading, live-order, kill-switch, live-log, and process-check commands. It keeps production-like DB safety rules and backup/reset guidance close to the operational examples.
 
+Operational review on 2026-05-15 HKT found a live accounting split between local positions and the Polymarket wallet. The May 15 lowest-temperature 26°C YES order bought 40.33339 shares at 21c, sold 5.58 shares at 7.3c, sold 15.52 shares at 7.2c, then recorded a zero-proceeds `RECONCILE_SELL` for another 15.52 shares while the wallet still reported those 15.52 shares as sellable. The bot later sold 3.71 more shares at 7.1c, leaving the wallet with about 15.52339 shares, but local `live_positions` only shows dust and realized PnL of about -$6.68 for that token. This makes the dashboard overstate realized losses and understate remaining position value. The live reconcile watchdog is correctly freezing new entries because it sees the drift, but the repair path should not consume local shares when CLOB sellable balance is lower due to in-flight or recently matched sell orders.
+
+The zero-proceeds live accounting bug is fixed. Live sell execution still caps submitted shares to the CLOB-reported sellable balance and records a warning risk event, but no longer writes a zero-proceeds `RECONCILE_SELL` row or reduces local position shares for the unexplained difference. Drift repair now leaves positions unchanged so the watchdog freezes new entries until the drift clears through real fills or explicit operator action. Live position rebuilds and dashboard order replay ignore only legacy zero-proceeds `RECONCILE_SELL` rows whose reconcile payload still had positive CLOB sellable balance, so the bad May 15 partial-balance row no longer consumes open lots or inflates realized losses while older zero-CLOB repairs still close stale local positions.
+
 Scheduler startup backups now use a freshness gate instead of always creating a full SQLite copy. Paper and live schedulers ensure a backup newer than 6 hours by default, reuse a fresh existing backup when available, and still allow `--startup-backup-min-interval-minutes 0` to force the previous fresh-copy behavior. The explicit `backup-db` command remains fresh-by-default and adds `--if-older-than-minutes` for opt-in recent-backup reuse.
 
 Spec and milestone-file governance is now documented in `docs/specs.md` and `docs/milestone-files.md`, and `AGENTS.md` points future agents at those files for spec location, status-file discipline, milestone structure, and session-end updates.
@@ -30,7 +34,7 @@ Live buys now size down to available visible ask depth within the slippage cap i
 
 Live sell misses now signpost their reason in scheduler notes, including the label, side, trigger, and bid. Open-position exits also check whether a position is actually invalidated before counting missing bid depth as a sell miss, so `sells=0/N` no longer includes non-actionable held positions with thin books.
 
-Live balance mismatches now write explicit local reconciliation adjustments. When CLOB reports fewer sellable conditional tokens than the local ledger, the missing shares are consumed by a `RECONCILE_SELL` ledger row with zero proceeds and a risk event, so open-position reporting and rebuilt live positions stop showing phantom sellable shares without pretending an exchange sell filled.
+Live balance mismatches now remain explicit risk events rather than automatic local position adjustments. When CLOB reports fewer sellable conditional tokens than the local ledger, the scheduler caps sell submission to the CLOB balance and leaves the local drift visible for the watchdog and operator review.
 
 Live buys now reconcile reported fills against the wallet's conditional-token balance delta. If CLOB exposes pre/post token balances and the received token delta is smaller than the reported fill, the local fill is capped to the observed delta; if no tokens arrive, the order is marked `unknown_fill` and no local position is opened.
 
@@ -45,6 +49,14 @@ Live scheduler buy sizing is reduced to a `5 USD` per-order cap while the strate
 Scheduler logs now print a loud `💰 TRADE EXECUTED 💰` line whenever a tick records filled buys or sells, including filled buy/sell counts and tick notes.
 
 AWS GIS actual readings remain enabled for low-latency current temperature and extrema, but `MAXTEMP`/`MINTEMP` from exactly `00:00 HKT` are treated as previous-day rollover extrema and are not stored as same-day since-midnight max/min values. This prevents a midnight carryover such as `MAXTEMP=26.1` from triggering current-day actual-cross buys.
+
+Operational strategy review on 2026-05-16 HKT found that live losses are mostly real strategy/execution losses rather than only the earlier zero-proceeds accounting bug. Excluding legacy drift-repair rows, filled live buys totaled about `$487.66` and filled live sells totaled about `$265.19`; rebuilt live positions reported about `-$215.18` realized PnL with only about `$7.29` remaining open cost. The largest loss was the May 9 highest-temperature `27°C or higher` YES thesis: the bot bought about `$174.16`, sold about `$87.24`, and realized about `-$86.92` after the HKO forecast/cheap-bucket logic repeatedly added exposure before the actual max settled below the bucket at about `26.1°C`.
+
+The assumptions that failed were: HKO forecast buckets are not reliably mispriced when Polymarket disagrees; a small latest-two-snapshot price move does not prove the market has not already repriced before the detected forecast change; repeated cheap-ask entries compound a single wrong forecast thesis because `forecast_value` allows existing-position add-ons; and immediate invalidation exits crystallize losses when hourly forecasts oscillate by one bucket in thin books. Earlier actual-cross losses also showed a data-quality assumption failure around same-day extrema: midnight carryover extrema could create false actual-cross signals, and exact-bucket NO positions could be dumped on transient exact matches before the day moved through the upper boundary.
+
+Strategy tightening on 2026-05-16 HKT disables live `forecast_value` entries by default with `Settings.live_forecast_value_entries_enabled = False`, while preserving paper-mode forecast-value research behavior. Live candidate buys now reject duplicate open positions even if a paper-mode caller explicitly allows add-ons, so a single forecast thesis cannot compound exposure through repeated cheap-ask dips. Forecast-change candidate selection now compares the latest price against the latest orderbook snapshot at or before the new HKO forecast update time when that baseline is available, falling back to the previous latest-two-snapshots behavior only when no event-time baseline exists. This prevents entries where the market already moved before the last two stored snapshots made the price look quiet.
+
+Historical ledger estimate on 2026-05-16 HKT replayed filled `paper_orders` FIFO against latest executable bids instead of doing a full strategy replay, because the current backtest harness runs paper mode and does not naturally exercise the new live-only `forecast_value` kill switch. On the dashboard-active non-excluded paper ledger, baseline total PnL was about `-$184.88`; removing `forecast_value` buys changed it to about `+$63.05`, a `+$247.93` improvement. On all filled paper orders including excluded rows, baseline total PnL was about `-$687.57`; removing `forecast_value` buys changed it to about `-$142.48`, a `+$545.09` improvement. Simulating both no `forecast_value` entries and no add-ons to an already-open token across all filled paper orders changed total PnL to about `-$42.23`, a `+$645.34` improvement. This estimate does not fully quantify the forecast-change event-time baseline filter, because that requires a slower full decision replay or a more purpose-built historical harness.
 
 Relevant existing implementation:
 
@@ -91,6 +103,31 @@ Session verification on 2026-05-14 HKT:
 - `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_storage.py'` passes: 15 tests.
 - `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py'` passes: 43 tests.
 - `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passes: 512 tests.
+
+Session verification on 2026-05-15 HKT:
+
+- Red/green tests updated: `test_repair_live_position_drifts_does_not_book_zero_proceeds_adjustment`, `test_execute_live_sell_caps_to_clob_sellable_balance`, `test_execute_live_sell_keeps_local_position_when_clob_has_no_sellable_balance`, and `test_rebuild_live_positions_ignores_zero_proceeds_balance_adjustments`.
+- Red/green test added: `test_live_dashboard_ignores_zero_proceeds_reconcile_sells`.
+- Red/green tests added: `test_rebuild_live_positions_honors_zero_clob_reconcile_sells` and `test_live_dashboard_honors_zero_clob_reconcile_sells`.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_live.py'` passes: 55 tests.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_dashboard_server.py' -k 'live'` passes: 12 tests.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passes: 515 tests.
+- Browser visual check completed against `http://127.0.0.1:8788/live` using a temporary `/private/tmp` SQLite DB with a legacy zero-proceeds `RECONCILE_SELL`; the summary and open-position drilldown showed the remaining 15.5234 shares, -$3.42 realized PnL, and $3.99 unrealized PnL.
+- Live scheduler restarted with the patched code in detached `screen` session `whenitrains-live-scheduler`, logging to `/private/tmp/whenitrains-live-scheduler-restart-20260515-132806.log`. Restart preflight passed, startup drift scan reported `drift_count=0`, `block_new_entries` auto-cleared to `0`, and subsequent ticks ran without the previous freeze note.
+
+Session verification on 2026-05-16 HKT:
+
+- Investigation-only session; no implementation changes or automated tests were run.
+- Read local live logs from `/Users/magnus/whenitrains-live-logs` and active restart log `/private/tmp/whenitrains-live-scheduler-restart-20260515-132806.log`.
+- Queried `data/whenitrains.sqlite3` read-only for `live_orders`, `live_positions`, `paper_decisions`, `orderbook_snapshots`, `hko_forecasts`, `hko_current_observations`, `markets`, and `outcomes` to separate strategy losses, open exposure, and legacy accounting artifacts.
+- Red/green test added: `test_forecast_change_skips_when_pre_event_baseline_already_moved`.
+- Red/green test added: `test_live_forecast_value_entries_are_disabled`.
+- Red/green test added: `test_live_forecast_value_does_not_add_to_existing_position_even_when_enabled`.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_runner.py' -k 'pre_event_baseline' -k 'live_forecast_value'` passes: 3 tests.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_runner.py' -k 'forecast_change' -k 'forecast_value' -k 'live_forecast'` passes: 41 tests.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_runner.py'` passes: 97 tests.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_live.py'` passes: 55 tests.
+- `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passes: 518 tests.
 
 ## Decisions
 

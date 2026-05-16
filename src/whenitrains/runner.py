@@ -223,7 +223,11 @@ def _process_forecast_change_entries_kind(
     current_yes_asks: dict[str, float] = {}
     missing_orderbooks = False
     for row in rows:
-        prices = latest_two_orderbook_prices(db, row["yes_token_id"])
+        prices = _forecast_event_orderbook_prices(
+            db,
+            row["yes_token_id"],
+            new["update_time"],
+        )
         if len(prices) < 2 or prices[0]["best_ask"] is None or prices[1]["best_ask"] is None:
             missing_orderbooks = True
             store_trading_decision(
@@ -391,7 +395,6 @@ def _process_forecast_value_entry_kind(
         return RunnerResult(
             notes=(f"{label} skipped: {target_date.isoformat()} missing outcomes",)
         )
-    books = _latest_yes_books_by_market(db, rows)
     forecast_row = _forecast_matching_row(rows, forecast_value)
     if forecast_row is None:
         return RunnerResult(
@@ -423,6 +426,29 @@ def _process_forecast_value_entry_kind(
                 f"{guard_reason}",
             )
         )
+    if _LIVE_CLIENT is not None and not Settings.live_forecast_value_entries_enabled:
+        store_trading_decision(
+            db,
+            event_type,
+            forecast_row["yes_token_id"],
+            forecast_row["label"],
+            "YES",
+            "BUY",
+            "ignored",
+            "live forecast value entries disabled",
+            {
+                f"forecast_{market_kind}": forecast_value,
+                "forecast_label": forecast_row["label"],
+            },
+        )
+        return RunnerResult(
+            notes=(
+                f"{label} skipped: "
+                f"{target_date.isoformat()} {forecast_row['label']} "
+                "live forecast value entries disabled",
+            )
+        )
+    books = _latest_yes_books_by_market(db, rows)
     forecast_book = books.get(forecast_row["polymarket_market_id"])
     if forecast_book is None or forecast_book.best_ask is None:
         return RunnerResult(
@@ -1692,6 +1718,53 @@ def _forecast_move_side(
     return None
 
 
+def _forecast_event_orderbook_prices(
+    db: sqlite3.Connection,
+    token_id: str,
+    forecast_update_time: str | None,
+) -> list[sqlite3.Row]:
+    current = db.execute(
+        """
+        select id, fetched_at_utc, best_bid, best_ask, depth_json
+        from orderbook_snapshots
+        where outcome_id = ?
+        order by fetched_at_utc desc, id desc
+        limit 1
+        """,
+        (token_id,),
+    ).fetchone()
+    if current is None:
+        return []
+    cutoff_utc = _forecast_update_time_utc(forecast_update_time)
+    if cutoff_utc is not None:
+        baseline = db.execute(
+            """
+            select id, fetched_at_utc, best_bid, best_ask, depth_json
+            from orderbook_snapshots
+            where outcome_id = ?
+              and fetched_at_utc <= ?
+            order by fetched_at_utc desc, id desc
+            limit 1
+            """,
+            (token_id, cutoff_utc),
+        ).fetchone()
+        if baseline is not None and baseline["id"] != current["id"]:
+            return [current, baseline]
+    return latest_two_orderbook_prices(db, token_id)
+
+
+def _forecast_update_time_utc(update_time: str | None) -> str | None:
+    if not update_time:
+        return None
+    try:
+        parsed = datetime.fromisoformat(update_time.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=HKT)
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
 def _latest_yes_books_by_market(db: sqlite3.Connection, rows: list[sqlite3.Row]) -> dict[str, object]:
     books = {}
     for row in rows:
@@ -2051,7 +2124,7 @@ def _execute_candidate_buy(
             "select net_shares from paper_positions where outcome_id = ? and net_shares > 0",
             (token_id,),
         ).fetchone()
-    if existing and not allow_existing_position:
+    if existing and (_LIVE_CLIENT is not None or not allow_existing_position):
         store_trading_decision(
             db,
             event_type,

@@ -28,6 +28,7 @@ class Settings:
     forecast_value_max_yes_ask: float = 0.30
     peak_hour_actual_cross_max_yes_ask: float = 0.75
     forecast_value_max_lead_days: int = 1
+    live_forecast_value_entries_enabled: bool = False
     live_manual_order_cap_usd: float = 5.0
     live_scheduler_order_cap_usd: float = 5.0
     live_min_entry_fill_usd: float = 1.0

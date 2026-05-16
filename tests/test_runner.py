@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from whenitrains.config import Settings
 from whenitrains.hko import HKT, HkoCurrentTemperature, HkoForecast, HkoObservation, OcfForecastSample
 from whenitrains.execution_scheduler import CandidateAction
 from whenitrains.orderbook_cache import OrderBookCache
@@ -276,6 +277,33 @@ class RunnerTests(unittest.TestCase):
                 "select simulated_fill_price from paper_orders where status = 'filled' order by id desc limit 1"
             ).fetchone()
             self.assertEqual(order["simulated_fill_price"], 0.40)
+
+    def test_forecast_change_skips_when_pre_event_baseline_already_moved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(Path(tmp) / "test.db")
+            _store_forecast(db, 28, "2026-05-04T00:45:00+08:00")
+            _store_forecast(db, 29, "2026-05-04T01:45:00+08:00")
+            _store_timed_orderbook(db, "yes29", 0.10, "2026-05-03T17:44:00+00:00")
+            _store_timed_orderbook(db, "yes29", 0.34, "2026-05-03T17:46:00+00:00")
+            _store_timed_orderbook(db, "yes29", 0.35, "2026-05-03T17:47:00+00:00")
+            _store_timed_orderbook(db, "no29", 0.60, "2026-05-03T17:44:00+00:00")
+            _store_timed_orderbook(db, "no29", 0.60, "2026-05-03T17:47:00+00:00")
+
+            result = process_forecast_entries(db, date(2026, 5, 4), today_hkt=date(2026, 5, 4))
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(result.buys_missed, 1)
+            self.assertIn("no stale forecast candidates", result.notes)
+            buy_count = db.execute(
+                """
+                select count(*)
+                from paper_decisions
+                where event_type = 'forecast_change'
+                  and action = 'BUY'
+                  and status = 'filled'
+                """
+            ).fetchone()[0]
+            self.assertEqual(buy_count, 0)
 
     def test_forecast_change_effective_high_includes_actual_max(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2394,6 +2422,72 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(decision["label"], "29°C")
             self.assertEqual(decision["side"], "YES")
 
+    def test_live_forecast_value_entries_are_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_threshold_risk_outcomes(),
+            )
+            _store_forecast(db, 29, "2026-05-05T09:11:53+08:00")
+            _store_book_pair(db, "yes28", old_ask=0.60, new_ask=0.60)
+            _store_book_pair(db, "yes29", old_ask=0.30, new_ask=0.30)
+            _store_book_pair(db, "yes30", old_ask=0.10, new_ask=0.10)
+            client = _FakeLiveClient()
+
+            with patch("whenitrains.runner._LIVE_CLIENT", client):
+                result = process_forecast_entries(
+                    db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+                )
+
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(client.buys, [])
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'forecast_value'
+                  and action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "ignored")
+            self.assertEqual(decision["reason"], "live forecast value entries disabled")
+
+    def test_live_forecast_value_does_not_add_to_existing_position_even_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_market(
+                Path(tmp) / "test.db",
+                outcomes=_threshold_risk_outcomes(),
+            )
+            _store_forecast(db, 29, "2026-05-05T09:11:53+08:00")
+            _store_book_pair(db, "yes28", old_ask=0.60, new_ask=0.60)
+            _store_book_pair(db, "yes29", old_ask=0.30, new_ask=0.30)
+            _store_book_pair(db, "yes30", old_ask=0.10, new_ask=0.10)
+            upsert_live_position(db, "yes29", shares=10, avg_price=0.30, realized_pnl=0)
+            client = _FakeLiveClient()
+
+            with patch("whenitrains.runner._LIVE_CLIENT", client), patch.object(
+                Settings, "live_forecast_value_entries_enabled", True
+            ), patch("whenitrains.runner.fetch_orderbook") as fetch:
+                result = process_forecast_entries(
+                    db, date(2026, 5, 4), today_hkt=date(2026, 5, 4)
+                )
+
+            fetch.assert_not_called()
+            self.assertEqual(result.buys_filled, 0)
+            self.assertEqual(client.buys, [])
+            decision = db.execute(
+                """
+                select status, reason
+                from paper_decisions
+                where event_type = 'forecast_value'
+                  and action = 'BUY'
+                order by id desc limit 1
+                """
+            ).fetchone()
+            self.assertEqual(decision["status"], "ignored")
+            self.assertEqual(decision["reason"], "duplicate open position")
+
     def test_forecast_value_uses_candidate_execution_bridge(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = _seed_market(
@@ -3514,6 +3608,26 @@ def _store_book_pair(db, token_id: str, old_ask: float, new_ask: float):
         token_id,
         OrderBook(token_id, bids=[(new_ask - 0.02, 1000)], asks=[(new_ask, 1000)], tick_size=0.01, min_order_size=5),
     )
+
+
+def _store_timed_orderbook(db, token_id: str, ask: float, fetched_at_utc: str):
+    store_orderbook(
+        db,
+        token_id,
+        OrderBook(
+            token_id,
+            bids=[(ask - 0.02, 1000)],
+            asks=[(ask, 1000)],
+            tick_size=0.01,
+            min_order_size=5,
+        ),
+    )
+    row_id = db.execute("select max(id) from orderbook_snapshots").fetchone()[0]
+    db.execute(
+        "update orderbook_snapshots set fetched_at_utc = ? where id = ?",
+        (fetched_at_utc, row_id),
+    )
+    db.commit()
 
 
 def _store_late_peak_hourly_forecast(db, forecast_date: date, peak: float):
