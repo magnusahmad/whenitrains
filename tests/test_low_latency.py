@@ -441,6 +441,13 @@ class LowLatencyReadinessTests(unittest.TestCase):
                 where outcome_id = 'yes26'
                 """
             )
+            db.execute(
+                """
+                update orderbook_latest
+                set fetched_at_utc = '2026-05-04T07:00:00+00:00'
+                where outcome_id = 'yes26'
+                """
+            )
             db.commit()
 
             store_trading_decision(

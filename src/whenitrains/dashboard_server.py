@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 from .hko import HKT
 from .storage import (
     connect,
+    is_partial_zero_proceeds_reconcile_sell,
     list_live_orders_for_reconcile,
     live_dashboard_stats as storage_live_dashboard_stats,
 )
@@ -144,7 +145,8 @@ def active_paper_positions(db: sqlite3.Connection) -> dict[str, dict]:
 def active_live_positions(db: sqlite3.Connection) -> dict[str, dict]:
     orders = db.execute(
         """
-        select outcome_id, side, action, fill_price, fill_size_usd, fill_shares
+        select outcome_id, side, action, fill_price, fill_size_usd, fill_shares,
+               raw_reconcile_json
         from live_orders
         where status = 'filled'
           and fill_price is not null
@@ -159,6 +161,8 @@ def active_live_positions(db: sqlite3.Connection) -> dict[str, dict]:
         action = row["action"] or ""
         order_shares = _optional_float(row["fill_shares"]) or 0.0
         if order_shares <= 0:
+            continue
+        if _is_zero_proceeds_reconcile_sell(row):
             continue
         pos = positions.setdefault(
             token,
@@ -201,7 +205,8 @@ def _live_open_buy_shares_by_order_id(
     placeholders = ",".join("?" for _ in tokens)
     orders = db.execute(
         f"""
-        select id, outcome_id, side, action, fill_shares
+        select id, outcome_id, side, action, fill_size_usd, fill_shares,
+               raw_reconcile_json
         from live_orders
         where outcome_id in ({placeholders})
           and status = 'filled'
@@ -218,6 +223,8 @@ def _live_open_buy_shares_by_order_id(
         action = row["action"] or ""
         shares = _optional_float(row["fill_shares"]) or 0.0
         if shares <= 0:
+            continue
+        if _is_zero_proceeds_reconcile_sell(row):
             continue
         token_lots = lots.setdefault(token, [])
         if side.startswith("BUY"):
@@ -750,6 +757,10 @@ def _live_fill_notional_usd(
     if share_limit is not None:
         shares = min(shares, share_limit)
     return shares * price
+
+
+def _is_zero_proceeds_reconcile_sell(row) -> bool:
+    return is_partial_zero_proceeds_reconcile_sell(row)
 
 
 def _hkt_day_utc_bounds(date_text: str) -> tuple[str, str] | None:
@@ -1616,7 +1627,7 @@ def live_pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
     orders = db.execute(
         """
         select created_at_utc, outcome_id, side, action, fill_price, fill_size_usd,
-               fill_shares, status
+               fill_shares, status, raw_reconcile_json
         from live_orders
         where status = 'filled'
           and fill_price is not null
@@ -1670,6 +1681,8 @@ def live_pnl_series(db: sqlite3.Connection, bucket_seconds: int = 60) -> dict:
             side = row["side"] or ""
             action = row["action"] or ""
             order_shares = _optional_float(row["fill_shares"]) or 0.0
+            if _is_zero_proceeds_reconcile_sell(row):
+                continue
             usd = _live_fill_notional_usd(
                 row["fill_size_usd"], row["fill_price"], row["fill_shares"]
             )
@@ -1938,7 +1951,8 @@ def _live_realized_pnl_by_sell_order_id(
     placeholders = ",".join("?" for _ in tokens)
     orders = db.execute(
         f"""
-        select id, outcome_id, side, action, fill_price, fill_size_usd, fill_shares
+        select id, outcome_id, side, action, fill_price, fill_size_usd, fill_shares,
+               raw_reconcile_json
         from live_orders
         where outcome_id in ({placeholders})
           and status = 'filled'
@@ -1955,6 +1969,8 @@ def _live_realized_pnl_by_sell_order_id(
         side = row["side"] or ""
         action = row["action"] or ""
         order_shares = _optional_float(row["fill_shares"]) or 0.0
+        if _is_zero_proceeds_reconcile_sell(row):
+            continue
         usd = _live_fill_notional_usd(
             row["fill_size_usd"], row["fill_price"], row["fill_shares"]
         )

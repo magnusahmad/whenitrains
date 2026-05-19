@@ -18,6 +18,7 @@ from .paper_db import calculate_entry
 from .storage import (
     get_live_position,
     get_live_setting,
+    is_partial_zero_proceeds_reconcile_sell,
     latest_orderbook,
     list_live_orders_for_reconcile,
     list_open_live_positions,
@@ -962,7 +963,6 @@ def execute_live_sell(
     shares = float(pos["net_shares"])
     sellable_shares = _sellable_token_balance(client, token_id)
     if sellable_shares is not None and sellable_shares < shares:
-        missing_shares = max(shares - max(sellable_shares, 0.0), 0.0)
         store_risk_event(
             db,
             "live_position_balance_mismatch",
@@ -973,17 +973,6 @@ def execute_live_sell(
                 "clob_sellable_shares": sellable_shares,
             },
         )
-        if missing_shares > 1e-8:
-            _record_live_balance_adjustment(
-                db,
-                token_id=token_id,
-                label=label,
-                missing_shares=missing_shares,
-                local_shares=shares,
-                clob_sellable_shares=sellable_shares,
-                event_type=event_type,
-                event_key=event_key,
-            )
         shares = max(sellable_shares, 0.0)
     submitted_shares = _floor_decimal(shares, "0.01")
     if submitted_shares <= 0:
@@ -1278,8 +1267,8 @@ def reconcile_submitted_live_order(
 def rebuild_live_positions_from_filled_orders(db: sqlite3.Connection) -> int:
     rows = db.execute(
         """
-        select outcome_id, action, fill_price, fill_size_usd, fill_shares,
-               created_at_utc, id
+        select outcome_id, side, action, fill_price, fill_size_usd, fill_shares,
+               raw_reconcile_json, created_at_utc, id
         from live_orders
         where status = 'filled'
           and coalesce(fill_shares, 0) > 0
@@ -1294,6 +1283,8 @@ def rebuild_live_positions_from_filled_orders(db: sqlite3.Connection) -> int:
         fill_shares = float(row["fill_shares"])
         fill_price = float(row["fill_price"] or 0.0)
         fill_size_usd = float(row["fill_size_usd"] or 0.0)
+        if is_partial_zero_proceeds_reconcile_sell(row):
+            continue
         if fill_size_usd <= 0 and fill_price > 0:
             fill_size_usd = fill_price * fill_shares
         shares, avg_price, realized_pnl = positions.get(token_id, (0.0, 0.0, 0.0))
@@ -1579,26 +1570,7 @@ def repair_live_position_drifts(
     *,
     event_key: str | None = None,
 ) -> int:
-    repaired = 0
-    for drift in drifts:
-        clob_sellable_shares = getattr(drift, "clob_sellable_shares", None)
-        drift_shares = getattr(drift, "drift_shares", None)
-        if clob_sellable_shares is None or drift_shares is None:
-            continue
-        if drift_shares <= 0:
-            continue
-        _record_live_balance_adjustment(
-            db,
-            token_id=drift.token_id,
-            label=None,
-            missing_shares=drift_shares,
-            local_shares=drift.local_shares,
-            clob_sellable_shares=clob_sellable_shares,
-            event_type="live_position_drift_repair",
-            event_key=event_key,
-        )
-        repaired += 1
-    return repaired
+    return 0
 
 
 def _order_id(response: dict) -> str | None:

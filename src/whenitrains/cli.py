@@ -55,6 +55,7 @@ from .operational import (
     freeze_new_entries_for_health_failures,
 )
 from .polymarket import (
+    ClobOrderBookUnavailable,
     event_slugs_for_date,
     fetch_hk_temperature_event,
     parse_event_markets,
@@ -95,6 +96,7 @@ from .storage import (
     list_outcomes,
     list_outcomes_from_date,
     list_outcomes_for_date,
+    mark_clob_tokens_untradeable,
     migrate,
     record_latency_stage,
     reset_paper_state,
@@ -1744,6 +1746,13 @@ def _fetch_orderbooks(
     )
     requests = []
     for outcome_index, outcome in enumerate(outcomes):
+        if int(outcome["clob_tradeable"]) == 0:
+            if not quiet:
+                print(
+                    f"{outcome['label']} | CLOB orderbook unavailable "
+                    f"({outcome['clob_status'] or 'untradeable'}); skipping"
+                )
+            continue
         requests.append((outcome_index, outcome, "YES", outcome["yes_token_id"]))
         requests.append((outcome_index, outcome, "NO", outcome["no_token_id"]))
     if not requests:
@@ -1767,6 +1776,23 @@ def _fetch_orderbooks(
     for outcome_index, outcome in enumerate(outcomes):
         yes_book = books.get((outcome_index, "YES"))
         no_book = books.get((outcome_index, "NO"))
+        unavailable_tokens = [
+            token_id
+            for side, token_id in (
+                ("YES", outcome["yes_token_id"]),
+                ("NO", outcome["no_token_id"]),
+            )
+            if isinstance(errors.get((outcome_index, side)), ClobOrderBookUnavailable)
+        ]
+        if unavailable_tokens:
+            mark_clob_tokens_untradeable(db, unavailable_tokens, reason="no_orderbook")
+            if yes_book is None and no_book is None:
+                if not quiet:
+                    print(
+                        f"{outcome['label']} | CLOB orderbook unavailable; "
+                        "marked non-tradeable"
+                    )
+                continue
         if yes_book is not None:
             store_orderbook(db, outcome["yes_token_id"], yes_book)
         else:

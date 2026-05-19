@@ -1,6 +1,6 @@
 # Live Trading Status
 
-Last updated: 2026-05-16 HKT
+Last updated: 2026-05-19 HKT
 
 ## Current State
 
@@ -58,6 +58,24 @@ Strategy tightening on 2026-05-16 HKT disables live `forecast_value` entries by 
 
 Historical ledger estimate on 2026-05-16 HKT replayed filled `paper_orders` FIFO against latest executable bids instead of doing a full strategy replay, because the current backtest harness runs paper mode and does not naturally exercise the new live-only `forecast_value` kill switch. On the dashboard-active non-excluded paper ledger, baseline total PnL was about `-$184.88`; removing `forecast_value` buys changed it to about `+$63.05`, a `+$247.93` improvement. On all filled paper orders including excluded rows, baseline total PnL was about `-$687.57`; removing `forecast_value` buys changed it to about `-$142.48`, a `+$545.09` improvement. Simulating both no `forecast_value` entries and no add-ons to an already-open token across all filled paper orders changed total PnL to about `-$42.23`, a `+$645.34` improvement. This estimate does not fully quantify the forecast-change event-time baseline filter, because that requires a slower full decision replay or a more purpose-built historical harness.
 
+Operational investigation on 2026-05-17 HKT found that the overnight D+0 May 17 high-temperature behavior was not a `forecast_value` live-entry regression. The 25°C YES buy at `2026-05-16T23:14:03Z` was recorded as `forecast_change` for the effective high move `26.0 -> 25.9`, filled at `38c`, and came from the normal new-bucket forecast-change rule. The 26°C NO candidate for the same move was generated but rejected because the live fresh quote had no ask within the current `forecast_change_max_entry_price = 0.40` cap; the local orderbook showed the 26°C NO ask around `64c`. The later second successive forecast reduction `25.9 -> 25.1`, first seen at `2026-05-17T00:34:10Z`, produced only a processed event and an exit miss; it generated no 26°C NO candidate because `build_forecast_move_candidates` returns no entries when `floor(old_forecast) == floor(new_forecast)`. At that time the 26°C NO ask was around `74c`, later moving into the low `90c` range. This identifies a strategy gap: same-floor downward momentum below an already-above bucket can strengthen an invalidated-bucket NO thesis but is invisible to current forecast-change candidate generation.
+
+Follow-up log and ledger check for the same D+0 high position found that the 25°C YES sell was not triggered by a daily displayed forecast drop below 25°C. It sold in four `exit_check` fills from `2026-05-17T05:14:29Z` to `05:14:52Z` at `26c-27c` because the latest OCF hourly path first breached the 25°C bucket floor only at `21:00` HKT, matching the existing `late-day forecast peak guard`. The latest actual high in the decision details was still only `24.2°C`, and later `forecast_exit` attempts were rejected as below exchange precision because the position had already been reduced to dust.
+
+Same-day live trade review on 2026-05-17 HKT found the other filled trades were also driven by forecast-change bucket rotations or hourly-forecast exits. The D+0 low 23°C YES position, bought the prior evening at `36c`, sold around midnight at `52c` because the latest hourly low path no longer reached the 23°C bucket, even though the observed low had already touched `23.9°C`; this is an over-eager exact-low exit risk because future hourly forecasts can ignore an already-observed in-bucket low. The D+0 high 26°C YES position, bought at `33c`, sold at `36c` after the high forecast moved `26.0 -> 25.9` and the hourly high no longer reached 26°C. For D+1 May 18, the bot bought 27°C high YES at `35c` on `28.0 -> 27.0`, then sold it at `23c-26c` when the forecast later moved `27.0 -> 26.0`; it also bought 26°C high YES at `27c` on that new bucket. The bot bought 24°C low YES at `39c` on `25.0 -> 24.0`, then sold at `30c` when the forecast later moved `24.0 -> 23.0`; it also bought 23°C low YES at `20c`. The latest checked orderbooks had the open D+1 26°C high YES bid/ask around `21c/24c` and the open D+1 23°C low YES around `20c/36c`.
+
+Observation-source check on 2026-05-17 HKT found that the apparent `16:02` current temperature of `25.0°C` came from the public `rhrread` JSON current-weather feed, which reports whole-degree values for "Hong Kong Observatory" and stored no since-midnight extrema. The official/AWS decimal row around the same time reported `TEMP=24.5` and `MAXTEMP=24.6`, while the since-midnight CSV also reported max `24.6`; this explains why the current-temp chart can show `25.0°C` while the since-midnight max never reaches the 25°C bucket.
+
+Historical check on 2026-05-17 HKT scanned completed target dates through 2026-05-16 for adjacent-bucket NO entries after two consecutive effective forecast moves. For highest-temperature two-step downward moves, 33 adjacent NO observations were priced; caps through `0.70` had about `+0.17` average return per share, while `0.75` still stayed positive at about `+0.10` and would have admitted the missed May 17-style `74c` 26°C NO. Caps above `0.75` degraded sharply because false positives near `78c-86c` erased much of the edge. For lowest-temperature two-step upward moves, the signal was weaker: `0.40` to `0.50` caps looked best on a small sample, `0.60` was only slightly positive, and `0.70+` was effectively breakeven. This supports a separate, higher cap for high-temperature downward momentum NO invalidations, tentatively around `0.75`, while keeping low-temperature upward NO invalidations more conservative unless another filter is added.
+
+Market-versus-forecast historical check on 2026-05-17 HKT scanned completed target dates through 2026-05-16 and compared the Polymarket ladder favorite at each distinct OCF update time with the effective forecast bucket. Using latest non-stale YES prices within 30 minutes before the forecast update, favorites with implied probability at least `0.65` disagreed with the forecast in 134 update-time observations and resolved YES in 78 of them, about `58%`. On a target-day/market-kind basis, 18 completed high/low day-kind pairs had at least one `>=0.65` disagreement and 11 of those had at least one disagreeing favorite that won, about `61%`. A stricter "market led the forecast" filter, where a later OCF update eventually matched the earlier disagreeing market favorite, was much rarer but stronger: at `>=0.65`, 21 observations had later forecast catch-up and 16 resolved YES, about `76%`; at `>=0.70`, 18 catch-up observations had 14 winners, about `78%`. The catch-up subset split unevenly: low-temperature catch-ups were 13/13 winners at `>=0.65` in this sample, while high-temperature catch-ups were 3/8, so this edge should not be treated as symmetric without more filtering.
+
+Live scheduler check on 2026-05-18 HKT found the scheduler process still running and processing market websocket messages, but `orderbook_snapshots` had grown to about 49 GB with a 2 GB WAL. The flood was caused by market websocket `price_change` placeholder rows for unsubscribed/unknown `0x...` asset IDs and empty book updates with no bid/ask depth. The websocket client now filters incoming market messages to the active subscribed token IDs, and `OrderBookCache` now ignores placeholder `price_change`, `best_bid_ask`, and `last_trade_price` messages when no cached real book exists. Cache updates that produce an empty bid/ask book still update in-memory state to avoid stale executable depth, but they are no longer persisted as websocket orderbook snapshots.
+
+Orderbook hot-table split is specified in `docs/orderbook-hot-table.md` and implemented as the first non-destructive archive/execution separation step. `migrate()` now creates `orderbook_latest`, keyed by `outcome_id`, and `store_orderbook()` writes the append-only `orderbook_snapshots` archive while upserting the latest row only when the incoming snapshot is at least as recent as the existing hot row. `latest_orderbook()` and trading-decision orderbook-age metadata now read from `orderbook_latest` first and fall back to `orderbook_snapshots` for pre-migration data. Historical charting, event-time baseline logic, backtests, and research still read the archive table.
+
+Live CLOB orderbook availability is now tracked per outcome. When Polymarket CLOB returns `404` with "No orderbook exists for the requested token id", `fetch_orderbook()` raises a typed `ClobOrderBookUnavailable` instead of a generic HTTP error. Orderbook polling marks the affected outcome row `clob_tradeable=0` with `clob_status='no_orderbook'`, later polling skips it, and active websocket token/condition subscriptions exclude non-tradeable outcomes. Live targeted entry refreshes also mark unavailable tokens and record the buy candidate as missed/ignored instead of repeatedly hammering archived/no-book markets. This addresses the May 19 HKT Polymarket-side condition where Gamma still exposed HK high/low temperature event rows but CLOB archived the condition and removed the executable orderbook.
+
 Relevant existing implementation:
 
 - Strategy/decision path: `src/whenitrains/runner.py`
@@ -66,6 +84,7 @@ Relevant existing implementation:
 - Persistence/migrations: `src/whenitrains/storage.py`
 - Scheduler: `src/whenitrains/scheduler.py`
 - CLI: `src/whenitrains/cli.py`
+- Orderbook hot-table spec: `docs/orderbook-hot-table.md`
 - Live execution: `src/whenitrains/live.py`
 - Dashboard and historicals route: `src/whenitrains/dashboard_server.py`
 
@@ -128,6 +147,19 @@ Session verification on 2026-05-16 HKT:
 - `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_runner.py'` passes: 97 tests.
 - `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_live.py'` passes: 55 tests.
 - `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests` passes: 518 tests.
+
+Session verification on 2026-05-17 HKT:
+
+- Investigation-only session; no implementation changes or automated tests were run.
+- Read the active local live scheduler log at `/private/tmp/whenitrains-live-scheduler-restart-20260515-132806.log`.
+- Queried `data/whenitrains.sqlite3` read-only for `live_orders`, `paper_decisions`, `orderbook_snapshots`, `ocf_forecast_samples`, `outcomes`, `markets`, `live_settings`, and `risk_events`.
+- Confirmed the D+0 May 17 25°C YES buy was a `forecast_change` fill, not a `forecast_value` fill.
+- Confirmed the D+0 May 17 25°C YES sell was an `exit_check` from the hourly late-day forecast peak guard, with the first forecast 25°C-or-higher hour at 21:00 HKT and actual high still at 24.2°C.
+- Reviewed the other May 17 HKT filled live trade groups: D+0 low 23°C sell, D+0 high 26°C sell, D+1 high 27°C round-trip, D+1 low 24°C round-trip, and new open D+1 26°C high / 23°C low buys.
+- Checked the apparent 16:02 HKT 25.0°C actual reading and confirmed it came from rounded `rhrread` current temperature; decimal AWS/since-midnight sources stayed at current `24.5°C` and max `24.6°C`.
+- Confirmed the missed 26°C NO opportunity split across two mechanics: the first cross-floor reduction generated a NO candidate but hit the 40c cap, while the second same-floor reduction generated no NO candidate at all.
+- Ran a read-only historical adjacent-bucket NO scan for two consecutive high-forecast downward moves and two consecutive low-forecast upward moves through completed dates ending 2026-05-16.
+- Ran a read-only historical Polymarket-favorite disagreement scan using latest non-stale pre-update YES prices, final observed high/low outcomes, and an additional later-forecast-catch-up filter.
 
 ## Decisions
 
@@ -469,7 +501,61 @@ PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
 Result:
 
 ```text
-Ran 213 tests in 2.422s
+Ran 526 tests in 13.471s
+OK
+```
+
+CLOB no-orderbook tradeability red/green:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_markets.py' -k 'fetch_orderbook_maps'
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_storage.py' -k 'mark_clob_tokens'
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_cli.py' -k 'fetch_orderbooks_marks_no_orderbook'
+```
+
+Red result: CLOB no-book 404s surfaced as generic HTTP errors, outcome rows had no CLOB tradeability state, and orderbook polling retried no-book tokens on every pass.
+
+Green result after adding typed no-book errors, additive outcome tradeability columns, polling skip/mark behavior, and websocket subscription filtering:
+
+```text
+Ran 1 test in 0.002s
+OK
+Ran 1 test in 0.022s
+OK
+Ran 1 test in 0.025s
+OK
+```
+
+Websocket flood red/green:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_market_websocket.py'
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_orderbook_cache.py'
+```
+
+Red result: unknown websocket `asset_id` messages were counted/applied, and placeholder websocket updates without cached books returned/persisted empty `OrderBook` snapshots.
+
+Green result after filtering market websocket messages to subscribed token IDs and suppressing placeholder empty websocket persistence:
+
+```text
+Ran 5 tests in 0.018s
+OK
+Ran 10 tests in 0.096s
+OK
+```
+
+Orderbook hot-table red/green:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_storage.py'
+```
+
+Red result: `orderbook_latest` did not exist, `store_orderbook()` wrote only the historical archive, and `latest_orderbook()` could not use a hot execution row.
+
+Green result after adding `orderbook_latest`, write-through upsert, hot-table latest reads, archive fallback, and matching fixture updates:
+
+```text
+Ran 18 tests in 0.387s
 OK
 ```
 

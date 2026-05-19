@@ -135,6 +135,45 @@ class OrderBookCacheTests(unittest.TestCase):
             self.assertEqual(rows[1]["best_ask"], 0.35)
             self.assertIn('"websocket_event_type": "last_trade_price"', rows[1]["depth_json"])
 
+    def test_ignores_placeholder_websocket_updates_without_cached_book(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            cache = OrderBookCache(
+                db=db,
+                monotonic_fn=_FakeMonotonic([31.0, 31.1, 31.2]),
+            )
+
+            self.assertIsNone(
+                cache.apply_message(
+                    {
+                        "event_type": "price_change",
+                        "asset_id": "yes26",
+                        "changes": [],
+                    }
+                )
+            )
+            self.assertIsNone(
+                cache.apply_message(
+                    {
+                        "event_type": "best_bid_ask",
+                        "asset_id": "yes26",
+                    }
+                )
+            )
+            self.assertIsNone(
+                cache.apply_message(
+                    {
+                        "event_type": "last_trade_price",
+                        "asset_id": "yes26",
+                        "price": "0.34",
+                    }
+                )
+            )
+
+            count = db.execute("select count(*) from orderbook_snapshots").fetchone()[0]
+            self.assertEqual(count, 0)
+
     def test_seed_reconnect_snapshot_replaces_existing_levels(self):
         cache = OrderBookCache(monotonic_fn=_FakeMonotonic([40.0, 40.1]))
         cache.seed(OrderBook("yes26", bids=[(0.30, 100)], asks=[(0.35, 100)], tick_size=0.01, min_order_size=5))

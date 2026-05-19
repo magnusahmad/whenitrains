@@ -26,7 +26,12 @@ from whenitrains.hko import (
 )
 from whenitrains.live import LiveTradingError
 from whenitrains.markets import parse_outcome_label
-from whenitrains.polymarket import OrderBook, Outcome, TemperatureMarket
+from whenitrains.polymarket import (
+    ClobOrderBookUnavailable,
+    OrderBook,
+    Outcome,
+    TemperatureMarket,
+)
 from whenitrains.storage import (
     connect,
     latency_duration_summary,
@@ -292,6 +297,56 @@ class CliDiscoveryTests(unittest.TestCase):
                     ("yes27", 0.10, 0.20),
                 ],
             )
+            db.close()
+
+    def test_fetch_orderbooks_marks_no_orderbook_tokens_untradeable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_polymarket_event(
+                db,
+                TemperatureMarket(
+                    event_id="event",
+                    event_slug="highest-temperature-in-hong-kong-on-may-10-2026",
+                    title="Highest temperature",
+                    target_date=date(2026, 5, 10),
+                    outcomes=[
+                        Outcome(
+                            market_id="m26",
+                            label="26°C",
+                            predicate=parse_outcome_label("26°C"),
+                            yes_token_id="yes26",
+                            no_token_id="no26",
+                        ),
+                    ],
+                ),
+            )
+
+            def fake_fetch(token_id):
+                raise ClobOrderBookUnavailable(token_id)
+
+            stdout = StringIO()
+            with (
+                patch("whenitrains.cli.fetch_orderbook", side_effect=fake_fetch),
+                redirect_stdout(stdout),
+            ):
+                _fetch_orderbooks(db, date(2026, 5, 10), quiet=False, max_workers=4)
+
+            rows = db.execute(
+                """
+                select clob_tradeable, clob_status
+                from outcomes
+                where yes_token_id = 'yes26'
+                """
+            ).fetchone()
+            self.assertEqual(rows["clob_tradeable"], 0)
+            self.assertEqual(rows["clob_status"], "no_orderbook")
+            self.assertIn("26°C | CLOB orderbook unavailable", stdout.getvalue())
+
+            with patch("whenitrains.cli.fetch_orderbook") as fetch_again:
+                _fetch_orderbooks(db, date(2026, 5, 10), quiet=True, max_workers=4)
+
+            fetch_again.assert_not_called()
             db.close()
 
     def test_manual_live_buy_and_sell_record_latency_evidence(self):

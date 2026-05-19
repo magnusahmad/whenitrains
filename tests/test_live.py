@@ -1295,7 +1295,7 @@ class LiveTests(unittest.TestCase):
 
             self.assertEqual(drifts, [])
 
-    def test_repair_live_position_drifts_applies_lower_clob_balance_adjustment(self):
+    def test_repair_live_position_drifts_does_not_book_zero_proceeds_adjustment(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
             migrate(db)
@@ -1305,23 +1305,18 @@ class LiveTests(unittest.TestCase):
 
             repaired = repair_live_position_drifts(db, drifts, event_key="watchdog")
 
-            self.assertEqual(repaired, 1)
+            self.assertEqual(repaired, 0)
             position = get_live_position(db, "yes25")
-            self.assertAlmostEqual(position["net_shares"], 7.0)
-            self.assertAlmostEqual(position["realized_pnl"], -2.2)
-            adjustment = db.execute(
+            self.assertAlmostEqual(position["net_shares"], 12.5)
+            self.assertAlmostEqual(position["realized_pnl"], 0.0)
+            adjustments = db.execute(
                 """
                 select side, action, status, fill_shares, event_type, event_key
                 from live_orders
                 where side = 'RECONCILE_SELL'
-                order by id desc limit 1
                 """
-            ).fetchone()
-            self.assertEqual(adjustment["action"], "SELL")
-            self.assertEqual(adjustment["status"], "filled")
-            self.assertAlmostEqual(adjustment["fill_shares"], 5.5)
-            self.assertEqual(adjustment["event_type"], "live_position_drift_repair")
-            self.assertEqual(adjustment["event_key"], "watchdog")
+            ).fetchall()
+            self.assertEqual(adjustments, [])
 
     def test_reconcile_pending_live_orders_does_not_reprocess_drift_repairs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1341,24 +1336,22 @@ class LiveTests(unittest.TestCase):
             rebuild_live_positions_from_filled_orders(db)
             client = FakeClobClient(token_balances={"yes25": 7.0})
             drifts = find_live_position_drifts(db, client, tolerance_shares=0.01)
-            repair_live_position_drifts(db, drifts, event_key="watchdog")
+            repaired = repair_live_position_drifts(db, drifts, event_key="watchdog")
 
             result = reconcile_pending_live_orders(db, client)
 
+            self.assertEqual(repaired, 0)
             self.assertEqual(result.orders_checked, 0)
             position = get_live_position(db, "yes25")
-            self.assertAlmostEqual(position["net_shares"], 7.0)
-            adjustment = db.execute(
+            self.assertAlmostEqual(position["net_shares"], 12.5)
+            adjustments = db.execute(
                 """
                 select status, fill_shares, raw_reconcile_json
                 from live_orders
                 where event_type = 'live_position_drift_repair'
-                order by id desc limit 1
                 """
-            ).fetchone()
-            self.assertEqual(adjustment["status"], "filled")
-            self.assertAlmostEqual(adjustment["fill_shares"], 5.5)
-            self.assertIn('"missing_shares": 5.5', adjustment["raw_reconcile_json"])
+            ).fetchall()
+            self.assertEqual(adjustments, [])
 
     def test_reconcile_pending_live_orders_applies_fills_and_rebuilds_positions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1534,18 +1527,15 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(result.status, "filled")
             self.assertEqual(client.sells, [("yes27", 0.03, 255.36)])
             pos = get_live_position(db, "yes27")
-            self.assertAlmostEqual(pos["net_shares"], 0.001958)
-            adjustment = db.execute(
+            self.assertAlmostEqual(pos["net_shares"], 117.301541)
+            adjustments = db.execute(
                 """
                 select side, action, status, fill_shares
                 from live_orders
                 where side = 'RECONCILE_SELL'
-                order by id desc limit 1
                 """
-            ).fetchone()
-            self.assertEqual(adjustment["action"], "SELL")
-            self.assertEqual(adjustment["status"], "filled")
-            self.assertAlmostEqual(adjustment["fill_shares"], 117.299583)
+            ).fetchall()
+            self.assertEqual(adjustments, [])
             risk = db.execute(
                 "select event_type, severity, details_json from risk_events order by id desc limit 1"
             ).fetchone()
@@ -1555,7 +1545,7 @@ class LiveTests(unittest.TestCase):
             self.assertAlmostEqual(details["local_shares"], 372.661541)
             self.assertAlmostEqual(details["clob_sellable_shares"], 255.361958)
 
-    def test_execute_live_sell_records_balance_adjustment_for_missing_local_shares(self):
+    def test_execute_live_sell_keeps_local_position_when_clob_has_no_sellable_balance(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
             migrate(db)
@@ -1587,7 +1577,7 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(result.reason, "no sellable token balance")
             self.assertEqual(client.sells, [])
             pos = get_live_position(db, "yes27")
-            self.assertAlmostEqual(pos["net_shares"], 0.0)
+            self.assertAlmostEqual(pos["net_shares"], 100.0)
             rows = db.execute(
                 """
                 select side, action, status, fill_price, fill_size_usd, fill_shares, reason
@@ -1595,16 +1585,12 @@ class LiveTests(unittest.TestCase):
                 order by id asc
                 """
             ).fetchall()
-            self.assertEqual(rows[1]["side"], "RECONCILE_SELL")
-            self.assertEqual(rows[1]["action"], "SELL")
-            self.assertEqual(rows[1]["status"], "filled")
-            self.assertEqual(rows[1]["fill_price"], 0.0)
-            self.assertEqual(rows[1]["fill_size_usd"], 0.0)
-            self.assertEqual(rows[1]["fill_shares"], 100.0)
-            self.assertIn("CLOB sellable balance lower than local position", rows[1]["reason"])
-            self.assertEqual(active_live_positions(db)["yes27"]["net_shares"], 0.0)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[1]["side"], "SELL")
+            self.assertEqual(rows[1]["status"], "rejected")
+            self.assertEqual(active_live_positions(db)["yes27"]["net_shares"], 100.0)
 
-    def test_rebuild_live_positions_includes_zero_proceeds_balance_adjustments(self):
+    def test_rebuild_live_positions_ignores_partial_zero_proceeds_balance_adjustments(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
             migrate(db)
@@ -1631,6 +1617,52 @@ class LiveTests(unittest.TestCase):
                 fill_size_usd=0.0,
                 fill_shares=100.0,
                 reason="CLOB sellable balance lower than local position",
+                raw_reconcile={
+                    "local_shares": 150.0,
+                    "clob_sellable_shares": 50.0,
+                    "missing_shares": 100.0,
+                },
+            )
+
+            rebuilt = rebuild_live_positions_from_filled_orders(db)
+
+            self.assertEqual(rebuilt, 1)
+            pos = get_live_position(db, "yes27")
+            self.assertAlmostEqual(pos["net_shares"], 100.0)
+            self.assertAlmostEqual(pos["realized_pnl"], 0.0)
+
+    def test_rebuild_live_positions_honors_zero_clob_reconcile_sells(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_live_order(
+                db,
+                outcome_id="yes27",
+                label="27°C or higher",
+                side="BUY_YES",
+                action="BUY",
+                status="filled",
+                fill_price=0.20,
+                fill_size_usd=20.0,
+                fill_shares=100.0,
+                reason="test buy",
+            )
+            store_live_order(
+                db,
+                outcome_id="yes27",
+                label="27°C or higher",
+                side="RECONCILE_SELL",
+                action="SELL",
+                status="filled",
+                fill_price=0.0,
+                fill_size_usd=0.0,
+                fill_shares=100.0,
+                reason="CLOB sellable balance lower than local position",
+                raw_reconcile={
+                    "local_shares": 100.0,
+                    "clob_sellable_shares": 0.0,
+                    "missing_shares": 100.0,
+                },
             )
 
             rebuilt = rebuild_live_positions_from_filled_orders(db)

@@ -1,10 +1,15 @@
 import unittest
 from datetime import date
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 from whenitrains.markets import PredicateType, parse_outcome_label, predicate_matches
+
 from whenitrains.polymarket import (
+    ClobOrderBookUnavailable,
     event_slug_for_date,
     event_slugs_for_date,
+    fetch_orderbook,
     parse_event_markets,
     resolution_rules_match_expected,
     temperature_market_kind,
@@ -101,6 +106,31 @@ class MarketSemanticsTests(unittest.TestCase):
             temperature_market_kind("lowest-temperature-in-hong-kong-on-may-7-2026"),
             "lowest",
         )
+
+    def test_fetch_orderbook_maps_no_orderbook_404_to_unavailable(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"error":"No orderbook exists for the requested token id"}'
+
+            def close(self):
+                pass
+
+        error = HTTPError(
+            "https://clob.polymarket.com/book?token_id=token",
+            404,
+            "Not Found",
+            {},
+            FakeResponse(),
+        )
+        with self.assertRaises(ClobOrderBookUnavailable):
+            with patch("whenitrains.polymarket.urlopen", side_effect=error):
+                fetch_orderbook("token")
 
     def test_resolution_rules_match_allows_date_only_change(self):
         text = """

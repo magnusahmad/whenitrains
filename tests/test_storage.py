@@ -20,10 +20,13 @@ from whenitrains.storage import (
     backup_sqlite_database,
     connect,
     ensure_recent_sqlite_backup,
+    is_clob_tradeable_token,
+    list_active_market_token_ids,
     list_hko_update_times,
     find_outcome_by_label_and_filters,
     list_outcomes_from_date,
     list_tradeable_forecast_dates,
+    mark_clob_tokens_untradeable,
     migrate,
     record_hko_update_minute,
     store_hko_current_temperature,
@@ -79,6 +82,14 @@ class StorageTests(unittest.TestCase):
             self.assertIn("idx_ocf_forecast_samples_latest", index_names)
             self.assertIn("idx_hko_forecasts_latest", index_names)
             self.assertIn("idx_hko_current_observations_latest", index_names)
+            self.assertIsNotNone(
+                db.execute(
+                    """
+                    select name from sqlite_master
+                    where type = 'table' and name = 'orderbook_latest'
+                    """
+                ).fetchone()
+            )
 
     def test_latest_scheduler_queries_use_latency_indexes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -481,6 +492,124 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(book.bids[0], (0.30, 5))
             self.assertEqual(book.asks[0], (0.40, 5))
 
+    def test_store_orderbook_maintains_latest_hot_row(self):
+        from whenitrains.storage import latest_orderbook
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+
+            store_orderbook(
+                db,
+                "yes",
+                OrderBook(
+                    "yes",
+                    bids=[(0.20, 5)],
+                    asks=[(0.40, 5)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            store_orderbook(
+                db,
+                "yes",
+                OrderBook(
+                    "yes",
+                    bids=[(0.30, 5)],
+                    asks=[(0.50, 5)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+
+            self.assertEqual(
+                db.execute("select count(*) from orderbook_snapshots").fetchone()[0],
+                2,
+            )
+            latest_row = db.execute(
+                """
+                select snapshot_id, best_bid, best_ask, depth_json
+                from orderbook_latest
+                where outcome_id = 'yes'
+                """
+            ).fetchone()
+            self.assertIsNotNone(latest_row)
+            self.assertEqual(latest_row["snapshot_id"], 2)
+            self.assertEqual(latest_row["best_bid"], 0.30)
+            self.assertEqual(latest_row["best_ask"], 0.50)
+
+            book = latest_orderbook(db, "yes")
+            self.assertEqual(book.bids, [(0.30, 5)])
+            self.assertEqual(book.asks, [(0.50, 5)])
+
+    def test_store_orderbook_does_not_move_hot_row_backwards(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_orderbook(
+                db,
+                "yes",
+                OrderBook(
+                    "yes",
+                    bids=[(0.30, 5)],
+                    asks=[(0.50, 5)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            db.execute(
+                """
+                update orderbook_latest
+                set fetched_at_utc = '2999-01-01T00:00:00+00:00',
+                    best_bid = 0.99
+                where outcome_id = 'yes'
+                """
+            )
+            db.commit()
+
+            store_orderbook(
+                db,
+                "yes",
+                OrderBook(
+                    "yes",
+                    bids=[(0.10, 5)],
+                    asks=[(0.20, 5)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+
+            latest_row = db.execute(
+                "select fetched_at_utc, best_bid from orderbook_latest where outcome_id = 'yes'"
+            ).fetchone()
+            self.assertEqual(latest_row["fetched_at_utc"], "2999-01-01T00:00:00+00:00")
+            self.assertEqual(latest_row["best_bid"], 0.99)
+
+    def test_latest_orderbook_falls_back_to_archive_when_hot_row_missing(self):
+        from whenitrains.storage import latest_orderbook
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_orderbook(
+                db,
+                "yes",
+                OrderBook(
+                    "yes",
+                    bids=[(0.25, 5)],
+                    asks=[(0.45, 5)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            db.execute("delete from orderbook_latest where outcome_id = 'yes'")
+            db.commit()
+
+            book = latest_orderbook(db, "yes")
+
+            self.assertEqual(book.best_bid, 0.25)
+            self.assertEqual(book.best_ask, 0.45)
+
     def test_list_outcomes_from_date_excludes_past_markets(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = connect(Path(tmp) / "test.db")
@@ -512,6 +641,45 @@ class StorageTests(unittest.TestCase):
             rows = list_outcomes_from_date(db, "2026-05-05")
 
             self.assertEqual([row["yes_token_id"] for row in rows], ["yes-today", "yes-future"])
+
+    def test_mark_clob_tokens_untradeable_removes_tokens_from_active_subscription_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = connect(Path(tmp) / "test.db")
+            migrate(db)
+            store_polymarket_event(
+                db,
+                TemperatureMarket(
+                    event_id="event",
+                    event_slug="highest-temperature-in-hong-kong-on-may-5-2026",
+                    title="Highest temperature",
+                    target_date=date(2026, 5, 5),
+                    outcomes=[
+                        Outcome(
+                            market_id="m25",
+                            label="25°C",
+                            predicate=parse_outcome_label("25°C"),
+                            yes_token_id="yes25",
+                            no_token_id="no25",
+                        ),
+                        Outcome(
+                            market_id="m26",
+                            label="26°C",
+                            predicate=parse_outcome_label("26°C"),
+                            yes_token_id="yes26",
+                            no_token_id="no26",
+                        ),
+                    ],
+                ),
+            )
+
+            mark_clob_tokens_untradeable(db, ["yes25", "no25"], reason="no orderbook")
+
+            self.assertFalse(is_clob_tradeable_token(db, "yes25"))
+            self.assertFalse(is_clob_tradeable_token(db, "no25"))
+            self.assertEqual(
+                list_active_market_token_ids(db, "2026-05-05"),
+                ["yes26", "no26"],
+            )
 
     def test_list_tradeable_forecast_dates_allows_min_only_forecast(self):
         with tempfile.TemporaryDirectory() as tmp:

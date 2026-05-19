@@ -7,6 +7,7 @@ from datetime import date
 from typing import Any
 from html import unescape
 from urllib.parse import quote
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .markets import Predicate, parse_outcome_label
@@ -14,6 +15,12 @@ from .markets import Predicate, parse_outcome_label
 
 GAMMA_EVENTS = "https://gamma-api.polymarket.com/events"
 CLOB_BOOK = "https://clob.polymarket.com/book"
+
+
+class ClobOrderBookUnavailable(RuntimeError):
+    def __init__(self, token_id: str, message: str = "no CLOB orderbook") -> None:
+        super().__init__(message)
+        self.token_id = token_id
 
 
 TEMPERATURE_MARKET_KINDS = ("highest", "lowest")
@@ -229,11 +236,24 @@ def _normalize_resolution_text(text: str) -> str:
 
 
 def fetch_orderbook(token_id: str, *, timeout_seconds: float = 15) -> OrderBook:
-    payload = fetch_json(
-        f"{CLOB_BOOK}?token_id={quote(token_id)}",
-        timeout_seconds=timeout_seconds,
-    )
+    try:
+        payload = fetch_json(
+            f"{CLOB_BOOK}?token_id={quote(token_id)}",
+            timeout_seconds=timeout_seconds,
+        )
+    except HTTPError as exc:
+        if exc.code == 404 and _http_error_mentions_no_orderbook(exc):
+            raise ClobOrderBookUnavailable(token_id) from exc
+        raise
     return parse_orderbook(payload)
+
+
+def _http_error_mentions_no_orderbook(exc: HTTPError) -> bool:
+    try:
+        body = exc.read().decode("utf-8", errors="replace")
+    except Exception:
+        body = ""
+    return "no orderbook exists" in body.lower()
 
 
 def parse_orderbook(payload: dict[str, Any]) -> OrderBook:

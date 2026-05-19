@@ -204,6 +204,8 @@ def migrate(db: sqlite3.Connection) -> None:
             label text,
             predicate_type text,
             predicate_value_c real,
+            clob_tradeable integer not null default 1,
+            clob_status text,
             raw_outcome text
         );
 
@@ -211,6 +213,16 @@ def migrate(db: sqlite3.Connection) -> None:
             id integer primary key autoincrement,
             outcome_id text,
             fetched_at_utc text,
+            best_bid real,
+            best_ask real,
+            mid real,
+            depth_json text
+        );
+
+        create table if not exists orderbook_latest (
+            outcome_id text primary key,
+            snapshot_id integer,
+            fetched_at_utc text not null,
             best_bid real,
             best_ask real,
             mid real,
@@ -478,6 +490,10 @@ def migrate(db: sqlite3.Connection) -> None:
     _add_column_if_missing(
         db, "hko_forecasts", "parse_warning", "integer not null default 0"
     )
+    _add_column_if_missing(
+        db, "outcomes", "clob_tradeable", "integer not null default 1"
+    )
+    _add_column_if_missing(db, "outcomes", "clob_status", "text")
     db.commit()
 
 
@@ -968,7 +984,17 @@ def store_orderbook(
     best_bid = book.best_bid
     best_ask = book.best_ask
     mid = (best_bid + best_ask) / 2 if best_bid is not None and best_ask is not None else None
-    db.execute(
+    fetched_at_utc = datetime.now(timezone.utc).isoformat()
+    depth_json = json.dumps(
+        {
+            "bids": book.bids,
+            "asks": book.asks,
+            "tick_size": book.tick_size,
+            "min_order_size": book.min_order_size,
+            **(metadata or {}),
+        }
+    )
+    cursor = db.execute(
         """
         insert into orderbook_snapshots
         (outcome_id, fetched_at_utc, best_bid, best_ask, mid, depth_json)
@@ -976,34 +1002,43 @@ def store_orderbook(
         """,
         (
             outcome_id,
-            datetime.now(timezone.utc).isoformat(),
+            fetched_at_utc,
             best_bid,
             best_ask,
             mid,
-            json.dumps(
-                {
-                    "bids": book.bids,
-                    "asks": book.asks,
-                    "tick_size": book.tick_size,
-                    "min_order_size": book.min_order_size,
-                    **(metadata or {}),
-                }
-            ),
+            depth_json,
+        ),
+    )
+    snapshot_id = int(cursor.lastrowid)
+    db.execute(
+        """
+        insert into orderbook_latest
+        (outcome_id, snapshot_id, fetched_at_utc, best_bid, best_ask, mid, depth_json)
+        values (?, ?, ?, ?, ?, ?, ?)
+        on conflict(outcome_id) do update set
+            snapshot_id = excluded.snapshot_id,
+            fetched_at_utc = excluded.fetched_at_utc,
+            best_bid = excluded.best_bid,
+            best_ask = excluded.best_ask,
+            mid = excluded.mid,
+            depth_json = excluded.depth_json
+        where excluded.fetched_at_utc >= orderbook_latest.fetched_at_utc
+        """,
+        (
+            outcome_id,
+            snapshot_id,
+            fetched_at_utc,
+            best_bid,
+            best_ask,
+            mid,
+            depth_json,
         ),
     )
     db.commit()
 
 
 def latest_orderbook(db: sqlite3.Connection, token_id: str) -> OrderBook:
-    row = db.execute(
-        """
-        select depth_json from orderbook_snapshots
-        where outcome_id = ?
-        order by fetched_at_utc desc, id desc
-        limit 1
-        """,
-        (token_id,),
-    ).fetchone()
+    row = _latest_orderbook_row(db, token_id)
     if row is None:
         raise ValueError(f"no orderbook snapshot for token {token_id}")
     depth = json.loads(row["depth_json"])
@@ -1016,6 +1051,37 @@ def latest_orderbook(db: sqlite3.Connection, token_id: str) -> OrderBook:
         tick_size=float(depth.get("tick_size", 0.01)),
         min_order_size=float(depth.get("min_order_size", 5)),
     )
+
+
+def _latest_orderbook_row(
+    db: sqlite3.Connection, token_id: str
+) -> sqlite3.Row | None:
+    try:
+        row = db.execute(
+            """
+            select fetched_at_utc, best_bid, best_ask, mid, depth_json
+            from orderbook_latest
+            where outcome_id = ?
+            limit 1
+            """,
+            (token_id,),
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "orderbook_latest" not in str(exc):
+            raise
+        row = None
+    if row is not None:
+        return row
+    return db.execute(
+        """
+        select fetched_at_utc, best_bid, best_ask, mid, depth_json
+        from orderbook_snapshots
+        where outcome_id = ?
+        order by fetched_at_utc desc, id desc
+        limit 1
+        """,
+        (token_id,),
+    ).fetchone()
 
 
 def list_outcomes(db: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -1036,6 +1102,7 @@ def list_outcomes_for_date(db: sqlite3.Connection, target_date_hkt: str) -> list
             """
             select o.id, o.market_id, o.polymarket_market_id, o.label,
                    o.predicate_type, o.predicate_value_c, o.yes_token_id, o.no_token_id,
+                   coalesce(o.clob_tradeable, 1) as clob_tradeable, o.clob_status,
                    m.target_date_hkt, m.slug, m.status
             from outcomes o
             join markets m on m.id = o.market_id
@@ -1053,6 +1120,7 @@ def list_outcomes_from_date(db: sqlite3.Connection, min_date_hkt: str) -> list[s
             """
             select o.id, o.market_id, o.polymarket_market_id, o.label,
                    o.predicate_type, o.predicate_value_c, o.yes_token_id, o.no_token_id,
+                   coalesce(o.clob_tradeable, 1) as clob_tradeable, o.clob_status,
                    m.target_date_hkt, m.slug, m.status
             from outcomes o
             join markets m on m.id = o.market_id
@@ -1064,14 +1132,50 @@ def list_outcomes_from_date(db: sqlite3.Connection, min_date_hkt: str) -> list[s
     )
 
 
+def mark_clob_tokens_untradeable(
+    db: sqlite3.Connection, token_ids: list[str] | tuple[str, ...], *, reason: str
+) -> None:
+    if not token_ids:
+        return
+    unique_tokens = list(dict.fromkeys(str(token_id) for token_id in token_ids if token_id))
+    if not unique_tokens:
+        return
+    for token_id in unique_tokens:
+        db.execute(
+            """
+            update outcomes
+            set clob_tradeable = 0,
+                clob_status = ?
+            where yes_token_id = ? or no_token_id = ?
+            """,
+            (reason, token_id, token_id),
+        )
+    db.commit()
+
+
+def is_clob_tradeable_token(db: sqlite3.Connection, token_id: str) -> bool:
+    row = db.execute(
+        """
+        select coalesce(clob_tradeable, 1) as clob_tradeable
+        from outcomes
+        where yes_token_id = ? or no_token_id = ?
+        order by id desc
+        limit 1
+        """,
+        (token_id, token_id),
+    ).fetchone()
+    return row is None or int(row["clob_tradeable"]) != 0
+
+
 def list_active_market_token_ids(db: sqlite3.Connection, min_date_hkt: str) -> list[str]:
     rows = db.execute(
         """
-        select o.yes_token_id, o.no_token_id
+        select o.yes_token_id, o.no_token_id, coalesce(o.clob_tradeable, 1) as clob_tradeable
         from outcomes o
         join markets m on m.id = o.market_id
         where m.target_date_hkt >= ?
           and coalesce(m.status, 'active') = 'active'
+          and coalesce(o.clob_tradeable, 1) != 0
         order by m.target_date_hkt, o.predicate_value_c, o.label, o.id
         """,
         (min_date_hkt,),
@@ -1096,6 +1200,7 @@ def list_active_market_condition_ids(
         join markets m on m.id = o.market_id
         where m.target_date_hkt >= ?
           and coalesce(m.status, 'active') = 'active'
+          and coalesce(o.clob_tradeable, 1) != 0
           and o.polymarket_market_id is not null
         order by m.target_date_hkt, o.id
         """,
@@ -1406,6 +1511,49 @@ def store_live_order(
     return int(cursor.lastrowid)
 
 
+def _row_value(row, key: str):
+    try:
+        return row[key]
+    except (IndexError, KeyError, TypeError):
+        return None
+
+
+def _row_float(row, key: str) -> float | None:
+    value = _row_value(row, key)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_json_object(row, key: str) -> dict:
+    value = _row_value(row, key)
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def is_partial_zero_proceeds_reconcile_sell(row) -> bool:
+    """Return true for legacy balance adjustments that should not affect lots."""
+    side = _row_value(row, "side") or ""
+    action = _row_value(row, "action") or ""
+    fill_size_usd = _row_float(row, "fill_size_usd") or 0.0
+    if side != "RECONCILE_SELL" or action != "SELL" or fill_size_usd > 0:
+        return False
+    reconcile = _row_json_object(row, "raw_reconcile_json")
+    clob_sellable = reconcile.get("clob_sellable_shares")
+    try:
+        return float(clob_sellable) > 1e-8
+    except (TypeError, ValueError):
+        return False
+
+
 def update_live_order_reconcile(
     db: sqlite3.Connection,
     order_id: int,
@@ -1649,16 +1797,7 @@ def _add_orderbook_age_to_details(
 ) -> None:
     if outcome_id is None or "orderbook_state_age_seconds" in details:
         return
-    row = db.execute(
-        """
-        select fetched_at_utc
-        from orderbook_snapshots
-        where outcome_id = ?
-        order by fetched_at_utc desc, id desc
-        limit 1
-        """,
-        (outcome_id,),
-    ).fetchone()
+    row = _latest_orderbook_row(db, outcome_id)
     if row is None or row["fetched_at_utc"] is None:
         return
     now_text = details.get("decision_now_utc")

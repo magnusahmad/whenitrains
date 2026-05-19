@@ -15,7 +15,7 @@ from .hko import HKT
 from .ladder_metadata import build_active_ladder_metadata
 from .markets import PredicateType, parse_outcome_label, predicate_matches
 from .paper_db import execute_paper_buy, execute_paper_sell
-from .polymarket import Outcome, fetch_orderbook
+from .polymarket import ClobOrderBookUnavailable, Outcome, fetch_orderbook
 from .orderbook_cache import BookCacheMiss, BookCacheStale, OrderBookCache
 from .signals import DirectionalImpact, PriceResponse
 from .live import LiveClobClient, execute_live_buy, execute_live_sell
@@ -35,6 +35,8 @@ from .storage import (
     list_outcomes_for_date,
     list_outcomes_from_date,
     list_tradeable_forecast_dates,
+    is_clob_tradeable_token,
+    mark_clob_tokens_untradeable,
     observed_min_decreases,
     observed_max_increases,
     store_live_order,
@@ -2172,6 +2174,19 @@ def _execute_candidate_buy(
     reference_best_ask = book.best_ask if book is not None else None
     orderbook_refresh_source = "stored"
     if _LIVE_CLIENT is not None:
+        if not is_clob_tradeable_token(db, token_id):
+            store_trading_decision(
+                db,
+                event_type,
+                token_id,
+                candidate.outcome.label,
+                side,
+                "BUY",
+                "ignored",
+                "CLOB orderbook unavailable",
+                event_key=event_key,
+            )
+            return False
         if _BOOK_CACHE is not None:
             try:
                 book = _BOOK_CACHE.latest_orderbook(
@@ -2194,6 +2209,10 @@ def _execute_candidate_buy(
                     _BOOK_CACHE.seed(book)
                     orderbook_refresh_source = "rest_targeted"
                 except Exception as exc:
+                    if isinstance(exc, ClobOrderBookUnavailable):
+                        mark_clob_tokens_untradeable(
+                            db, [token_id], reason="no_orderbook"
+                        )
                     store_trading_decision(
                         db,
                         event_type,
@@ -2215,6 +2234,8 @@ def _execute_candidate_buy(
                 store_orderbook(db, token_id, book, metadata={"source": "rest_hot_path"})
                 orderbook_refresh_source = "rest_hot_path"
             except Exception as exc:
+                if isinstance(exc, ClobOrderBookUnavailable):
+                    mark_clob_tokens_untradeable(db, [token_id], reason="no_orderbook")
                 store_trading_decision(
                     db,
                     event_type,

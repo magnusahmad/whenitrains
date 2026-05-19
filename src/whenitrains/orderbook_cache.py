@@ -69,7 +69,7 @@ class OrderBookCache:
 
     def apply_message(self, message: dict[str, Any]) -> OrderBook | None:
         event_type = str(message.get("event_type") or message.get("type") or "")
-        token_id = _token_id(message)
+        token_id = message_token_id(message)
         if token_id is None:
             return None
         if event_type == "book":
@@ -113,7 +113,7 @@ class OrderBookCache:
 
     def _apply_price_change(
         self, token_id: str, message: dict[str, Any], event_type: str
-    ) -> OrderBook:
+    ) -> OrderBook | None:
         cached = self._books.get(token_id)
         bids = dict(cached.book.bids) if cached is not None else {}
         asks = dict(cached.book.asks) if cached is not None else {}
@@ -126,6 +126,8 @@ class OrderBookCache:
                 levels.pop(price, None)
             else:
                 levels[price] = size
+        if cached is None and not bids and not asks:
+            return None
         book = OrderBook(
             token_id=token_id,
             bids=sorted(bids.items(), reverse=True),
@@ -138,10 +140,12 @@ class OrderBookCache:
 
     def _apply_best_bid_ask(
         self, token_id: str, message: dict[str, Any], event_type: str
-    ) -> OrderBook:
+    ) -> OrderBook | None:
         cached = self._books.get(token_id)
         bid = _optional_float(message.get("best_bid"))
         ask = _optional_float(message.get("best_ask"))
+        if cached is None and bid is None and ask is None:
+            return None
         book = OrderBook(
             token_id=token_id,
             bids=[] if bid is None else [(bid, 0.0)],
@@ -154,13 +158,11 @@ class OrderBookCache:
 
     def _apply_last_trade_price(
         self, token_id: str, message: dict[str, Any], event_type: str
-    ) -> OrderBook:
+    ) -> OrderBook | None:
         cached = self._books.get(token_id)
-        book = (
-            cached.book
-            if cached is not None
-            else OrderBook(token_id, bids=[], asks=[], tick_size=0.01, min_order_size=5)
-        )
+        if cached is None:
+            return None
+        book = cached.book
         self._set_book(book, event_type, last_trade_price=_optional_float(message.get("price")))
         return book
 
@@ -184,6 +186,8 @@ class OrderBookCache:
         )
         if not self._persist_snapshots:
             return
+        if not book.bids and not book.asks:
+            return
         metadata = {
             "source": "polymarket_market_websocket",
             "websocket_event_type": websocket_event_type,
@@ -200,7 +204,7 @@ class OrderBookCache:
                 db.close()
 
 
-def _token_id(message: dict[str, Any]) -> str | None:
+def message_token_id(message: dict[str, Any]) -> str | None:
     value = (
         message.get("asset_id")
         or message.get("asset")

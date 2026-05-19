@@ -1,3 +1,4 @@
+import json
 import tempfile
 import sqlite3
 import unittest
@@ -1655,9 +1656,9 @@ class DashboardServerTests(unittest.TestCase):
                     insert into live_orders (
                         created_at_utc, outcome_id, label, side, action, order_type,
                         status, requested_size_usd, limit_price, fill_price,
-                        fill_size_usd, fill_shares, reason
+                        fill_size_usd, fill_shares, reason, raw_reconcile_json
                     )
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         created_at,
@@ -1673,6 +1674,7 @@ class DashboardServerTests(unittest.TestCase):
                         0.0,
                         shares,
                         "forecast bucket priced unrealistically low vs HKO forecast",
+                        json.dumps({}),
                     ),
                 )
             upsert_live_position(db, "yes25", 100.0, 0.0, -4.5)
@@ -1688,6 +1690,120 @@ class DashboardServerTests(unittest.TestCase):
                 sum(row["unrealized_pnl"] for row in rows),
                 stats["executable_unrealized_pnl"],
             )
+
+    def test_live_dashboard_ignores_zero_proceeds_reconcile_sells(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            store_orderbook(
+                db,
+                "yes25",
+                OrderBook(
+                    "yes25",
+                    bids=[(0.467, 400)],
+                    asks=[(0.48, 400)],
+                    tick_size=0.01,
+                    min_order_size=5,
+                ),
+            )
+            for created_at, side, price, shares in (
+                ("2026-05-06T14:00:00+00:00", "BUY_YES", 0.21, 40.33339),
+                ("2026-05-06T14:01:00+00:00", "SELL", 0.073, 5.58),
+                ("2026-05-06T14:02:00+00:00", "SELL", 0.072, 15.52),
+                ("2026-05-06T14:03:00+00:00", "RECONCILE_SELL", 0.0, 15.52),
+                ("2026-05-06T14:04:00+00:00", "SELL", 0.071, 3.71),
+            ):
+                raw_reconcile = {}
+                if side == "RECONCILE_SELL":
+                    raw_reconcile = {
+                        "local_shares": 34.75339,
+                        "clob_sellable_shares": 19.23339,
+                        "missing_shares": shares,
+                    }
+                db.execute(
+                    """
+                    insert into live_orders (
+                        created_at_utc, outcome_id, label, side, action, order_type,
+                        status, requested_size_usd, limit_price, fill_price,
+                        fill_size_usd, fill_shares, reason, raw_reconcile_json
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        created_at,
+                        "yes25",
+                        "25°C",
+                        side,
+                        "SELL" if side in ("SELL", "RECONCILE_SELL") else "BUY",
+                        "FAK",
+                        "filled",
+                        20.0,
+                        price,
+                        price,
+                        0.0,
+                        shares,
+                        "position invalidated by hourly forecast",
+                        json.dumps(raw_reconcile),
+                    ),
+                )
+            upsert_live_position(db, "yes25", 0.00339, 0.21, -6.68)
+
+            stats = live_dashboard_payload(db)
+            rows = live_trade_rows(db, "open")["rows"]
+
+            self.assertAlmostEqual(stats["realized_pnl"], -3.42191, places=5)
+            self.assertAlmostEqual(stats["open_exposure_usd"], 3.2599119, places=5)
+            self.assertAlmostEqual(stats["executable_unrealized_pnl"], 3.98951123, places=5)
+            self.assertEqual(len(rows), 1)
+            self.assertAlmostEqual(rows[0]["shares"], 15.52339)
+
+    def test_live_dashboard_honors_zero_clob_reconcile_sells(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = _seed_dashboard_db(Path(tmp) / "test.db")
+            for created_at, side, price, shares in (
+                ("2026-05-06T14:00:00+00:00", "BUY_YES", 0.20, 100.0),
+                ("2026-05-06T14:03:00+00:00", "RECONCILE_SELL", 0.0, 100.0),
+            ):
+                raw_reconcile = {}
+                if side == "RECONCILE_SELL":
+                    raw_reconcile = {
+                        "local_shares": 100.0,
+                        "clob_sellable_shares": 0.0,
+                        "missing_shares": shares,
+                    }
+                db.execute(
+                    """
+                    insert into live_orders (
+                        created_at_utc, outcome_id, label, side, action, order_type,
+                        status, requested_size_usd, limit_price, fill_price,
+                        fill_size_usd, fill_shares, reason, raw_reconcile_json
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        created_at,
+                        "yes25",
+                        "25°C",
+                        side,
+                        "SELL" if side == "RECONCILE_SELL" else "BUY",
+                        "FAK",
+                        "filled",
+                        20.0,
+                        price,
+                        price,
+                        0.0,
+                        shares,
+                        "CLOB sellable balance lower than local position",
+                        json.dumps(raw_reconcile),
+                    ),
+                )
+            upsert_live_position(db, "yes25", 0.0, 0.0, -20.0)
+
+            stats = live_dashboard_payload(db)
+            rows = live_trade_rows(db, "open")["rows"]
+
+            self.assertEqual(stats["open_positions"], 0)
+            self.assertAlmostEqual(stats["realized_pnl"], -20.0)
+            self.assertEqual(rows, [])
 
     def test_live_realized_rows_backfill_zero_sell_proceeds(self):
         with tempfile.TemporaryDirectory() as tmp:

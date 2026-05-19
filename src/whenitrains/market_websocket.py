@@ -6,7 +6,11 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .orderbook_cache import MarketWebSocketSubscription, OrderBookCache
+from .orderbook_cache import (
+    MarketWebSocketSubscription,
+    OrderBookCache,
+    message_token_id,
+)
 
 
 POLYMARKET_MARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
@@ -41,6 +45,7 @@ class MarketWebSocketClient:
         token_ids = list(dict.fromkeys(self.token_ids_fn()))
         if not token_ids:
             return 0
+        subscribed_token_ids = {str(token_id) for token_id in token_ids}
         connect = self.connect_factory or _default_connect_factory()
         applied = 0
         self.status.connection_attempts += 1
@@ -50,6 +55,9 @@ class MarketWebSocketClient:
             await websocket.send(json.dumps(MarketWebSocketSubscription(token_ids).payload()))
             async for raw_message in websocket:
                 for message in _decode_messages(raw_message):
+                    token_id = message_token_id(message)
+                    if token_id is None or token_id not in subscribed_token_ids:
+                        continue
                     if self.cache.apply_message(message) is not None:
                         applied += 1
                         self.status.messages_applied += 1
